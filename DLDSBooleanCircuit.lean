@@ -1,6 +1,6 @@
 import Init
-import Mathlib.Data.List.Basic  -- Provides List.find? related theorems
-import Mathlib.Tactic           -- Provides general tactics
+import Mathlib.Data.List.Basic  
+import Mathlib.Tactic           
 import Mathlib.Data.Vector.Mem
 import Mathlib.Data.List.GetD
 import Mathlib.Data.List.Duplicate
@@ -628,4 +628,364 @@ induction L generalizing initial with
           simp [vs]
           rw [nthLe_cons_succ]    -- first one succeeds
           exact h_steps.right i'
+
+
+
+/-- Type alias: for each rule in a node, where to read activation from (previous layer) -/
+abbrev IncomingMap := List (Nat × Nat)
+/-- For all nodes in a layer -/
+abbrev IncomingMapsLayer := List IncomingMap
+/-- For all layers -/
+abbrev IncomingMaps := List IncomingMapsLayer
+
+/-- Activates the rules of a node by wiring from previous selectors, according to incoming_map -/
+def activateNodeFromSelectors {n : Nat}
+  (prev_selectors : List (List Bool))
+  (incoming_map   : IncomingMap)
+  (node           : CircuitNode n)
+: CircuitNode n :=
+let new_rules :=
+  node.rules.enum.map (fun ⟨i, rule⟩ =>
+    let (src_idx, edge_idx) := incoming_map.getD i (0, 0)
+    let act := (prev_selectors.getD src_idx []).getD edge_idx false
+    match rule.activation with
+    | ActivationBits.intro _ =>
+        { rule with activation := ActivationBits.intro act }
+    | ActivationBits.elim _ _ =>
+        { rule with activation := ActivationBits.elim act act }
+  );
+-- The following lemma: structure update that only changes activation preserves distinctness.
+let h_pairwise : new_rules.Pairwise (· ≠ ·) :=
+  by
+    sorry
+    -- We'll use the fact that the map f : Rule n → Rule n that only changes activation is injective.
+    -- So pairwise distinctness is preserved under injective maps.
+  --   let f := fun (i : Nat) (rule : Rule n) =>
+  --     let (src_idx, edge_idx) := incoming_map.getD i (0, 0)
+  --     let act := (prev_selectors.getD src_idx []).getD edge_idx false
+  --     match rule.activation with
+  --     | ActivationBits.intro _ => { rule with activation := ActivationBits.intro act }
+  --     | ActivationBits.elim _ _ => { rule with activation := ActivationBits.elim act act };
+  --   have inj_f : ∀ i₁ i₂ r₁ r₂, r₁ ≠ r₂ → f i₁ r₁ ≠ f i₂ r₂ :=
+  --     by
+  --       intros i₁ i₂ r₁ r₂ hne contra
+  --       -- If two rules are equal after this update, they must have been the same originally.
+  --       -- Structure equality: if fields except activation are equal, and original rules were distinct, then these can't be equal unless r₁ = r₂.
+  --       have : r₁ = r₂ := by
+  --         -- Compare all fields except activation.
+  --         cases r₁; cases r₂; simp at contra; congr
+  --         case activation => skip -- activation may differ
+  --         case kind => assumption
+  --         case combine => assumption
+  --       contradiction;
+  --   -- Use induction on the rules list to transport pairwise
+  --   revert new_rules
+  --   generalize h_rules : node.rules.enum.toList = enum_rules
+  --   intro new_rules
+  --   induction enum_rules with
+  --   | nil => simp [List.Pairwise.nil]
+  --   | cons (i₁, r₁) rest ih =>
+  --     simp only [List.map, List.Pairwise.cons]
+  --     split
+  --     · exact ih _
+  --     · intros (i₂, r₂) h_mem hne
+  --       exact inj_f i₁ i₂ r₁ r₂ hne
+  -- ;
+{ rules := new_rules, pairwise := h_pairwise }
+
+
+/-- Activates all nodes in a layer via selector wiring -/
+def activateLayerFromSelectors {n : Nat}
+  (prev_selectors : List (List Bool))
+  (incoming_maps  : IncomingMapsLayer)
+  (nodes          : List (CircuitNode n))
+: List (CircuitNode n) :=
+  nodes.enum.map (fun ⟨i, node⟩ =>
+    activateNodeFromSelectors prev_selectors (incoming_maps.getD i []) node)
+
+/-- Evaluate the full grid, propagating dependency vectors and selector outputs layer-by-layer. -/
+def evalGridSelector {n : Nat}
+  (layers         : List (List (CircuitNode n)))
+  (incomingMaps   : IncomingMaps)
+  (initial_vectors: List (List.Vector Bool n))
+  (initial_selectors : List (List Bool))
+: List (List (List.Vector Bool n)) :=
+let rec eval (vecs : List (List.Vector Bool n)) (sels : List (List Bool))
+             (ls  : List (List (CircuitNode n)))
+             (ims : IncomingMaps) (acc : List (List (List.Vector Bool n))) :=
+  match ls, ims with
+  | [], [] => (acc.reverse)
+  | (nodes :: rest), (maps :: rest_maps) =>
+      let act_nodes := activateLayerFromSelectors sels maps nodes
+      let outs := act_nodes.map (λ node => node.run vecs)
+      let next_selectors := outs.map (λ v => selector v.toList)
+      eval outs next_selectors rest rest_maps (outs :: acc)
+  | _, _ => acc.reverse -- Defensive fallback
+eval initial_vectors initial_selectors layers incomingMaps [initial_vectors]
+
+/-- Query the output dependency vector of a goal node after grid evaluation -/
+def goalNodeOutput {n : Nat}
+  (results : List (List (List.Vector Bool n)))
+  (goal_layer : Nat) (goal_idx : Nat)
+: List.Vector Bool n :=
+  (results.getD goal_layer []).getD goal_idx (List.Vector.replicate n false)
+
+
+/-! ## 5. Full Grid Correctness for Parallel/Tree-Like Subgraphs -/
+
+/--
+
+Suppose that for each active node at each layer (as determined by selectors/subgraph),
+the selectors induce exactlyOneActive in its rules.
+
+Then for every node `(l, i)` that is reachable via some path from an initial node
+(along the active subgraph), the output dependency vector at `(l, i)` computed by
+`evalGridSelector` equals the unique composition of rule applications along that path.
+
+
+-/
+
+@[simp]
+theorem List.getD_cons {α : Type*} (x : α) (xs : List α) (n : Nat) (d : α) :
+  (x :: xs).getD n d = if n = 0 then x else xs.getD (n - 1) d := by
+  cases n <;> simp [List.getD]
+
+/-- `List.getD_zero`: getD at zero returns the head of the list, or default for nil. -/
+@[simp]
+theorem List.getD_zero {α : Type*} (l : List α) (d : α) :
+  l.getD 0 d = l.headD d := by
+  cases l <;> simp [List.getD, List.headD]
+
+/-- `List.getD_get`: getD at a valid index is the same as get. -/
+@[simp]
+theorem List.getD_get {α : Type*} (l : List α) (i : Fin l.length) (d : α) :
+  l.getD i d = l.get i := by
+  sorry
+  -- induction l generalizing i with
+  -- | nil => cases i
+  -- | cons x xs ih =>
+  --   cases i with
+  --   | mk 0 _   => simp [List.getD, List.get]
+  --   | mk (n+1) h =>
+  --     have : n < xs.length := Nat.lt_of_succ_lt_succ h
+  --     simp [List.getD, List.get, ih ⟨n, this⟩ d]
+
+lemma List.get?_map {α β : Type} (l : List α) (f : α → β) (i : Nat) :
+  (l.map f)[i]? = (l[i]?).map f := by
+  induction l generalizing i with
+  | nil =>
+    simp [List.get?, List.map]
+  | cons hd tl ih =>
+    cases i with
+    | zero => simp [List.get?, List.map]
+    | succ i' =>
+      simp [List.get?, List.map, ih]
+
+lemma List.get?_append_right {α} (l₁ l₂ : List α) (i : Nat) (h : i ≥ l₁.length) :
+  (l₁ ++ l₂)[i]? = l₂[i - l₁.length]? := by
+  induction l₁ generalizing i with
+  | nil => simp
+  | cons _ tl ih =>
+    cases i with
+    | zero => simp at h
+    | succ i' =>
+      simp [ih _ (Nat.le_of_succ_le_succ h)]
+
+lemma List.get?_singleton_zero {α} (x : α) : [x][0]? = some x := by simp
+
+lemma List.length_evalGridSelector {n : Nat} 
+  (layers : List (List (CircuitNode n))) 
+  (incoming : IncomingMaps)
+  (iv : List (List.Vector Bool n)) 
+  (is : List (List Bool)) :
+  (evalGridSelector layers incoming iv is).length = min layers.length incoming.length := by
+  sorry
+  -- induction layers generalizing incoming with
+  -- | nil => simp [evalGridSelector]
+  -- | cons _ tl ih =>
+  --   cases incoming with
+  --   | nil => simp [evalGridSelector]
+  --   | cons _ tlin =>
+  --     simp [evalGridSelector, ih]
+
+/--
+Predicate asserting that for every node (l, i) in the grid,
+the selectors induce exactly one active rule in that node.
+-/
+def RuleActivationCorrect {n : ℕ}
+  (layers : List (List (CircuitNode n)))
+  (incomingMaps : IncomingMaps)
+  (initial_vectors : List (List.Vector Bool n))
+  (initial_selectors : List (List Bool))
+: Prop :=
+  ∀ (l i : ℕ),
+    l < layers.length →
+    i < (layers.getD l []).length →
+    let prev_results :=
+      if l = 0 then initial_vectors
+      else
+        (evalGridSelector (layers.take l) (incomingMaps.take l)
+          initial_vectors initial_selectors).getLastD initial_vectors
+    let prev_selectors :=
+      if l = 0 then initial_selectors
+      else prev_results.map (λ v => selector v.toList)
+    let node := (activateLayerFromSelectors prev_selectors
+                  (incomingMaps.getD l []) (layers.getD l []))
+                |>.getD i { rules := [], pairwise := by simp }
+    exactlyOneActive node.rules
+
+
+/--
+The output of the grid at (goal_layer, goal_idx) matches the run of the corresponding active node.
+-/
+def GoalNodeCorrect {n : ℕ}
+  (layers         : List (List (CircuitNode n)))
+  (incomingMaps   : IncomingMaps)
+  (initial_vectors: List (List.Vector Bool n))
+  (initial_selectors : List (List Bool))
+  (goal_layer goal_idx : ℕ)
+: Prop :=
+  let inputs :=
+    if goal_layer = 0 then initial_vectors
+    else
+      (evalGridSelector (layers.take goal_layer) (incomingMaps.take goal_layer)
+        initial_vectors initial_selectors).getLastD initial_vectors
+
+  let selectors :=
+    if goal_layer = 0 then initial_selectors
+    else inputs.map (λ v => selector v.toList)
+
+  let nodes := activateLayerFromSelectors selectors
+                  (incomingMaps.getD goal_layer [])
+                  (layers.getD goal_layer [])
+
+  goal_idx < nodes.length ∧
+  ∃ (r : CircuitNode n), r ∈ nodes ∧
+    (List.getD (List.getD (evalGridSelector layers incomingMaps initial_vectors initial_selectors) goal_layer []) goal_idx (List.Vector.replicate n false)
+    = r.run inputs)
+
+
+theorem full_grid_correctness
+  {n : Nat}
+  (layers         : List (List (CircuitNode n)))
+  (incomingMaps   : IncomingMaps)
+  (initial_vectors: List (List.Vector Bool n))
+  (initial_selectors : List (List Bool))
+  (h_act : RuleActivationCorrect layers incomingMaps initial_vectors initial_selectors)
+  (goal_layer goal_idx : Nat)
+  (hl : goal_layer < layers.length)
+  (hi : goal_idx < (layers.getD goal_layer []).length)
+  :
+    ∃ r ∈ (activateLayerFromSelectors
+             (if goal_layer = 0 then initial_selectors
+              else (evalGridSelector (layers.take goal_layer) (incomingMaps.take goal_layer)
+                      initial_vectors initial_selectors).getLastD initial_vectors
+                  |>.map (λ v => selector v.toList))
+             (incomingMaps.getD goal_layer []) (layers.getD goal_layer [])),
+      List.getD (List.getD (evalGridSelector layers incomingMaps initial_vectors initial_selectors) goal_layer []) goal_idx (List.Vector.replicate n false)
+      = r.run
+          (if goal_layer = 0 then initial_vectors
+           else (evalGridSelector (layers.take goal_layer) (incomingMaps.take goal_layer)
+                   initial_vectors initial_selectors).getLastD initial_vectors)
+  :=
+by
+  -- Induct on layers
+  induction goal_layer generalizing initial_vectors initial_selectors incomingMaps layers with
+  | zero =>
+    let nodes := activateLayerFromSelectors initial_selectors (incomingMaps.getD 0 []) (layers.getD 0 [])
+    have hlen : nodes.length = (layers.getD 0 []).length := by
+      unfold nodes activateLayerFromSelectors; simp
+    use nodes.get ⟨goal_idx, hlen.symm ▸ hi⟩, List.get_mem nodes ⟨goal_idx, hlen.symm ▸ hi⟩
+
+    have h_nodes_len : goal_idx < nodes.length := by rw [hlen]; exact hi
+
+    have h1' : exactlyOneActive (nodes.get ⟨goal_idx, h_nodes_len⟩).rules := by
+      rw [←hlen] at hi
+      sorry
+      --exact h_ex1 0 goal_idx hl hi
+
+    have eval0 : evalGridSelector layers incomingMaps initial_vectors initial_selectors =
+      [nodes.map (λ node => node.run initial_vectors)] := by
+      dsimp [evalGridSelector]; sorry --simp
+
+    rw [eval0]
+    simp only [List.getD, List.getD_cons, List.getD_zero]
+    have h_option_get : nodes[goal_idx]? = some nodes[goal_idx] := by
+      simp [List.get?_eq_get, h_nodes_len]
+
+    have simplified_goal : ([nodes.map (fun node => node.run initial_vectors)][0]?.getD []) = nodes.map (fun node => node.run initial_vectors) := by rfl
+    rw [simplified_goal]
+    rw [List.get?_map, h_option_get]
+    simp
+  | succ l ih =>
+    -- Inductive step: compute previous layer's outputs and selectors
+    let prev_results :=
+      evalGridSelector (layers.take l.succ) (incomingMaps.take l.succ)
+        initial_vectors initial_selectors
+    let prev_outs := prev_results.getLastD initial_vectors
+    let prev_selectors := prev_outs.map (λ v => selector v.toList)
+    let nodes := activateLayerFromSelectors prev_selectors (incomingMaps.getD l.succ []) (layers.getD l.succ [])
+    have h1 := h_act l.succ goal_idx (by simp [Nat.succ_lt_succ_iff, hl]) hi
+    have h_nodes_len : nodes.length = (layers.getD (l+1) []).length := by
+      unfold nodes activateLayerFromSelectors; simp
+      
+    use nodes.get ⟨goal_idx, h_nodes_len ▸ hi⟩, List.get_mem nodes ⟨goal_idx, h_nodes_len ▸ hi⟩
+
+    -- Now, show output matches node.run with correct inputs
+    have eval_succ : evalGridSelector layers incomingMaps initial_vectors initial_selectors =
+        evalGridSelector (layers.take (l+1)) (incomingMaps.take (l+1)) initial_vectors initial_selectors ++
+          [nodes.map (λ node => node.run prev_outs)] := by
+      cases layers with
+      | nil => simp at hl
+      | cons hd tl =>
+        cases incomingMaps with
+        | nil => sorry 
+              -- simp
+        | cons map_hd map_tl =>
+          simp [evalGridSelector]
+          sorry 
+          -- rfl
+
+    rw [eval_succ]
+    -- Now simplify the indexing explicitly
+    simp [List.getD_append_right]
+    have goal_layer_eq : l + 1 - min (l + 1) layers.length = 0 := by
+      sorry
+      -- rw [min_eq_left]; 
+      -- exact Nat.le_of_lt hl
+      
+    rw [List.get?_append_right]
+
+    simp [List.length_evalGridSelector, min_eq_left_of_lt hl]
+    have goal_layer_eq' : l + 1 - min (l + 1) (List.length incomingMaps) = 0 := by
+      sorry
+      -- rw [min_eq_left]
+      -- exact Nat.le_of_lt (by exact hl.trans_le (List.length_le_of_getD _ _))
+
+    rw [goal_layer_eq']  
+    rw [List.get?_singleton_zero]
+    simp [List.getD]
+    
+    -- Simplify the goal expression explicitly
+    have h_option_get : nodes[goal_idx]? = some nodes[goal_idx] := by
+      simp [List.get?_eq_get, hi]
+
+    simp [List.get?_map, h_option_get]
+    
+    have h1' : exactlyOneActive (nodes.get ⟨goal_idx, Eq.symm h_nodes_len ▸ hi⟩).rules := by
+      sorry
+      -- rw [←List.getD_eq_getElem, h_nodes_len]
+      -- exact h1
+
+    sorry
+
+    -- let prev_outs := (evalGridSelector (List.take (l + 1) layers) (List.take (l + 1) incomingMaps) initial_vectors    initial_selectors).getLastD initial_vectors
+
+    
+
+    -- exact (node_correct (nodes.get ⟨goal_idx, Eq.symm h_nodes_len ▸ hi⟩) prev_outs h1').choose_spec
+
+
+
+
 
