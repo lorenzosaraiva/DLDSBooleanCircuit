@@ -1,6 +1,6 @@
 import Init
-import Mathlib.Data.List.Basic  
-import Mathlib.Tactic           
+import Mathlib.Data.List.Basic  -- Provides List.find? related theorems
+import Mathlib.Tactic           -- Provides general tactics
 import Mathlib.Data.Vector.Mem
 import Mathlib.Data.List.GetD
 import Mathlib.Data.List.Duplicate
@@ -734,6 +734,10 @@ def goalNodeOutput {n : Nat}
 /-! ## 5. Full Grid Correctness for Parallel/Tree-Like Subgraphs -/
 
 /--
+Let `layers` be a grid (list of layers, each a list of circuit nodes).
+Let `incomingMaps` describe selector-driven wiring.
+Let `initial_vectors` give the initial dependency vectors at layer 0.
+Let `initial_selectors` describe the initial activation selectors.
 
 Suppose that for each active node at each layer (as determined by selectors/subgraph),
 the selectors induce exactlyOneActive in its rules.
@@ -742,6 +746,7 @@ Then for every node `(l, i)` that is reachable via some path from an initial nod
 (along the active subgraph), the output dependency vector at `(l, i)` computed by
 `evalGridSelector` equals the unique composition of rule applications along that path.
 
+This expresses full, parallel/global correctness of the Boolean circuit for DLDS proof checking.
 
 -/
 
@@ -793,6 +798,11 @@ lemma List.get?_append_right {α} (l₁ l₂ : List α) (i : Nat) (h : i ≥ l�
 
 lemma List.get?_singleton_zero {α} (x : α) : [x][0]? = some x := by simp
 
+@[simp] lemma List.getLastD_eq_getLast?_getD {α : Type*} (l : List α) (d : α) :
+  l.getLastD d = (l.getLast?).getD d := by
+  sorry
+  -- cases l.reverse <;> simp [List.getLastD, List.getLast?, Option.getD]
+
 lemma List.length_evalGridSelector {n : Nat} 
   (layers : List (List (CircuitNode n))) 
   (incoming : IncomingMaps)
@@ -807,6 +817,50 @@ lemma List.length_evalGridSelector {n : Nat}
   --   | nil => simp [evalGridSelector]
   --   | cons _ tlin =>
   --     simp [evalGridSelector, ih]
+
+lemma length_evalGridSelector_eval {n : Nat}
+  (layers : List (List (CircuitNode n)))
+  (incoming : IncomingMaps)
+  (iv : List (List.Vector Bool n))
+  (is : List (List Bool))
+  (acc : List (List (List.Vector Bool n))) :
+  (evalGridSelector.eval iv is layers incoming acc).length = min layers.length incoming.length + acc.length := by
+  induction layers generalizing incoming acc with
+  | nil =>
+    cases incoming
+    · simp [evalGridSelector, evalGridSelector.eval]
+    · simp [evalGridSelector, evalGridSelector.eval]
+  | cons l ls ih =>
+    cases incoming
+    · simp [evalGridSelector, evalGridSelector.eval]
+    · simp [evalGridSelector, evalGridSelector.eval]
+      sorry
+      -- apply ih
+
+lemma getD_zero_eq_match {α : Type*} (l : List α) (d : α) :
+  l.getD 0 d = (match l[0]? with | some x => x | none => d) := by
+  cases l <;> simp [List.getD, List.get?, Option.getD]
+
+lemma evalGridSelector_length {n : Nat}
+  (layers : List (List (CircuitNode n)))
+  (incomingMaps : IncomingMaps)
+  (initial_vectors: List (List.Vector Bool n))
+  (initial_selectors : List (List Bool)) :
+  (evalGridSelector layers incomingMaps initial_vectors initial_selectors).length
+  = min layers.length incomingMaps.length + 1 := by
+  sorry
+  -- induction layers generalizing incomingMaps with
+  -- | nil =>
+  --   cases incomingMaps
+  --   · simp [evalGridSelector]
+  --   · simp [evalGridSelector]
+  -- | cons hd tl ih =>
+  --   cases incomingMaps
+  --   · simp [evalGridSelector]
+  --   · simp [evalGridSelector]
+  --     rw [ih]
+  --     simp
+
 
 /--
 Predicate asserting that for every node (l, i) in the grid,
@@ -875,6 +929,7 @@ theorem full_grid_correctness
   (goal_layer goal_idx : Nat)
   (hl : goal_layer < layers.length)
   (hi : goal_idx < (layers.getD goal_layer []).length)
+  (hl_maps : l + 1 < incomingMaps.length)
   :
     ∃ r ∈ (activateLayerFromSelectors
              (if goal_layer = 0 then initial_selectors
@@ -889,7 +944,6 @@ theorem full_grid_correctness
                    initial_vectors initial_selectors).getLastD initial_vectors)
   :=
 by
-  -- Induct on layers
   induction goal_layer generalizing initial_vectors initial_selectors incomingMaps layers with
   | zero =>
     let nodes := activateLayerFromSelectors initial_selectors (incomingMaps.getD 0 []) (layers.getD 0 [])
@@ -900,14 +954,25 @@ by
     have h_nodes_len : goal_idx < nodes.length := by rw [hlen]; exact hi
 
     have h1' : exactlyOneActive (nodes.get ⟨goal_idx, h_nodes_len⟩).rules := by
-      rw [←hlen] at hi
-      sorry
-      --exact h_ex1 0 goal_idx hl hi
+      rw [←hlen] at hi 
+      have h1 := h_act 0 goal_idx hl (hlen.symm ▸ hi)
+      dsimp [nodes] at h1
+      convert h1
+      rw [List.getD_get nodes ⟨goal_idx, h_nodes_len⟩ { rules := [], pairwise := by simp }]
 
     have eval0 : evalGridSelector layers incomingMaps initial_vectors initial_selectors =
       [nodes.map (λ node => node.run initial_vectors)] := by
-      dsimp [evalGridSelector]; sorry --simp
+      dsimp [evalGridSelector, evalGridSelector.eval, nodes, activateLayerFromSelectors]
+      simp
+      simp [List.getD, List.get?, Option.getD] at *
+      simp only [List.getD_zero, List.get?, Option.getD] at nodes ⊢
+      ext x
+      dsimp
+      cases x
+      case zero => sorry
+      case succ n => sorry
 
+    
     rw [eval0]
     simp only [List.getD, List.getD_cons, List.getD_zero]
     have h_option_get : nodes[goal_idx]? = some nodes[goal_idx] := by
@@ -918,20 +983,18 @@ by
     rw [List.get?_map, h_option_get]
     simp
   | succ l ih =>
-    -- Inductive step: compute previous layer's outputs and selectors
     let prev_results :=
       evalGridSelector (layers.take l.succ) (incomingMaps.take l.succ)
         initial_vectors initial_selectors
     let prev_outs := prev_results.getLastD initial_vectors
     let prev_selectors := prev_outs.map (λ v => selector v.toList)
     let nodes := activateLayerFromSelectors prev_selectors (incomingMaps.getD l.succ []) (layers.getD l.succ [])
-    have h1 := h_act l.succ goal_idx (by simp [Nat.succ_lt_succ_iff, hl]) hi
+    have h1 := h_act (l + 1) goal_idx hl hi
     have h_nodes_len : nodes.length = (layers.getD (l+1) []).length := by
       unfold nodes activateLayerFromSelectors; simp
       
     use nodes.get ⟨goal_idx, h_nodes_len ▸ hi⟩, List.get_mem nodes ⟨goal_idx, h_nodes_len ▸ hi⟩
 
-    -- Now, show output matches node.run with correct inputs
     have eval_succ : evalGridSelector layers incomingMaps initial_vectors initial_selectors =
         evalGridSelector (layers.take (l+1)) (incomingMaps.take (l+1)) initial_vectors initial_selectors ++
           [nodes.map (λ node => node.run prev_outs)] := by
@@ -939,28 +1002,34 @@ by
       | nil => simp at hl
       | cons hd tl =>
         cases incomingMaps with
-        | nil => sorry 
-              -- simp
+        | nil =>  
+          simp
+          exfalso
+          exact absurd hl_maps (Nat.not_lt_zero _)
         | cons map_hd map_tl =>
           simp [evalGridSelector]
-          sorry 
-          -- rfl
+          dsimp [evalGridSelector, evalGridSelector.eval]
+          let cur_outs := List.map (fun node => node.run initial_vectors) (activateLayerFromSelectors initial_selectors map_hd hd)
+          let cur_selectors := List.map (fun v => selector v.toList) cur_outs
+          sorry
 
+    
+          
     rw [eval_succ]
-    -- Now simplify the indexing explicitly
+
     simp [List.getD_append_right]
-    have goal_layer_eq : l + 1 - min (l + 1) layers.length = 0 := by
-      sorry
-      -- rw [min_eq_left]; 
-      -- exact Nat.le_of_lt hl
+    have goal_layer_eq : l + 1 - min (l + 1) layers.length = 0 := by 
+      rw [min_eq_left]
+      simp
+      exact Nat.le_of_lt hl
       
     rw [List.get?_append_right]
 
     simp [List.length_evalGridSelector, min_eq_left_of_lt hl]
     have goal_layer_eq' : l + 1 - min (l + 1) (List.length incomingMaps) = 0 := by
-      sorry
-      -- rw [min_eq_left]
-      -- exact Nat.le_of_lt (by exact hl.trans_le (List.length_le_of_getD _ _))
+      rw [min_eq_left]
+      simp
+      exact Nat.le_of_lt hl_maps
 
     rw [goal_layer_eq']  
     rw [List.get?_singleton_zero]
@@ -977,14 +1046,29 @@ by
       -- rw [←List.getD_eq_getElem, h_nodes_len]
       -- exact h1
 
-    sorry
+    let prev_outs := (evalGridSelector (List.take (l + 1) layers) (List.take (l + 1) incomingMaps) initial_vectors    initial_selectors).getLastD initial_vectors
 
-    -- let prev_outs := (evalGridSelector (List.take (l + 1) layers) (List.take (l + 1) incomingMaps) initial_vectors    initial_selectors).getLastD initial_vectors
+    have : prev_outs = (evalGridSelector (List.take (l + 1) layers) (List.take (l + 1) incomingMaps) initial_vectors initial_selectors).getLast?.getD initial_vectors := by
+      sorry
+      -- rw [List.getLastD_eq_getLast?_getD]
+
+    change nodes[goal_idx].run prev_outs = _
+    rw [this]
+    simp [Nat.min]
+    dsimp [evalGridSelector]
+    rw [length_evalGridSelector_eval]
+    simp [List.length_take, Nat.min_assoc]
+    apply min_le_iff.mp
+    case right h_maps =>  
+      exfalso
+      have h1 : h_maps < l := by sorry
+      have h2 : l ≤ h_maps := by sorry
+      exact Nat.lt_irrefl l (lt_of_le_of_lt h2 h1)
 
     
 
-    -- exact (node_correct (nodes.get ⟨goal_idx, Eq.symm h_nodes_len ▸ hi⟩) prev_outs h1').choose_spec
 
+    
 
 
 
