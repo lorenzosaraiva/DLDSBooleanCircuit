@@ -1,6 +1,6 @@
 import Init
-import Mathlib.Data.List.Basic  -- Provides List.find? related theorems
-import Mathlib.Tactic           -- Provides general tactics
+import Mathlib.Data.List.Basic  
+import Mathlib.Tactic           
 import Mathlib.Data.Vector.Mem
 import Mathlib.Data.List.GetD
 import Mathlib.Data.List.Duplicate
@@ -761,6 +761,7 @@ theorem List.getD_zero {α : Type*} (l : List α) (d : α) :
   l.getD 0 d = l.headD d := by
   cases l <;> simp [List.getD, List.headD]
 
+
 /-- `List.getD_get`: getD at a valid index is the same as get. -/
 @[simp]
 theorem List.getD_get {α : Type*} (l : List α) (i : Fin l.length) (d : α) :
@@ -775,6 +776,10 @@ theorem List.getD_get {α : Type*} (l : List α) (i : Fin l.length) (d : α) :
   --     have : n < xs.length := Nat.lt_of_succ_lt_succ h
   --     simp [List.getD, List.get, ih ⟨n, this⟩ d]
 
+theorem List.getD_eq_get (l : List α) (i : Nat) (d : α) (h : i < l.length) :
+  l.getD i d = l.get ⟨i, h⟩ := by 
+  sorry
+  
 lemma List.get?_map {α β : Type} (l : List α) (f : α → β) (i : Nat) :
   (l.map f)[i]? = (l[i]?).map f := by
   induction l generalizing i with
@@ -796,12 +801,27 @@ lemma List.get?_append_right {α} (l₁ l₂ : List α) (i : Nat) (h : i ≥ l�
     | succ i' =>
       simp [ih _ (Nat.le_of_succ_le_succ h)]
 
+@[simp]
+theorem List.getLastD_eq_getLast_getD {α : Type*} (l : List α) (d : α) :
+  l.getLastD d = l.getLast?.getD d := by
+  sorry
+  -- unfold List.getLastD List.getLast?
+  -- -- This unfolds getLastD to getLast?.getD
+  -- rfl
+
 lemma List.get?_singleton_zero {α} (x : α) : [x][0]? = some x := by simp
 
 @[simp] lemma List.getLastD_eq_getLast?_getD {α : Type*} (l : List α) (d : α) :
   l.getLastD d = (l.getLast?).getD d := by
   sorry
   -- cases l.reverse <;> simp [List.getLastD, List.getLast?, Option.getD]
+
+lemma nat_min_le_left (a b : Nat) : min a b ≤ a := by
+  sorry
+  -- cases Nat.le_total a b with
+  -- | inl h => simp [min, if_pos h]
+  -- | inr h => simp [min, if_neg (Nat.not_le_of_gt h)]; exact Nat.le_refl a
+
 
 lemma List.length_evalGridSelector {n : Nat} 
   (layers : List (List (CircuitNode n))) 
@@ -817,6 +837,21 @@ lemma List.length_evalGridSelector {n : Nat}
   --   | nil => simp [evalGridSelector]
   --   | cons _ tlin =>
   --     simp [evalGridSelector, ih]
+
+def dummyRule {n : Nat} : Rule n :=
+  {
+    activation := ActivationBits.intro true,
+    kind := RuleData.intro (List.Vector.replicate n true),
+    combine := fun _ => List.Vector.replicate n false
+  }
+
+def dummyNode (n : Nat) : CircuitNode n :=
+  {
+    rules := [dummyRule],
+    pairwise := by
+      simp [List.Pairwise, List.Pairwise]
+      -- with just one element, this is trivial
+  }
 
 lemma length_evalGridSelector_eval {n : Nat}
   (layers : List (List (CircuitNode n)))
@@ -929,7 +964,7 @@ theorem full_grid_correctness
   (goal_layer goal_idx : Nat)
   (hl : goal_layer < layers.length)
   (hi : goal_idx < (layers.getD goal_layer []).length)
-  (hl_maps : l + 1 < incomingMaps.length)
+  (hl_maps : goal_layer < incomingMaps.length)
   :
     ∃ r ∈ (activateLayerFromSelectors
              (if goal_layer = 0 then initial_selectors
@@ -1035,35 +1070,34 @@ by
     rw [List.get?_singleton_zero]
     simp [List.getD]
     
-    -- Simplify the goal expression explicitly
     have h_option_get : nodes[goal_idx]? = some nodes[goal_idx] := by
       simp [List.get?_eq_get, hi]
 
     simp [List.get?_map, h_option_get]
     
-    have h1' : exactlyOneActive (nodes.get ⟨goal_idx, Eq.symm h_nodes_len ▸ hi⟩).rules := by
-      sorry
-      -- rw [←List.getD_eq_getElem, h_nodes_len]
-      -- exact h1
 
-    let prev_outs := (evalGridSelector (List.take (l + 1) layers) (List.take (l + 1) incomingMaps) initial_vectors    initial_selectors).getLastD initial_vectors
 
-    have : prev_outs = (evalGridSelector (List.take (l + 1) layers) (List.take (l + 1) incomingMaps) initial_vectors initial_selectors).getLast?.getD initial_vectors := by
-      sorry
-      -- rw [List.getLastD_eq_getLast?_getD]
+    let cur_prev_outs := (evalGridSelector (List.take (l + 1) layers) (List.take (l + 1) incomingMaps) initial_vectors    initial_selectors).getLastD initial_vectors
 
-    change nodes[goal_idx].run prev_outs = _
-    rw [this]
-    simp [Nat.min]
-    dsimp [evalGridSelector]
-    rw [length_evalGridSelector_eval]
-    simp [List.length_take, Nat.min_assoc]
-    apply min_le_iff.mp
-    case right h_maps =>  
-      exfalso
-      have h1 : h_maps < l := by sorry
-      have h2 : l ≤ h_maps := by sorry
-      exact Nat.lt_irrefl l (lt_of_le_of_lt h2 h1)
+    have prev_outs_eq : cur_prev_outs = (evalGridSelector (List.take (l + 1) layers) (List.take (l + 1) incomingMaps) initial_vectors initial_selectors).getLast?.getD initial_vectors :=
+      List.getLastD_eq_getLast_getD _ _
+
+    let prev_outs := cur_prev_outs
+
+    change nodes[goal_idx].run ((evalGridSelector (List.take (l + 1) layers) (List.take (l + 1) incomingMaps) initial_vectors initial_selectors).getLastD initial_vectors) =
+       nodes[goal_idx].run ((evalGridSelector (List.take (l + 1) layers) (List.take (l + 1) incomingMaps) initial_vectors initial_selectors).getLast?.getD initial_vectors)
+
+
+    rw [List.getLastD_eq_getLast_getD]
+    rw [ge_iff_le]
+    rw [List.length_evalGridSelector]
+    rw [List.length_take, List.length_take]
+    simp
+
+
+
+
+
 
     
 
