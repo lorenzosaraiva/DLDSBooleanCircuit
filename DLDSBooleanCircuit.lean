@@ -1075,14 +1075,6 @@ lemma evalGridSelector_cons_succ_get
 
 :=
 by
-  -- dsimp [evalGridSelector]
-  -- let xs := evalGridSelectorStep initial_vectors layer_hd
-  -- let sels := List.map (fun v => selector v.toList) xs
-  -- have : (evalGridSelector (layer_hd :: layers_tl) initial_vectors initial_selectors)
-  --        = initial_vectors :: evalGridSelector layers_tl xs sels := rfl
-  -- have idx_eq : ⟨goal_layer'.val + 1, Nat.succ_lt_succ goal_layer'.isLt⟩ = goal_layer'.succ := by
-  --   rw [Fin.ext_iff]
-  --   simp
   rfl
 
 lemma match_getLast_of_ne_nil_two_args {α : Type*} (xs : List α) (a₀ : α) (h : xs ≠ []) :
@@ -1166,67 +1158,25 @@ by
     rfl
   case succ l' =>
     -- l = l'+1 > 0
-    have : List.take (l'+1 + 1) (layer_hd :: layers_tl) = layer_hd :: List.take (l'+1) layers_tl :=
-      by simp [List.take]
-    rw [this, evalGridSelector]
-    -- Now, evalGridSelector (layer_hd :: ...) = initial_vectors :: evalGridSelector ... 
-    simp [evalGridSelector, evalGridSelectorStep, evalGridSelector.aux, List.getLastD]
-    -- .getLastD initial_vectors returns last of the tail if tail nonempty, else initial_vectors
-    -- The tail is evalGridSelector (List.take (l'+1) layers_tl) acc new_selectors
-    -- So .getLastD initial_vectors on (initial_vectors :: ys) is ys.getLastD acc
-    -- So both sides are equal
+    rw [Nat.add_comm, List.take]
+    -- Now use definition of evalGridSelector
+    rw [evalGridSelector]
     rw [h_acc]
-    rw [evalGridSelectorStep]
-    have aux_nonempty :
-      (evalGridSelector.aux
-        (List.map (fun node => node.run initial_vectors)
-          (activateLayerFromSelectors (List.map (fun v => selector v.toList) initial_vectors) layer_hd))
-        (List.take (l' + 1) layers_tl)) ≠ [] := by
-      cases (List.take (l' + 1) layers_tl)
-      · simp [evalGridSelector.aux]
-      · simp [evalGridSelector.aux]
-    
-    let ys :=
-      evalGridSelector.aux
-        (List.map (fun node => node.run initial_vectors)
-          (activateLayerFromSelectors (List.map (fun v => selector v.toList) initial_vectors) layer_hd))
-        (List.take (l' + 1) layers_tl)
+    -- getLastD on (x :: xs) is xs.getLastD acc
+    rw [List.getLastD.eq_def]
+    sorry
+    -- cases l'
+    -- case zero =>
+    --   simp only [Nat.add_zero] at *
+    --   simp only [if_neg (by decide)]
+    --   rw [evalGridSelector, h_acc, List.getLastD]
+    --   rfl
+    -- case succ l'' =>
+    --   -- l' + 1 ≥ 1, so 1 + l' ≠ 0
+    --   rw [if_neg (by decide)]
+    --   rw [evalGridSelector, h_acc, List.getLastD]
+    --   rfl
 
-    
-    have h_ys : ys ≠ [] := aux_nonempty
-    generalize h_def : ys = y
-    cases y with
-    | nil => 
-      exfalso
-      rw [h_def] at h_ys
-      exact h_ys rfl
-    | cons head tail =>
-      have : ys = head :: tail := h_def
-      rw [← getLast_eq_after_cons ys initial_vectors h_ys]
-      simp
-      congr
-      dsimp only [ys]
-      congr 2
-      rw [match_getLast_of_ne_nil_two_args ys _ h_ys]
-      dsimp [ys]
-      have haas_nonempty : head :: tail ≠ [] := List.cons_ne_nil head tail
-      have h_headtail : head :: tail ≠ [] := by rw [← h_def]; exact h_ys
-      congr
-      have :=
-        match_getLast_of_ne_nil_two_args
-          ys
-          (List.map (fun node => node.run initial_vectors)
-            (activateLayerFromSelectors
-              (List.map (fun v => selector v.toList) initial_vectors) layer_hd))
-          h_ys
-      cases ys
-
-      · 
-        exfalso
-        rw [h_def] at h_ys
-      
-      · 
-        simp
 
 /--
 If every node of `layer_hd :: layers_tl` has exactly one active rule
@@ -1357,24 +1307,6 @@ by
 
 
 
-
-lemma List.getLastD_eq_getLast {α} (l : List α) (h : l ≠ []) (d : α) :
-  l.getLast?.getD d = l.getLast h :=
-by sorry
---cases l <;> simp [List.getLastD, List.getLast?, Option.getD]
-
-def List.ne_nil_of_cons_ne_nil {α} (x : α) (xs : List α) (h : (x :: xs) ≠ []) : xs ≠ [] :=
-  fun H => h (by sorry)
-
-
-lemma List.getLast_cons_of_ne_nil {α : Type*} (x : α) (xs : List α) (h : (x :: xs) ≠ []) :
-    (x :: xs).getLast h = xs.getLast (List.ne_nil_of_cons_ne_nil x xs h) :=
-by
-  cases xs with
-  | nil => 
-      sorry --contradiction
-  | cons _ _ => simp [List.getLast]
-
 lemma evalGridSelector_index_eq_get {iv is} {l : ℕ}
   (h : l < (evalGridSelector gs iv is).length) :
   (evalGridSelector gs iv is)[l] = (evalGridSelector gs iv is).get ⟨l, h⟩ := rfl
@@ -1401,7 +1333,12 @@ by cases h₁; cases h₂; rfl
 
 @[simp] lemma Fin.cast_eq {n : ℕ} (h : n = n) (i : Fin n) : Fin.cast h i = i := by cases h; rfl
 
-
+lemma List.getLast?_cons_getD {α} (x : α) (l : List α) :
+  (x :: l).getLast?.getD x = l.getLastD x :=
+by
+  cases l with
+  | nil => simp [List.getLast?, Option.getD, List.getLastD]
+  | cons _ _ => simp [List.getLast?, Option.getD, List.getLastD]
 
 lemma evalGridSelector_tail_index_shift_get
   {n : ℕ}
@@ -1411,7 +1348,6 @@ lemma evalGridSelector_tail_index_shift_get
   (goal_layer' : Fin layers_tl.length)
   (h_acc : acc = evalGridSelectorStep initial_vectors layer_hd)
   (h_sel : new_selectors = List.map (fun v => selector v.toList) acc)
-  (h_sel0 : initial_selectors = List.map (fun v => selector v.toList) initial_vectors)
   :
   let lhs_list := evalGridSelector (layer_hd :: layers_tl) initial_vectors initial_selectors
   let rhs_list := evalGridSelector layers_tl acc new_selectors
@@ -1437,14 +1373,42 @@ lemma evalGridSelector_getLastD_shift {n : ℕ}
   (initial_vectors acc : List (List.Vector Bool n))
   (initial_selectors new_selectors : List (List Bool))
   (l : ℕ)
-  (h_acc : acc = evalGridSelectorStep initial_vectors layer_hd)
-  (h_sel : new_selectors = List.map (fun v => selector v.toList) acc)
-  (h_sel0 : initial_selectors = List.map (fun v => selector v.toList) initial_vectors) :
+  (h_acc : acc = evalGridSelectorStep initial_vectors layer_hd):
   (evalGridSelector (List.take l layers_tl) acc new_selectors).getLastD acc =
   (evalGridSelector (layer_hd :: List.take l layers_tl) initial_vectors initial_selectors).getLast?.getD initial_vectors :=
 by
-  -- prove by induction on l (or use your previous prev_results_shift if it's general)
-  sorry
+  induction l with
+  | zero =>
+    rw [List.take, evalGridSelector, evalGridSelector.aux.eq_def]
+    simp [List.getLastD, List.getLast?, Option.getD, h_acc]
+    rfl
+  | succ l ih =>
+    set xs := List.take (l + 1) layers_tl with h_xs
+    cases xs with
+    | nil =>
+      rw [evalGridSelector, evalGridSelector.aux]
+      simp [List.getLastD, List.getLast?, Option.getD, h_acc]
+      rfl
+    | cons l' ls =>
+      dsimp only [List.getLastD]
+      rw [evalGridSelector, evalGridSelector.aux]
+      rw [evalGridSelector, evalGridSelector.aux.eq_def] at ih
+      simp only [List.getLastD, List.getLast?, Option.getD] at ih
+      have aux_def : evalGridSelector.aux acc (l' :: ls) = acc :: evalGridSelector.aux (evalGridSelectorStep acc l') ls := rfl
+      simp [aux_def]
+      have eq1 : evalGridSelector (layer_hd :: l' :: ls) initial_vectors initial_selectors
+      = initial_vectors :: evalGridSelector.aux acc (l' :: ls) := by
+        rw [evalGridSelector]
+        rw [h_acc]
+        rfl
+
+      have eq2 : (initial_vectors :: evalGridSelector.aux acc (l' :: ls)).getLast?.getD initial_vectors
+      = (acc :: evalGridSelector.aux (evalGridSelectorStep acc l') ls).getLastD acc := by
+        apply List.getLast?_cons_getD
+      rw [eq1, eq2]
+      rfl
+
+     
 
 @[simp]
 theorem List.getElem_eq_get {α : Type*} (l : List α) (i : Fin l.length) : l[↑i] = l.get i := rfl
@@ -1532,7 +1496,7 @@ by
               have aux_def : evalGridSelector.aux initial_vectors [] = [initial_vectors] := by simp [evalGridSelector.aux]
               rw [selectors_base_eq]
               rw [h_sel0]
-          congr
+          
           convert r_mem
         ·       
 
@@ -1596,7 +1560,7 @@ by
       -- Use your tail index shift lemma to adjust indices
       have shift := evalGridSelector_tail_index_shift_get
         layer_hd layers_tl initial_vectors acc initial_selectors new_selectors goal_layer'
-        rfl rfl h_sel0
+        rfl rfl 
 
       -- Set up indices: goal_layer'.succ.succ = ↑goal_layer' + 2
       let idx₁ : Fin (evalGridSelector (layer_hd :: layers_tl) initial_vectors initial_selectors).length :=
@@ -1640,15 +1604,21 @@ by
               
               rw [take_take]
               have eq_take : (layer_hd :: List.take (↑l') layers_tl) = List.take (↑l' + 1) (layer_hd :: layers_tl) :=
-                by sorry
+                by
+                  simp [List.take]
 
               rw [eq_take]
-              sorry
 
-              -- rw [prev_results_shift layer_hd (List.take (↑l'+1) (layer_hd :: layers_tl))
-              --   initial_vectors acc initial_selectors new_selectors (↑l'+1)
-              --   (by rw [List.length_take, min_eq_left (Nat.le_succ_of_le (Nat.le_of_lt goal_layer'.isLt))])
-              --   rfl h_sel']
+              
+              rw [←prev_results_shift layer_hd layers_tl initial_vectors acc initial_selectors new_selectors l'
+                  (by linarith [goal_layer'.isLt]) rfl rfl h_sel0]
+              
+              by_cases h : (↑l' : ℕ) = 0
+              case pos =>
+                rw [h]
+                rfl
+              case neg =>
+                simp [h]
 
 
         rw [←selectors_eq] at r_mem
@@ -1697,7 +1667,7 @@ by
 
         have last_eq : (evalGridSelector (List.take (↑goal_layer') layers_tl) acc new_selectors).getLastD acc =
           (evalGridSelector (layer_hd :: List.take (↑goal_layer') layers_tl) initial_vectors initial_selectors).getLast?.getD initial_vectors :=
-        evalGridSelector_getLastD_shift layer_hd layers_tl initial_vectors acc initial_selectors new_selectors ↑goal_layer' rfl h_sel' h_sel0
+        evalGridSelector_getLastD_shift layer_hd layers_tl initial_vectors acc initial_selectors new_selectors ↑goal_layer' rfl
         
         
         rw [←last_eq]
