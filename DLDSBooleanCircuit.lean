@@ -7,8 +7,6 @@ import Mathlib.Data.Vector.Defs
 import Mathlib.Data.Vector.Zip
 import Mathlib.Data.Fin.Basic
 
-
-
 -- Define an enum to distinguish rule types
 inductive RuleType
   | intro  -- 1 activation bit
@@ -779,8 +777,6 @@ def evalGridSelector {n : Nat}
 
 
 
-
-
 /-- Query the output dependency vector of a goal node after grid evaluation -/
 def goalNodeOutput {n : Nat}
   (results : List (List (List.Vector Bool n)))
@@ -826,17 +822,6 @@ theorem List.getD_zero {α : Type*} (l : List α) (d : α) :
   cases l <;> simp [List.getD, List.headD]
 
 
-  
-lemma List.get?_map {α β : Type} (l : List α) (f : α → β) (i : Nat) :
-  (l.map f)[i]? = (l[i]?).map f := by
-  induction l generalizing i with
-  | nil =>
-    simp [List.get?, List.map]
-  | cons hd tl ih =>
-    cases i with
-    | zero => simp [List.get?, List.map]
-    | succ i' =>
-      simp [List.get?, List.map, ih]
 
 lemma List.get?_append_right {α} (l₁ l₂ : List α) (i : Nat) (h : i ≥ l₁.length) :
   (l₁ ++ l₂)[i]? = l₂[i - l₁.length]? := by
@@ -873,10 +858,6 @@ def dummyNode (n : Nat) : CircuitNode n :=
       -- with just one element, this is trivial
   }
 
-lemma getD_zero_eq_match {α : Type*} (l : List α) (d : α) :
-  l.getD 0 d = (match l[0]? with | some x => x | none => d) := by
-  cases l <;> simp [List.getD, List.get?, Option.getD]
-
 
 @[simp]
 lemma List.getD_singleton {α} (x : α) (n : Nat) (d : α) :
@@ -890,10 +871,6 @@ lemma List.getD_singleton_succ {α} (x d : α) (n : ℕ) :
   ([x] : List α).getD (n + 1) d = d :=
 by simp [List.getD]
 
-@[simp]
-lemma List.getD_zero_eq_get {α : Type*} (l : List α) (d : α) (h : 0 < l.length) :
-  l.getD 0 d = (l[0]?).getD d :=
-by simp [List.getD, List.get?, Option.getD]
 
 
 @[simp]
@@ -923,12 +900,12 @@ def RuleActivationCorrect {n : ℕ}
 : Prop :=
   ∀ (l : Fin layers.length) (i : Fin (layers.get l).nodes.length),
     let prev_results :=
-      if h0 : l.val = 0 then initial_vectors
+      if _ : l.val = 0 then initial_vectors
       else
         (evalGridSelector (layers.take l.val)
           initial_vectors initial_selectors).getLastD initial_vectors
     let prev_selectors :=
-      if h0 : l.val = 0 then initial_selectors
+      if _ : l.val = 0 then initial_selectors
       else prev_results.map (λ v => selector v.toList)
     let act_nodes := activateLayerFromSelectors prev_selectors (layers.get l)
     let hlen : act_nodes.length = (layers.get l).nodes.length :=
@@ -936,16 +913,6 @@ def RuleActivationCorrect {n : ℕ}
     let node := act_nodes.get (Fin.cast (Eq.symm hlen) i)
     exactlyOneActive node.rules
 
-
-lemma evalGridSelector_base_succ {n : Nat}
-  (first_layer : GridLayer n)
-  (initial_vectors : List (List.Vector Bool n))
-  (initial_selectors : List (List Bool)) :
-  (evalGridSelector [first_layer] initial_vectors initial_selectors).get? 1 =
-    some (activateLayerFromSelectors (initial_vectors.map (λ v => selector v.toList)) first_layer |>.map (λ node => node.run initial_vectors)) :=
-by
-  simp [evalGridSelector]
-  rfl
 
 
 @[simp] lemma List.getLastD_singleton {α} (x d : α) : ([x] : List α).getLastD d = x := rfl
@@ -1093,15 +1060,6 @@ by
   · contradiction
   · simp [List.getLast]
 
-lemma match_getLast_of_ne_nil_two_args2 {α : Type u} (l : List α) (x : α) (h : l ≠ []) :
-  (match l, x, h with
-   | [], a₀, h => a₀
-   | a :: as, x, h => (a :: as).getLast h) = l.getLast h :=
-by
-  cases l
-  · contradiction
-  · rfl
-
 
 lemma getLast_eq_after_cons {α : Type*} (xs : List α) (x : α) (h : xs ≠ []) :
     (match xs, x with
@@ -1135,7 +1093,14 @@ lemma List.getLastD_eq_getLast_of_ne_nil {α} (xs : List α) (d : α) (h : xs �
     | cons b bs => 
       simp [List.getLastD, List.getLast]
 
-
+lemma evalGridSelector_aux_ne_nil
+  (acc : List (List.Vector Bool n)) (ls : List (GridLayer n)) :
+  evalGridSelector.aux acc ls ≠ [] :=
+by
+  induction ls generalizing acc with
+  | nil => simp [evalGridSelector.aux]
+  | cons hd tl ih =>
+    simp [evalGridSelector.aux]
 
 lemma prev_results_shift
   {n : ℕ}
@@ -1146,36 +1111,33 @@ lemma prev_results_shift
   (h_acc : acc = evalGridSelectorStep initial_vectors layer_hd)
   (h_sel : new_selectors = List.map (fun v => selector v.toList) acc)
   (h_sel0 : initial_selectors = List.map (fun v => selector v.toList) initial_vectors) :
-  (if h0 : l = 0 then acc else (evalGridSelector (List.take l layers_tl) acc new_selectors).getLastD acc)
+  (if _ : l = 0 then acc else (evalGridSelector (List.take l layers_tl) acc new_selectors).getLastD acc)
   =
-  (evalGridSelector (List.take (l + 1) (layer_hd :: layers_tl)) initial_vectors initial_selectors).getLastD initial_vectors :=
-by
+  (evalGridSelector (List.take (l + 1) (layer_hd :: layers_tl)) initial_vectors initial_selectors).getLastD initial_vectors := by
   cases l
   case zero =>
-    -- l = 0
-    simp [evalGridSelector, evalGridSelectorStep, evalGridSelector.aux, List.getLastD]
-    rw [h_acc]
-    rfl
+    simp [evalGridSelector, evalGridSelectorStep, evalGridSelector.aux, List.getLastD, h_acc]
+
   case succ l' =>
-    -- l = l'+1 > 0
-    rw [Nat.add_comm, List.take]
-    -- Now use definition of evalGridSelector
-    rw [evalGridSelector]
-    rw [h_acc]
-    -- getLastD on (x :: xs) is xs.getLastD acc
-    rw [List.getLastD.eq_def]
-    sorry
-    -- cases l'
-    -- case zero =>
-    --   simp only [Nat.add_zero] at *
-    --   simp only [if_neg (by decide)]
-    --   rw [evalGridSelector, h_acc, List.getLastD]
-    --   rfl
-    -- case succ l'' =>
-    --   -- l' + 1 ≥ 1, so 1 + l' ≠ 0
-    --   rw [if_neg (by decide)]
-    --   rw [evalGridSelector, h_acc, List.getLastD]
-    --   rfl
+    simp only [Nat.succ_ne_zero, dite_false]
+
+    have take_eq : List.take (l' + 2) (layer_hd :: layers_tl) = layer_hd :: List.take (l' + 1) layers_tl := by simp [List.take]
+    rw [take_eq, h_acc, h_sel, h_sel0]
+    simp [evalGridSelector, List.getLastD, evalGridSelector.aux]
+
+    set rest := evalGridSelector.aux (evalGridSelectorStep initial_vectors layer_hd) (List.take (l' + 1) layers_tl)
+
+    have rest_nonempty : rest ≠ [] := evalGridSelector_aux_ne_nil _ _
+
+    generalize hrest : rest = z
+    cases z with
+    | nil =>
+        exfalso
+        apply rest_nonempty
+        rw [←hrest]
+    | cons hd tl =>
+        simp [List.getLastD]
+
 
 
 /--
