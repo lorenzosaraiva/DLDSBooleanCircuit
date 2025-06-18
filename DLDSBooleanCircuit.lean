@@ -342,28 +342,6 @@ lemma List.Vector.zipWith_comm {n : ℕ} (f : Bool → Bool → Bool)
   rw [List.getElem_zipWith, List.getElem_zipWith]
   apply h
 
--- @[simp]
--- lemma zipWith_or_comm {n : ℕ} (v₁ v₂ : List.Vector Bool n) :
---     v₁.zipWith (fun x y => x || y) v₂ = v₂.zipWith (fun x y => x || y) v₁ := by
---   cases v₁
---   cases v₂
---   dsimp [List.Vector.zipWith]
---   sorry
-
-
-
-
-
--- lemma foldl_or_false_identity {n : ℕ} (v : List.Vector Bool n) (l : List (List.Vector Bool n)) :
---   List.foldl (fun acc lst => acc.zipWith (fun x y => x || y) lst) v (l.map (fun _ => List.Vector.replicate n false)) = v :=
--- by
---   induction l with
---   | nil => simp
---   | cons _ tl ih =>
---     simp only [List.map, List.foldl]
---     rw [zipWith_or_comm v (List.Vector.replicate n false), zip_with_zero_identity n v]
---     exact ih
-
 
 lemma foldl_add_false {n : ℕ} (v : List.Vector Bool n) (l : List α) :
   List.foldl (fun acc (_ : α) => acc.zipWith (fun x y => x || y) (List.Vector.replicate n false)) v l = v :=
@@ -380,7 +358,6 @@ by
 lemma List.getElem_cast {α} {l : List α} {n} (i : Fin n) (h : l.length = n) :
   l[↑(h ▸ i)] = l[↑i] :=
 by
-  -- Proof uses the fact that Fin.cast h i has the same value as i, just a different type
   cases h; rfl
 
 lemma list_or_apply_unique_active_of_exactlyOne {n : ℕ}
@@ -415,12 +392,12 @@ by
             -- have nodup_head_notin_tail : r ∉ rs := List.nodup_cons.mp h_nodup |>.1
             let eq := uniq r' (List.mem_cons_of_mem _ h_mem) act
             subst eq
-            rw [eq] at h_mem
-            rw [eq.symm] at h_mem
+            subst r0_eq_r
+            have uniq_r0 := uniq r0 (List.Mem.head rs) hr0_active
+            rw [eq, ←uniq_r0] at h_mem
+            let ⟨r_not_in_rs, _⟩ := List.nodup_cons.mp h_nodup
+            exact r_not_in_rs h_mem
 
-            exact (nodup_head_notin_tail h_nodup) h_mem
-
-            -- exact not_mem_tail _ rs h_mem
 
           -- Compute outputs
           dsimp [apply_activations, extract_activations, list_or]
