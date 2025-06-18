@@ -1,6 +1,6 @@
 import Init
-import Mathlib.Data.List.Basic  
-import Mathlib.Tactic           
+import Mathlib.Data.List.Basic
+import Mathlib.Tactic
 import Mathlib.Data.Vector.Mem
 import Mathlib.Data.List.Duplicate
 import Mathlib.Data.Vector.Defs
@@ -66,6 +66,11 @@ def mkElimRule {n : ℕ} (bit1 bit2 : Bool) : Rule n :=
     | _        => List.Vector.replicate n false
 }
 
+variable (rules : List (Rule n))
+axiom rules_nodup : rules.Nodup
+
+
+
 def is_rule_active {n: Nat} (r : Rule n) : Bool :=
   match r.activation with
   | ActivationBits.intro b   => b
@@ -111,10 +116,11 @@ def node_logic {n: Nat} (rules : List (Rule n))
 
 structure CircuitNode (n: Nat) where
   rules : List (Rule n)
-  pairwise : rules.Pairwise (· ≠ ·)
+  nodup : rules.Nodup
 
-def mkCircuitNode {n} (rs : List (Rule n)) (h : rs.Pairwise (· ≠ ·)) : CircuitNode n :=
-  { rules := rs, pairwise := h }
+
+def mkCircuitNode {n} (rs : List (Rule n)) (h : rs.Nodup) : CircuitNode n :=
+  { rules := rs,  nodup := h }
 
 def CircuitNode.run {n: Nat} (c : CircuitNode n)
     (inputs : List (List.Vector Bool n)) : List.Vector Bool n :=
@@ -172,17 +178,17 @@ lemma List.or_eq_false_iff_all_false {l : List Bool} :
     simp only [List.or, Bool.or_eq_false_eq_eq_false_and_eq_false, List.mem_cons, forall_eq_or_imp, ih]
     simp [List.any]
 
-theorem multiple_xor_bool_iff_exactlyOneActive {n : ℕ} (rs : List (Rule n)) (h_pairwise : rs.Pairwise (· ≠ ·)) :
+theorem multiple_xor_bool_iff_exactlyOneActive {n : ℕ} (rs : List (Rule n))  (h_nodup : rs.Nodup) :
   multiple_xor (rs.map is_rule_active) = true ↔ exactlyOneActive rs := by
   induction rs with
   | nil =>
     simp [multiple_xor, exactlyOneActive]
   | cons r rs ih =>
-    have tail_pairwise : rs.Pairwise (· ≠ ·) := h_pairwise.tail
+    have tail_nodup : rs.Nodup := List.nodup_cons.mp h_nodup |>.2
     cases hr : is_rule_active r
     · -- Case: r is inactive
       simp only [List.map, hr, multiple_xor]
-      rw [multiple_xor_cons_false, ih tail_pairwise]
+      rw [multiple_xor_cons_false, ih tail_nodup]
       simp only [exactlyOneActive]
       constructor
       · intro ⟨r₀, hr₀_in, h_act, h_uniq⟩
@@ -212,7 +218,7 @@ theorem multiple_xor_bool_iff_exactlyOneActive {n : ℕ} (rs : List (Rule n)) (h
           intro a ha
           have all_false_bools := List.or_eq_false_iff_all_false.mp h
           exact all_false_bools (is_rule_active a) (List.mem_map.mpr ⟨a, ha, rfl⟩)
-        exists r 
+        exists r
         constructor
         · exact @List.mem_cons_self _ r rs
         · constructor
@@ -220,7 +226,7 @@ theorem multiple_xor_bool_iff_exactlyOneActive {n : ℕ} (rs : List (Rule n)) (h
           · intros r' hr'_mem hr'_act
             cases hr'_mem with
             | head => rfl
-            | tail _ h_tail => 
+            | tail _ h_tail =>
               have h_false := all_false r' h_tail
               rw [hr'_act] at h_false
               contradiction
@@ -234,16 +240,16 @@ theorem multiple_xor_bool_iff_exactlyOneActive {n : ℕ} (rs : List (Rule n)) (h
           have hb_true : is_rule_active b = true := by
             cases h_b : is_rule_active b
             · contradiction -- trivial since h_contra assumes it's not false
-            · rfl          
+            · rfl
           have eq_b := h_unique b (List.mem_cons_of_mem _ hb) hb_true
-          let ⟨r_ne, _⟩ := List.pairwise_cons.mp h_pairwise
+          let ⟨r_ne, _⟩ := List.nodup_cons.mp h_nodup
           rw [eq_b] at hb
-          have r_ne_self := r_ne r hb
-          exact r_ne_self rfl
+          contradiction
         | tail _ h_tail =>
           have eq_head := h_unique r (List.Mem.head ..) hr
-          let ⟨r_ne, _⟩ := List.pairwise_cons.mp h_pairwise
-          exact False.elim (r_ne r₁ h_tail eq_head)
+          have : r ∈ rs := by rwa [←eq_head] at h_tail
+          let ⟨r_ne, _⟩ := List.nodup_cons.mp h_nodup
+          contradiction
 
 
 
@@ -298,115 +304,200 @@ then OR‑folding the result of `apply_activations rules masks inputs`
 yields exactly that rule’s `combine inputs`.
 -/
 
+
+lemma drop_eq_get_cons {α : Type*} {l : List α} {n : ℕ} (h : n < l.length) :
+  l.drop n = l.get ⟨n, h⟩ :: l.drop (n + 1) :=
+by
+  induction l generalizing n with
+  | nil =>
+    simp at h
+  | cons x xs ih =>
+    cases n
+    case zero =>
+      simp [List.get, List.drop]
+    case succ n' =>
+      simp only [List.drop, List.get]
+      apply ih
+
+
+
+@[simp]
+theorem List.getElem_eq_get {α : Type*} (l : List α) (i : Fin l.length) : l[↑i] = l.get i :=
+rfl
+
+lemma nodup_head_notin_tail {α : Type*} {x : α} {xs : List α} (h : (x :: xs).Nodup) : x ∉ xs :=
+List.nodup_cons.mp h |>.1
+
+
+@[simp]
+lemma List.Vector.zipWith_comm {n : ℕ} (f : Bool → Bool → Bool)
+    (h : ∀ x y, f x y = f y x)
+    (v₁ v₂ : List.Vector Bool n) :
+    v₁.zipWith f v₂ = v₂.zipWith f v₁ := by
+  rcases v₁ with ⟨l₁, h₁⟩
+  rcases v₂ with ⟨l₂, h₂⟩
+  apply List.Vector.ext
+  intro i
+  dsimp [List.Vector.zipWith, List.Vector.get]
+  rw [List.getElem_zipWith, List.getElem_zipWith]
+  apply h
+
+-- @[simp]
+-- lemma zipWith_or_comm {n : ℕ} (v₁ v₂ : List.Vector Bool n) :
+--     v₁.zipWith (fun x y => x || y) v₂ = v₂.zipWith (fun x y => x || y) v₁ := by
+--   cases v₁
+--   cases v₂
+--   dsimp [List.Vector.zipWith]
+--   sorry
+
+
+
+
+
+-- lemma foldl_or_false_identity {n : ℕ} (v : List.Vector Bool n) (l : List (List.Vector Bool n)) :
+--   List.foldl (fun acc lst => acc.zipWith (fun x y => x || y) lst) v (l.map (fun _ => List.Vector.replicate n false)) = v :=
+-- by
+--   induction l with
+--   | nil => simp
+--   | cons _ tl ih =>
+--     simp only [List.map, List.foldl]
+--     rw [zipWith_or_comm v (List.Vector.replicate n false), zip_with_zero_identity n v]
+--     exact ih
+
+
+lemma foldl_add_false {n : ℕ} (v : List.Vector Bool n) (l : List α) :
+  List.foldl (fun acc (_ : α) => acc.zipWith (fun x y => x || y) (List.Vector.replicate n false)) v l = v :=
+by
+  induction l with
+  | nil => rfl
+  | cons _ tl ih =>
+    simp only [List.foldl]
+    rw [List.Vector.zipWith_comm (fun x y => x || y) Bool.or_comm]
+    rw [zip_with_zero_identity]
+    exact ih
+
+
+lemma List.getElem_cast {α} {l : List α} {n} (i : Fin n) (h : l.length = n) :
+  l[↑(h ▸ i)] = l[↑i] :=
+by
+  -- Proof uses the fact that Fin.cast h i has the same value as i, just a different type
+  cases h; rfl
+
 lemma list_or_apply_unique_active_of_exactlyOne {n : ℕ}
   {rules : List (Rule n)} (h_nonempty : rules ≠ [])
   {r0 : Rule n} (hr0_mem : r0 ∈ rules)
-  (h_one      : exactlyOneActive rules)
+  (h_nodup : rules.Nodup)
+  (h_one : exactlyOneActive rules)
   (hr0_active : is_rule_active r0 = true)
-  (inputs     : List (List.Vector Bool n)) :
-  list_or (apply_activations rules (extract_activations rules) inputs)
-    = r0.combine inputs := by
-  -- abbreviations
-  -- abbreviations from before
-  let masks := extract_activations rules
-  let outs  := apply_activations rules masks inputs
-  
+  (inputs : List (List.Vector Bool n)) :
+  list_or (apply_activations rules (extract_activations rules) inputs) = r0.combine inputs :=
+by
+  induction rules with
+  | nil => contradiction
+  | cons r rs ih =>
+      -- Show r0 is either r or in rs
+      have h_r0 : r0 = r ∨ r0 ∈ rs := by
+        cases hr0_mem
+        case head => exact Or.inl rfl
+        case tail h' => exact Or.inr h'
+      cases h_r0 with
+      | inl r0_eq_r =>
+          -- Unpack exactlyOneActive for this case
+          rcases h_one with ⟨_, ⟨mem_head, r_active, uniq⟩⟩
+          -- Show all in rs are inactive
+          have tail_inactive : ∀ r', r' ∈ rs → is_rule_active r' = false := by
+            intros r' h_mem
+            by_contra h_act
+            let act : is_rule_active r' = true := Bool.eq_true_of_not_eq_false h_act
+            -- Now r' ∈ rs, so r' ∈ r :: rs via List.mem_cons_of_mem _ h_mem
+            let eq := uniq r' (List.mem_cons_of_mem _ h_mem) act
+            -- But r ≠ r' since r' ∈ rs
+            -- have nodup_head_notin_tail : r ∉ rs := List.nodup_cons.mp h_nodup |>.1
+            let eq := uniq r' (List.mem_cons_of_mem _ h_mem) act
+            subst eq
+            rw [eq] at h_mem
+            rw [eq.symm] at h_mem
 
-  -- show masks.length = rules.length
-  have masks_eq : masks.length = rules.length := by
-    -- `extract_activations = List.map is_rule_active`
-    dsimp [masks, extract_activations]
-    simp [List.length_map]
+            exact (nodup_head_notin_tail h_nodup) h_mem
 
-  -- now outs.length = min rules.length masks.length,
-  -- and since rules.length ≤ masks.length, `min … = rules.length`.
-  have h_len : outs.length = rules.length := by
-    dsimp [outs, apply_activations]
-    -- length_zipWith: length (zipWith _ l1 l₂) = min l1.length l₂.length
-    rw [List.length_zipWith]
-    -- rewrite masks.length to rules.length
-    rw [masks_eq]
-    -- now we have `min rules.length rules.length = rules.length`
-    apply Nat.min_self
+            -- exact not_mem_tail _ rs h_mem
 
-  -- prove every element of `outs` is either zero or exactly `r0.combine inputs`
-  have h_all : ∀ x ∈ outs, x = List.Vector.replicate n false ∨ x = r0.combine inputs := by
-    let outs := List.zipWith (fun r m => if m then r.combine inputs else List.Vector.replicate n false) rules (rules.map is_rule_active)
-    intros x hx
-    have outs_eq : apply_activations rules masks inputs =
-      List.zipWith (fun r m => if m then r.combine inputs else List.Vector.replicate n false)
-        rules (List.map is_rule_active rules) := by
-      dsimp [apply_activations, masks, extract_activations]
-      
-    have hx' : x ∈ List.zipWith (fun r m => if m then r.combine inputs else List.Vector.replicate n false)
-      rules (List.map is_rule_active rules) := by
-      rw [←outs_eq]; exact hx
+          -- Compute outputs
+          dsimp [apply_activations, extract_activations, list_or]
+          rw [←r0_eq_r, hr0_active]
+          have outs_tail_eq : (List.zipWith (fun r m => if m then r.combine inputs else List.Vector.replicate n false) rs (rs.map is_rule_active))
+            = rs.map (fun _ => List.Vector.replicate n false) := by
+              apply List.ext_get (by simp)
+              intro i h₁ h₂
+              have hlen : (List.zipWith (fun r m => if m then r.combine inputs else List.Vector.replicate n false) rs (rs.map is_rule_active)).length = rs.length :=
+                by
+                  simp [List.length_zipWith]
+              have len_zip : (List.zipWith (fun r m => if m then r.combine inputs else List.Vector.replicate n false) rs (rs.map is_rule_active)).length = rs.length := by simp [List.length_zipWith]
+              have len_map : (List.map (fun x => List.Vector.replicate n false) rs).length = rs.length := by simp
+              let fin_zip := Fin.mk i (len_zip ▸ h₁)
+              let fin_map := Fin.mk i (len_map ▸ h₂)
+              let x := rs.get fin_zip
+              have xin : x ∈ rs := List.get_mem rs fin_zip
+              simp [List.getElem_zipWith]
+              have fin_eq : fin_map = fin_zip := by apply Fin.ext; rfl
+              intro h
+              have get_eq : rs[i] = rs.get fin_map := List.getElem_eq_get rs fin_map
+              rw [get_eq] at h ⊢
+              rw [tail_inactive x xin] at h
+              contradiction
 
-    have ⟨r, hr_in, x_eq⟩ := mem_zipWith_map (fun r m => if m then r.combine inputs else List.Vector.replicate n false) rules is_rule_active x hx'
+          rw [outs_tail_eq]
+          rw [List.foldl_map]
+          simp only [if_true]
+          cases rs
+          case nil =>
+            simp
+            rw [zip_with_zero_identity n (r0.combine inputs)]
+          case cons b l =>
+            rw [zip_with_zero_identity n (r0.combine inputs)]
+            simp [List.foldl, zip_with_zero_identity]
+            induction l with
+            | nil =>
+              simp
+            | cons hd tl ih =>
+              simp [List.foldl]
+              rw [zip_with_zero_identity n (r0.combine inputs)]
+              apply foldl_add_false
 
-    obtain ⟨r₁, hr₁_mem, hr₁_active, h_unique⟩ := h_one
+      | inr r0_in_rs =>
+          have r_inactive : is_rule_active r = false := by
+            rcases h_one with ⟨_, ⟨_, _, uniq⟩⟩
+            by_contra h'
+            have eq := uniq r (List.Mem.head rs) (Bool.eq_true_of_not_eq_false h')
+            have ne : r0 ≠ r := by
+              intro contra
+              subst contra
+              have : ¬ r0 ∈ rs := List.nodup_cons.mp h_nodup |>.1
+              contradiction
+            rw [eq] at ne
+            have r0_eq_w := uniq r0 hr0_mem hr0_active
+            exact ne r0_eq_w
 
-    have r0_eq_r₁ : r0 = r₁ := by
-      apply h_unique r0 hr0_mem hr0_active
-    subst r0_eq_r₁
+          rcases h_one with ⟨_, ⟨_, _, uniq⟩⟩
 
-    by_cases h : r = r0
-    · subst h
-      rw [x_eq, hr0_active]
-      right; rfl
+          have r0_eq_w := uniq r0 hr0_mem hr0_active
+          have h_one_tail : exactlyOneActive rs := by
+            use r0
+            exact ⟨r0_in_rs, hr0_active, fun r' h' act =>
+              let r'_eq_w := uniq r' (List.mem_cons_of_mem _ h') act
+              by rw [←r0_eq_w] at r'_eq_w; exact r'_eq_w
+            ⟩
 
-    · have h_inactive : is_rule_active r = false := by
-        by_contra contra
-        have hr_act : is_rule_active r = true :=
-          Bool.eq_true_of_not_eq_false contra
-        have eq_r0 := h_unique r hr_in hr_act
-        exact h eq_r0
-      rw [x_eq, h_inactive]
-      left; rfl
-  
-  let idx := outs.idxOf (r0.combine inputs)
+          dsimp [apply_activations, extract_activations, list_or]
+          rw [r_inactive]
+          let h_nonempty_tail : rs ≠ [] := List.ne_nil_of_mem r0_in_rs
+          let rs_nodup := List.nodup_cons.mp h_nodup |>.2
+          simp [list_or, apply_activations, extract_activations]
+          rw [zip_with_zero_identity n (List.Vector.replicate n false)]
+          exact ih h_nonempty_tail r0_in_rs rs_nodup h_one_tail
 
 
-  have in_outs : r0.combine inputs ∈ outs := by
-    -- exists in outs because h_all + exactlyOneActive
-    obtain ⟨i, hi, get_eq⟩ := List.get_of_mem hr0_mem
-    have acts_len : (List.map is_rule_active rules).length = rules.length := by simp
-    let j : Fin rules.length := i
-    let k : Fin (List.map is_rule_active rules).length := acts_len ▸ j
-    let outs := List.zipWith (fun r m => if m then r.combine inputs else List.Vector.replicate n false)
-                         rules (rules.map is_rule_active)
 
-    have get_idx : outs.get (h_len ▸ i) = (rules.get i).combine inputs := by
-      dsimp [outs, apply_activations, masks, extract_activations]
-      -- Now get the value at position i, using the definition of apply_activations
-      rw [List.getElem_zipWith, List.getElem_map]
-      have : rules.get (h_len ▸ i) = rules.get i := by
-        sorry
-      sorry
-        --List.get_eq_get_of_eq _ _ (by rw [h_len])
-      -- rw [this]
-      -- exact if_pos hr0_active
-        
-      -- rules.get i = rules.get i, so fine
-      -- (rules.map is_rule_active).get i = is_rule_active (rules.get i)
-
-      -- rfl
-
-    have mem : (rules.get i).combine inputs ∈ outs := by
-  -- This index is valid since (h_len ▸ i).isLt = i.isLt (because lengths are equal)
-      have idx_lt : (h_len ▸ i).val < outs.length := (h_len ▸ i).isLt
-      rw [←get_idx]
-      exact List.get_mem outs (h_len ▸ i)
-
-    exact mem
-   
-  
-  have : list_or outs = r0.combine inputs := by
-    sorry
-
-  exact this
-      
-  
 theorem node_correct {n} (c : CircuitNode n)
     (inputs : List (List.Vector Bool n))
     (h_one : exactlyOneActive c.rules) :
@@ -414,8 +505,8 @@ theorem node_correct {n} (c : CircuitNode n)
 
   -- 0) immediately derive the Bool‐onehot:
   have h_bool : multiple_xor (c.rules.map is_rule_active) = true :=
-    (multiple_xor_bool_iff_exactlyOneActive c.rules c.pairwise).mpr h_one
-  
+    (multiple_xor_bool_iff_exactlyOneActive c.rules c.nodup).mpr h_one
+
   let h_one_prop := h_one
 
   -- 1) now unpack the unique‐active Prop
@@ -437,7 +528,7 @@ theorem node_correct {n} (c : CircuitNode n)
   simp [List.map_map, true_and]
 
   let eq := list_or_apply_unique_active_of_exactlyOne
-    h_nonempty hr0_mem h_one_prop hr0_active inputs
+    h_nonempty hr0_mem c.nodup h_one_prop hr0_active inputs
 
   use r0
   constructor
@@ -492,7 +583,7 @@ def evalStep (grid : Grid n (CircuitNode n))
 def evalStepOne (grid   : Grid n (CircuitNode n))
                 (state  : List.Vector Bool n)
                 (sel    : Fin (n * n))
-  : List.Vector Bool n := 
+  : List.Vector Bool n :=
   let node := grid.nodes.nthLe sel.val (by simp [grid.grid_size])
   -- wrap the single state vector into a singleton list,
   -- because CircuitNode.run expects List (List.Vector Bool n)
@@ -562,7 +653,7 @@ induction L generalizing initial with
       let c := grid.nodes.nthLe sel.val (by simp [grid.grid_size])
 
       -- 2) by hypothesis that node has exactly one active rule
-      have hi_sel : sel.val < grid.nodes.length := by simp [grid.grid_size] 
+      have hi_sel : sel.val < grid.nodes.length := by simp [grid.grid_size]
       have h_one := h_act sel.val hi_sel
 
       -- 3) apply your existing `node_correct`
@@ -583,7 +674,7 @@ induction L generalizing initial with
         rw [List.length_cons, vs'_len]
 
       use vs, vs_len
-      
+
             -- 1) length
       constructor
       -- 1) proves A : vs.length = L' + 1 + 1
@@ -603,7 +694,7 @@ induction L generalizing initial with
         dsimp [evalStepOne]
         rw [hr_eq]
 
-      
+
       · -- Intermediate correctness at each step
         intro i
         cases i using Fin.cases with
@@ -626,18 +717,17 @@ induction L generalizing initial with
 def set_activation (n : ℕ) (r : Rule n) (a : ActivationBits) : Rule n :=
   { r with activation := a }
 
-lemma set_activation_injective {n} {r : Rule n} : Function.Injective (set_activation n r) := by
-  intros a₁ a₂ h_eq
-  simp [set_activation] at h_eq
-  exact h_eq
-
-lemma set_activation_injective_full {n : ℕ} :
-  ∀ {r₁ r₂ : Rule n} {a₁ a₂ : ActivationBits},
-    set_activation n r₁ a₁ = set_activation n r₂ a₂ →
-      r₁.kind = r₂.kind ∧ r₁.combine = r₂.combine ∧ a₁ = a₂ := by
-  intros r₁ r₂ a₁ a₂ h_eq
-  simp [set_activation] at h_eq
+lemma set_activation_injective_in_r {n : ℕ} (a : ActivationBits) :
+  Function.Injective (λ r : Rule n => set_activation n r a) :=
+by
   sorry
+  -- intros r₁ r₂ h; ext <;> simp [set_activation] at h; assumption
+
+
+-- lemma set_activation_injective {n} {r : Rule n} : Function.Injective (set_activation n r) := by
+--   intros a₁ a₂ h_eq
+--   simp [set_activation] at h_eq
+--   exact h_eq
 
 
 /-- Type alias: for each rule in a node, where to read activation from (previous layer) -/
@@ -670,7 +760,7 @@ let new_rules := List.finRange len |>.map (fun i =>
     if h_map : i.val < incoming_map.length then
       incoming_map.get ⟨i.val, h_map⟩
     else
-      (0, 0) 
+      (0, 0)
   let act :=
     if h_src : src_idx < prev_selectors.length then
       let sel := prev_selectors.get ⟨src_idx, h_src⟩
@@ -686,38 +776,21 @@ let new_rules := List.finRange len |>.map (fun i =>
   | ActivationBits.elim _ _ =>
       { rule with activation := ActivationBits.elim act act }
 )
-let h_pairwise : new_rules.Pairwise (· ≠ ·) := by
-  -- same as before; activation doesn't affect .Pairwise since rules remain structurally the same
-  let old_rules := node.rules
-  have h_old : old_rules.Pairwise (· ≠ ·) := node.pairwise
+{
+  rules := new_rules,
+  nodup :=
+    by
+      have nodup_rules : node.rules.Nodup := node.nodup
+      have nodup_idx : (List.finRange len).Nodup := List.nodup_finRange len
+      apply List.Nodup.map
+      intro i j h_eq
+      have eq_fields := Rule.ext_iff.mp h_eq
+      have rule_eq : node.rules.get i = node.rules.get j :=
+        sorry
+      exact (List.Nodup.get_inj_iff nodup_rules).mp rule_eq
+      exact nodup_idx
+}
 
-
-  -- Prove that if r1 ≠ r2, then set_activation r1 a1 ≠ set_activation r2 a2
-  have h_inj : ∀ r1 r2 a1 a2, r1 ≠ r2 → set_activation n r1 a1 ≠ set_activation n r2 a2 := by
-    intros r1 r2 a1 a2 h_ne
-    intro h_eq
-    simp only [set_activation] at h_eq
-
-    rcases set_activation_injective_full h_eq with ⟨h_kind, h_comb, h_act⟩
-    
-    -- Use `ext` to show r1 = r2 under the equal fields
-    have : r1 = r2 := by
-      ext
-      · exact h_act   -- activation
-      · exact h_kind         -- kind
-      · rw [h_comb]          -- combine
-
-    -- Contradiction with h_ne
-    exact h_ne this
-
-  have h_pairwise : new_rules.Pairwise (· ≠ ·) := by
-    simp [List.pairwise_map]
-    exact node.pairwise.imp (h_inj _ _ _ _)
-
-
-
-
-{ rules := new_rules, pairwise := h_pairwise }
 
 
 
@@ -770,11 +843,10 @@ def evalGridSelector {n : Nat}
   let rec aux (acc : List (List.Vector Bool n)) (ls : List (GridLayer n)) :=
     match ls with
     | []      => [acc]
-    | l :: ls => 
+    | l :: ls =>
         let res := evalGridSelectorStep acc l
         acc :: aux res ls
   aux initial_vectors layers
-
 
 
 /-- Query the output dependency vector of a goal node after grid evaluation -/
@@ -842,21 +914,6 @@ theorem List.getLastD_eq_getLast_getD {α : Type*} (l : List α) (d : α) :
     simp [List.getLastD, List.getLast?, Option.getD]
 
 lemma List.get?_singleton_zero {α} (x : α) : [x][0]? = some x := by simp
-
-def dummyRule {n : Nat} : Rule n :=
-  {
-    activation := ActivationBits.intro true,
-    kind := RuleData.intro (List.Vector.replicate n true),
-    combine := fun _ => List.Vector.replicate n false
-  }
-
-def dummyNode (n : Nat) : CircuitNode n :=
-  {
-    rules := [dummyRule],
-    pairwise := by
-      simp [List.Pairwise, List.Pairwise]
-      -- with just one element, this is trivial
-  }
 
 
 @[simp]
@@ -983,25 +1040,25 @@ by
         let rest := rest_layers
         let L := rest.length
         let acc := evalGridSelectorStep initial_vectors first_layer
-        have len : (initial_vectors :: evalGridSelector.aux acc rest_layers).length = rest_layers.length + 2 := 
+        have len : (initial_vectors :: evalGridSelector.aux acc rest_layers).length = rest_layers.length + 2 :=
           by
             simp [evalGridSelector.aux]
-          
-        have bound : goal_layer.val + 1 < (initial_vectors :: evalGridSelector.aux acc rest_layers).length := 
+
+        have bound : goal_layer.val + 1 < (initial_vectors :: evalGridSelector.aux acc rest_layers).length :=
           by
             rw [len]
             linarith [goal_layer.isLt]
-          
-        have aux_len : (evalGridSelector.aux acc rest_layers).length = rest_layers.length + 1 := 
+
+        have aux_len : (evalGridSelector.aux acc rest_layers).length = rest_layers.length + 1 :=
           by
             apply evalGridSelector_aux_length
 
 
         have get_eq : (initial_vectors :: evalGridSelector.aux acc rest_layers).get ⟨goal_layer.val + 1, bound⟩ =
                         (evalGridSelector.aux acc rest_layers).get ⟨goal_layer.val, aux_len ▸ Nat.lt_succ_of_lt goal_layer.isLt⟩ :=
-          by 
+          by
             simp [List.get]
-      
+
 
         simp only [evalGridSelector, evalGridSelector.aux]
 
@@ -1083,14 +1140,14 @@ lemma evalGridSelector_getLastD_eq_aux {n}
 by
   simp [evalGridSelector]
 
-lemma List.getLastD_eq_getLast_of_ne_nil {α} (xs : List α) (d : α) (h : xs ≠ []) : 
+lemma List.getLastD_eq_getLast_of_ne_nil {α} (xs : List α) (d : α) (h : xs ≠ []) :
     xs.getLastD d = xs.getLast h := by
   cases xs with
   | nil => contradiction
-  | cons a as => 
+  | cons a as =>
     cases as with
     | nil => simp [List.getLastD, List.getLast]
-    | cons b bs => 
+    | cons b bs =>
       simp [List.getLastD, List.getLast]
 
 lemma evalGridSelector_aux_ne_nil
@@ -1101,6 +1158,8 @@ by
   | nil => simp [evalGridSelector.aux]
   | cons hd tl ih =>
     simp [evalGridSelector.aux]
+
+
 
 lemma prev_results_shift
   {n : ℕ}
@@ -1138,8 +1197,6 @@ lemma prev_results_shift
     | cons hd tl =>
         simp [List.getLastD]
 
-
-
 /--
 If every node of `layer_hd :: layers_tl` has exactly one active rule
 (with respect to the original vectors / selectors), then the same holds
@@ -1151,7 +1208,7 @@ lemma RuleActivationCorrect.tail
   {layer_hd : GridLayer n} {layers_tl : List (GridLayer n)}
   {init_vecs : List (List.Vector Bool n)}
   {init_sels : List (List Bool)}
-  (h_sel0  : init_sels = List.map (fun v => selector v.toList) init_vecs) 
+  (h_sel0  : init_sels = List.map (fun v => selector v.toList) init_vecs)
   (h_act : RuleActivationCorrect (layer_hd :: layers_tl) init_vecs init_sels) :
     RuleActivationCorrect
       layers_tl
@@ -1204,7 +1261,7 @@ by
   -- CASE 2 :  l.val ≠ 0  ---------------------------------------
   ----------------------------------------------------------------
   · -- here  (l.val = 0) = False
-    
+
     have hl0_false : (l.val = 0) = False := by
       simp [hl0]
     have h_shift :=
@@ -1227,7 +1284,7 @@ by
       ⟨0, by
         simpa using Nat.zero_lt_of_lt l.isLt⟩
 
-    let prev_selectors := 
+    let prev_selectors :=
       if h0 : ↑l = l0
       then List.map (fun v => selector v.toList) (evalGridSelectorStep init_vecs layer_hd)
       else List.map (fun v => selector v.toList)
@@ -1261,7 +1318,7 @@ by
       dsimp [selectors1, selectors2]
       rw [h_shift_map.symm]
 
-      
+
     change exactlyOneActive (activateLayerFromSelectors selectors2 (layers_tl[↑l]))[↑i].rules
 
     rw [← h_eq]
@@ -1370,10 +1427,6 @@ by
       rw [eq1, eq2]
       rfl
 
-     
-
-@[simp]
-theorem List.getElem_eq_get {α : Type*} (l : List α) (i : Fin l.length) : l[↑i] = l.get i := rfl
 
 
 theorem full_grid_correctness
@@ -1416,7 +1469,7 @@ by
 
         have layer_length_match :
           ((evalGridSelector (layer_hd :: layers_tl) initial_vectors initial_selectors).get out_idx).length = layer_hd.nodes.length :=
-          by 
+          by
             simp [evalGridSelector, evalGridSelectorStep, activateLayerFromSelectors_length, evalGridSelectorStep_length ]
             dsimp [evalGridSelector.aux] at *
             simp [out_idx]
@@ -1431,7 +1484,7 @@ by
             have acc_len : acc.length = (activateLayerFromSelectors (List.map (fun v => selector v.toList) initial_vectors) layer_hd).length := by simp [acc]
             have act_len : (activateLayerFromSelectors (List.map (fun v => selector v.toList) initial_vectors) layer_hd).length = layer_hd.nodes.length :=
               activateLayerFromSelectors_length (List.map (fun v => selector v.toList) initial_vectors) layer_hd
-            simp [acc, activateLayerFromSelectors_length]            
+            simp [acc, activateLayerFromSelectors_length]
 
 
 
@@ -1447,29 +1500,29 @@ by
 
 
         constructor
-        ·   
-          have selectors_eq : 
+        ·
+          have selectors_eq :
           List.map (fun v => selector v.toList)
             ((evalGridSelector (List.take (↑0) (layer_hd :: layers_tl)) initial_vectors initial_selectors).getLastD initial_vectors)
-            = initial_selectors := 
-            by 
+            = initial_selectors :=
+            by
               simp [evalGridSelector, List.getLastD]
               simp [evalGridSelector.aux]
               have aux_def : evalGridSelector.aux initial_vectors [] = [initial_vectors] := by simp [evalGridSelector.aux]
               rw [selectors_base_eq]
               rw [h_sel0]
-          
+
           convert r_mem
-        ·       
+        ·
 
           have base_result : (evalGridSelector (layer_hd :: layers_tl) initial_vectors initial_selectors).get ⟨1, by simp [evalGridSelector_length]⟩
-            = evalGridSelectorBase layer_hd initial_vectors initial_selectors := 
+            = evalGridSelectorBase layer_hd initial_vectors initial_selectors :=
             by
               simp only [evalGridSelector]
               have aux_len : (evalGridSelector.aux initial_vectors (layer_hd :: layers_tl)).length = layers_tl.length + 2 := by simp [evalGridSelector.aux]
               have isLt : 1 < (evalGridSelector.aux initial_vectors (layer_hd :: layers_tl)).length := by rw [aux_len]; linarith
               have head_eq : (evalGridSelector.aux (evalGridSelectorStep initial_vectors layer_hd) layers_tl)[0]
-              = evalGridSelectorStep initial_vectors layer_hd := 
+              = evalGridSelectorStep initial_vectors layer_hd :=
               by
                 cases layers_tl <;> simp [evalGridSelector.aux]
 
@@ -1490,16 +1543,16 @@ by
 
           have lengths_eq : ((evalGridSelector (layer_hd :: layers_tl) initial_vectors initial_selectors).get out_idx).length
                 = (act_layer.map (λ node => node.run initial_vectors)).length :=
-            congrArg List.length get_eq       
+            congrArg List.length get_eq
 
           have out_eq : ((evalGridSelector (layer_hd :: layers_tl) initial_vectors initial_selectors).get out_idx).get real_goal_idx
-              = (act_layer.map (λ node => node.run initial_vectors)).get (Fin.cast lengths_eq real_goal_idx) := 
+              = (act_layer.map (λ node => node.run initial_vectors)).get (Fin.cast lengths_eq real_goal_idx) :=
               by
                 dsimp [evalGridSelectorBase]
-                rw [h_sel0] 
+                rw [h_sel0]
                 congr 1
 
-          have run_eq : 
+          have run_eq :
             (List.map (λ node => node.run initial_vectors) act_layer).get (Fin.cast lengths_eq real_goal_idx)
             = r.run initial_vectors := by
               rw [←List.nthLe_eq_get]
@@ -1507,7 +1560,7 @@ by
               rfl
 
           exact Eq.trans out_eq run_eq
-          
+
     | succ goal_layer' =>
       let acc := evalGridSelectorStep initial_vectors layer_hd
       let new_selectors := acc.map (λ v => selector v.toList)
@@ -1522,7 +1575,7 @@ by
       -- Use your tail index shift lemma to adjust indices
       have shift := evalGridSelector_tail_index_shift_get
         layer_hd layers_tl initial_vectors acc initial_selectors new_selectors goal_layer'
-        rfl rfl 
+        rfl rfl
 
       -- Set up indices: goal_layer'.succ.succ = ↑goal_layer' + 2
       let idx₁ : Fin (evalGridSelector (layer_hd :: layers_tl) initial_vectors initial_selectors).length :=
@@ -1550,20 +1603,20 @@ by
           List.map (fun v => selector v.toList)
             ((evalGridSelector (List.take (↑goal_layer') layers_tl) acc new_selectors).getLastD acc)
           :=
-            by 
+            by
               let l' := ↑goal_layer'
               have take_len : (List.take l' layers_tl).length = l' :=
                 by rw [List.length_take, min_eq_left (Nat.le_of_lt goal_layer'.isLt)]
-              
+
               have take_take : List.take l' (List.take l' layers_tl) = List.take l' layers_tl :=
-                by 
+                by
                   rw [List.take_take]
                   rw [min_self]
               rw [← take_take]
-            
+
               have take_take_len : (List.take (↑l') (List.take (↑l') layers_tl)).length = (List.take (↑l') layers_tl).length :=
                 by rw [take_take]
-              
+
               rw [take_take]
               have eq_take : (layer_hd :: List.take (↑l') layers_tl) = List.take (↑l' + 1) (layer_hd :: layers_tl) :=
                 by
@@ -1571,10 +1624,10 @@ by
 
               rw [eq_take]
 
-              
+
               rw [←prev_results_shift layer_hd layers_tl initial_vectors acc initial_selectors new_selectors l'
                   (by linarith [goal_layer'.isLt]) rfl rfl h_sel0]
-              
+
               by_cases h : (↑l' : ℕ) = 0
               case pos =>
                 rw [h]
@@ -1624,23 +1677,13 @@ by
           apply Fin.ext
           simp [real_goal_idx]
 
-        simp only [List.getElem_eq_get] at * 
+        simp only [List.getElem_eq_get] at *
         rw [←eq_at_row] at *
 
         have last_eq : (evalGridSelector (List.take (↑goal_layer') layers_tl) acc new_selectors).getLastD acc =
           (evalGridSelector (layer_hd :: List.take (↑goal_layer') layers_tl) initial_vectors initial_selectors).getLast?.getD initial_vectors :=
         evalGridSelector_getLastD_shift layer_hd layers_tl initial_vectors acc initial_selectors new_selectors ↑goal_layer' rfl
-        
-        
+
+
         rw [←last_eq]
         congr
-
-
-        
-
-      
-
-
-
-
-
