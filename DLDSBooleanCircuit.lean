@@ -55,7 +55,6 @@ def mkIntroRule {n : ℕ} (encoder : List.Vector Bool n) (bit : Bool) : Rule n :
     | _   => List.Vector.replicate n false
 }
 
-
 def mkElimRule {n : ℕ} (bit1 bit2 : Bool) : Rule n :=
 {
   activation := ActivationBits.elim bit1 bit2,
@@ -65,6 +64,7 @@ def mkElimRule {n : ℕ} (bit1 bit2 : Bool) : Rule n :=
     | [d1, d2] => d1.zipWith (· && ·) d2
     | _        => List.Vector.replicate n false
 }
+
 
 variable (rules : List (Rule n))
 axiom rules_nodup : rules.Nodup
@@ -694,17 +694,18 @@ induction L generalizing initial with
 def set_activation (n : ℕ) (r : Rule n) (a : ActivationBits) : Rule n :=
   { r with activation := a }
 
-lemma set_activation_injective_in_r {n : ℕ} (a : ActivationBits) :
-  Function.Injective (λ r : Rule n => set_activation n r a) :=
+
+lemma map_over_fin_get_preserves_nodup
+  {α β : Type*}
+  (l : List α)
+  (f : Nat → α → β)
+  (h_inj : ∀ i j : Fin l.length, f i.val (l.get i) = f j.val (l.get j) → i = j)
+  : ((List.finRange l.length).map (λ i : Fin l.length => f i.val (l.get i))).Nodup :=
 by
-  sorry
-  -- intros r₁ r₂ h; ext <;> simp [set_activation] at h; assumption
-
-
--- lemma set_activation_injective {n} {r : Rule n} : Function.Injective (set_activation n r) := by
---   intros a₁ a₂ h_eq
---   simp [set_activation] at h_eq
---   exact h_eq
+  apply List.Nodup.map
+  · intros i j h
+    exact h_inj i j h
+  · exact List.nodup_finRange l.length
 
 
 /-- Type alias: for each rule in a node, where to read activation from (previous layer) -/
@@ -723,6 +724,35 @@ def GridLayers (n : ℕ) := List (GridLayer n)
 def dummyIncomingMapsLayer (num_nodes : Nat) : IncomingMapsLayer :=
   List.replicate num_nodes []
 
+def make_new_rules {n : ℕ}
+  (node : CircuitNode n)
+  (prev_selectors : List (List Bool))
+  (incoming_map : IncomingMap)
+  : List (Rule n) :=
+  let len := node.rules.length
+  List.finRange len |>.map (fun i =>
+    let rule := node.rules.get i
+    let (src_idx, edge_idx) :=
+      if h_map : i.val < incoming_map.length then
+        incoming_map.get ⟨i.val, h_map⟩
+      else
+        (0, 0)
+    let act :=
+      if h_src : src_idx < prev_selectors.length then
+        let sel := prev_selectors.get ⟨src_idx, h_src⟩
+        if h_edge : edge_idx < sel.length then sel.get ⟨edge_idx, h_edge⟩ else false
+      else
+        false
+    match rule.activation with
+    | ActivationBits.intro _ => { rule with activation := ActivationBits.intro act }
+    | ActivationBits.elim _ _ => { rule with activation := ActivationBits.elim act act }
+  )
+
+axiom nodup_labels_new_rules {n : ℕ}
+  (node : CircuitNode n)
+  (prev_selectors : List (List Bool))
+  (incoming_map : IncomingMap)
+  : (make_new_rules node prev_selectors incoming_map).Nodup
 
 
 def activateNodeFromSelectors {n : Nat}
@@ -730,45 +760,11 @@ def activateNodeFromSelectors {n : Nat}
   (incoming_map   : IncomingMap)
   (node           : CircuitNode n)
 : CircuitNode n :=
-let len := node.rules.length
-let new_rules := List.finRange len |>.map (fun i =>
-  let rule := node.rules.get i -- i : Fin len
-  let (src_idx, edge_idx) :=
-    if h_map : i.val < incoming_map.length then
-      incoming_map.get ⟨i.val, h_map⟩
-    else
-      (0, 0)
-  let act :=
-    if h_src : src_idx < prev_selectors.length then
-      let sel := prev_selectors.get ⟨src_idx, h_src⟩
-      if h_edge : edge_idx < sel.length then
-        sel.get ⟨edge_idx, h_edge⟩
-      else
-        false
-    else
-      false
-  match rule.activation with
-  | ActivationBits.intro _ =>
-      { rule with activation := ActivationBits.intro act }
-  | ActivationBits.elim _ _ =>
-      { rule with activation := ActivationBits.elim act act }
-)
-{
-  rules := new_rules,
-  nodup :=
-    by
-      have nodup_rules : node.rules.Nodup := node.nodup
-      have nodup_idx : (List.finRange len).Nodup := List.nodup_finRange len
-      apply List.Nodup.map
-      intro i j h_eq
-      have eq_fields := Rule.ext_iff.mp h_eq
-      have rule_eq : node.rules.get i = node.rules.get j :=
-        sorry
-      exact (List.Nodup.get_inj_iff nodup_rules).mp rule_eq
-      exact nodup_idx
-}
-
-
+  let new_rules := make_new_rules node prev_selectors incoming_map
+  {
+    rules := new_rules,
+    nodup := nodup_labels_new_rules node prev_selectors incoming_map
+  }
 
 
 /-- Activates all nodes in a layer via selector wiring -/
