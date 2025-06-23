@@ -7,58 +7,118 @@ import Mathlib.Data.Vector.Defs
 import Mathlib.Data.Vector.Zip
 import Mathlib.Data.Fin.Basic
 
--- Define an enum to distinguish rule types
-inductive RuleType
-  | intro  -- 1 activation bit
-  | elim   -- 2 activation bits
-  deriving DecidableEq, Repr
+/-!
+# DLDS Boolean Circuit Formalization
 
-inductive RuleData (n : Nat)
-  | intro (encoder : List.Vector Bool n)
-  | elim
+This file formalizes the Boolean circuit representation of Dag-Like Derivability Structures (DLDS), as used in the correctness proof of the circuit-based DLDS checking algorithm.
 
--- Provide equality comparison for RuleType
-instance : BEq RuleType where
-  beq x y :=
-    match x, y with
-    | RuleType.intro, RuleType.intro => true
-    | RuleType.elim, RuleType.elim => true
-    | _, _ => false
+It is organized into the following sections:
 
--- Structure for activation bits
+## **Contents**
+1. **Core Types and Structures**
+   Definitions of activation bits, rules, nodes, and the grid structure used to represent DLDS circuits.
+
+2. **Boolean Circuit Logic**
+   Circuit evaluation logic: rule activation, selectors, node outputs, and unique-activation predicates.
+
+3. **Boolean List Lemmas and Multiple XOR Properties**
+   Auxiliary results about Boolean lists and the `multiple_xor` function, characterizing unique activation.
+
+4. **Auxiliary List and Vector Lemmas**
+   Technical results about list/vector access, folding, and `zipWith` identities, needed for proofs.
+
+5. **Node Correctness**
+   Proofs that nodes compute the correct output under unique activation.
+
+6. **Grid Evaluation**
+   Layered evaluation of the grid: selector propagation, node activation, and output querying.
+
+7. **Full Grid Correctness for Tree-Like Subgraphs**
+   Global soundness and completeness: the main theorem connecting grid outputs to unique proof paths.
+-/
+
+
+
+/-!
+# Section 1: Core Types and Structures
+
+This section contains the core types formalizing DLDS rules, activation, nodes, and the grid.
+-/
+
+/--
+Represents the type of activation bits for each inference rule.
+- `intro`: Single activation bit for implication introduction.
+- `elim`: Two activation bits for implication elimination.
+-/
 inductive ActivationBits
   | intro (bit : Bool)
   | elim (bit1 : Bool) (bit2 : Bool)
   deriving DecidableEq
 
-@[ext]
+/--
+Represents the data of a rule for formulas of length `n`:
+- `intro`: With an encoder vector for implication introduction.
+- `elim`: For implication elimination.
+-/
+inductive RuleData (n : Nat)
+  | intro (encoder : List.Vector Bool n)
+  | elim
+
+/--
+Structure representing a single inference rule, including:
+- The activation bits.
+- Its kind (intro/elim).
+- The dependency vector update function.
+-/
 structure Rule (n : ℕ) where
   activation : ActivationBits
-  kind       : RuleData n
-  combine    : List (List.Vector Bool n) → List.Vector Bool n
+  type : RuleData n
+  combine : List (List.Vector Bool n) → List.Vector Bool n
 
-structure GraphPath (n l : ℕ) where
-  idxs : List (Fin (n * n))
-  len  : idxs.length = l
+/--
+Represents a node in the Boolean circuit (corresponds to a node in the DLDS).
+- Each node stores a list of possible inference rules.
+- Invariant: All rules must be unique.
+-/
+structure CircuitNode (n: Nat) where
+  rules : List (Rule n)
+  nodup : rules.Nodup
 
+/--
+Represents the N × N grid structure for the Boolean circuit.
+- `nodes`: List of all circuit nodes.
+- `grid_size`: Total number of nodes in the grid.
+-/
 structure Grid (n : Nat) (Rule : Type) where
   nodes : List Rule
   grid_size : nodes.length =  n * n
 
+/--
+Constructs an implication introduction rule for formulas of length `n`.
+- `encoder`: The vector encoding discharged assumptions.
+- `bit`: Activation bit for this rule.
+- `combine` returns conjunction of the input dependency vector with the negation of `encoder`.
+-/
 def mkIntroRule {n : ℕ} (encoder : List.Vector Bool n) (bit : Bool) : Rule n :=
 {
   activation := ActivationBits.intro bit,
-  kind       := RuleData.intro encoder,
+  type       := RuleData.intro encoder,
   combine    := fun deps =>
     match deps with
     | [d] => d.zipWith (fun b e => not (b && e)) encoder
     | _   => List.Vector.replicate n false
 }
 
+/--
+Constructs an implication elimination rule for formulas of length `n`.
+- `bit1`, `bit2`: Activation bits for the two premises.
+- `combine` returns conjunction of the two dependency vectors.
+
+-/
 def mkElimRule {n : ℕ} (bit1 bit2 : Bool) : Rule n :=
 {
   activation := ActivationBits.elim bit1 bit2,
-  kind       := RuleData.elim,
+  type       := RuleData.elim,
   combine    := fun deps =>
     match deps with
     | [d1, d2] => d1.zipWith (· && ·) d2
@@ -66,32 +126,58 @@ def mkElimRule {n : ℕ} (bit1 bit2 : Bool) : Rule n :=
 }
 
 
-variable (rules : List (Rule n))
-axiom rules_nodup : rules.Nodup
+/-!
+# Section 2: Boolean Circuit Logic
 
+This section defines the core functions for Boolean evaluation, activation extraction, selector logic,
+and node output computation in the DLDS circuit formalization.
+-/
 
-
+/--
+Returns `true` if the given rule is considered "active".
+- For `intro`: uses the single activation bit.
+- For `elim`: uses logical AND of the two activation bits.
+-/
 def is_rule_active {n: Nat} (r : Rule n) : Bool :=
   match r.activation with
   | ActivationBits.intro b   => b
   | ActivationBits.elim b1 b2 => b1 && b2
 
+/--
+Computes whether exactly one element of a Boolean list is `true`.
+- Implements "one-hot" logic for rule activation.
+-/
 def multiple_xor : List Bool → Bool
 | []       => false
 | [x]      => x
 | x :: xs  => (x && not (List.or xs)) || (not x && multiple_xor xs)
 
+/--
+Extracts the activation bits from a list of rules,
+returning a Boolean list indicating the active status of each rule.
+-/
 def extract_activations {n: Nat} (rules : List (Rule n)) : List Bool :=
   rules.map is_rule_active
 
--- Perform AND operation between a Boolean an a List
+/--
+Given a Boolean and a list of Booleans, returns the list where each element is logically ANDed with the input Boolean.
+Useful for masking activation patterns with a global "XOR/one-hot" check.
+-/
 def and_bool_list (bool : Bool) (l : List Bool): List Bool :=
   l.map (λ b => bool && b)
 
+/--
+Performs bitwise OR ("union") over a list of Boolean vectors of fixed length `n`.
+Used to combine the outputs of all rules in a node, per activation.
+-/
 def list_or {n: Nat} (lists : List (List.Vector Bool n)) : List.Vector Bool n :=
   lists.foldl (λ acc lst => acc.zipWith (λ x y => x || y) lst)
               (List.Vector.replicate n false)
 
+/--
+Applies each rule to the provided inputs if its activation mask is true,
+returning the output vectors for all rules.
+-/
 def apply_activations {n: Nat}
   (rules : List (Rule n))
   (masks : List Bool)
@@ -105,6 +191,13 @@ def apply_activations {n: Nat}
         List.Vector.replicate n false)
     rules masks
 
+/--
+Defines the overall logic for computing a node’s output:
+- Extracts activations
+- Checks for unique activation with `multiple_xor`
+- Masks activations accordingly
+- Applies rule logic and combines results with `list_or`
+-/
 def node_logic {n: Nat} (rules : List (Rule n))
                   (inputs : List (List.Vector Bool n))
   : List.Vector Bool n :=
@@ -114,27 +207,31 @@ def node_logic {n: Nat} (rules : List (Rule n))
   let outs    := apply_activations rules masks inputs
   list_or outs
 
-structure CircuitNode (n: Nat) where
-  rules : List (Rule n)
-  nodup : rules.Nodup
-
-
-def mkCircuitNode {n} (rs : List (Rule n)) (h : rs.Nodup) : CircuitNode n :=
-  { rules := rs,  nodup := h }
-
+/--
+Runs a circuit node by applying its logic to the given inputs.
+-/
 def CircuitNode.run {n: Nat} (c : CircuitNode n)
     (inputs : List (List.Vector Bool n)) : List.Vector Bool n :=
   node_logic c.rules inputs
 
-
+/--
+Predicate: returns true iff *exactly one* rule in the given list is active.
+This property is central for circuit correctness and unique path selection.
+-/
 def exactlyOneActive {n: Nat} (rules : List (Rule n)) : Prop :=
   ∃ r, r ∈ rules ∧ is_rule_active r ∧ ∀ r', r' ∈ rules → is_rule_active r' → r' = r
 
-
+/--
+Converts a natural number to its `k`-bit Boolean (big-endian) vector.
+Used for encoding selector indices.
+-/
 def natToBits (n k : ℕ) : List Bool :=
   (List.range k).map (fun i => (n.shiftRight (k - 1 - i)) % 2 = 1)
 
-
+/--
+Generates a "one-hot" selector vector for an input vector, such that only one output is true,
+depending on the Boolean encoding of the input.
+-/
 def selector (input : List Bool) : List Bool :=
   let n := input.length
   let total := 2 ^ n
@@ -144,7 +241,19 @@ def selector (input : List Bool) : List Bool :=
       acc && if b then inp else !inp) true
   )
 
+/-!
+## Section 3: Boolean List Lemmas and Multiple XOR Properties
 
+This section contains auxiliary lemmas and theorems about Boolean list operations,
+especially those related to the multiple_xor function and its connection to unique activation.
+These are essential for the correctness and reasoning about rule activation in the circuit.
+-/
+
+/-!
+### Lemma: Cons False Invariance for Multiple XOR
+
+Prepending `false` to a Boolean list does not affect the result of `multiple_xor`.
+-/
 @[simp]
 lemma multiple_xor_cons_false (l : List Bool) :
   multiple_xor (false :: l) = multiple_xor l := by
@@ -153,23 +262,32 @@ lemma multiple_xor_cons_false (l : List Bool) :
   | cons b bs ih =>
     simp [multiple_xor]
 
+/-!
+### Lemma: Multiple XOR with True Equals Negation of Or
+
+Prepending `true` to a Boolean list in `multiple_xor` yields the negation of `or` on the rest of the list.
+-/
 lemma multiple_xor_cons_true_aux {l : List Bool} :
   multiple_xor (true :: l) = !l.or := by
   cases l with
   | nil => simp [multiple_xor, List.or]
   | cons b bs => simp [multiple_xor]
 
+/-!
+### Lemma: Characterization of Multiple XOR with Leading True
+
+States that `multiple_xor (true :: l)` is `true` if and only if all elements of `l` are `false`.
+-/
 lemma multiple_xor_cons_true {l : List Bool} :
   multiple_xor (true :: l) = true ↔ List.or l = false := by
   simp [multiple_xor, Bool.eq_true_eq_not_eq_false, Bool.not_eq_true_eq_eq_false]
   exact multiple_xor_cons_true_aux
 
-lemma bool_eq_false_of_ne_true : ∀ b : Bool, b ≠ true → b = false := by
-  intro b h
-  cases b
-  · rfl
-  · contradiction
+/-!
+### Lemma: List.or is False iff All Elements are False
 
+Establishes equivalence between `l.or = false` and all elements of `l` being `false`.
+-/
 lemma List.or_eq_false_iff_all_false {l : List Bool} :
   l.or = false ↔ ∀ b ∈ l, b = false := by
   induction l with
@@ -178,6 +296,11 @@ lemma List.or_eq_false_iff_all_false {l : List Bool} :
     simp only [List.or, Bool.or_eq_false_eq_eq_false_and_eq_false, List.mem_cons, forall_eq_or_imp, ih]
     simp [List.any]
 
+/-!
+### Theorem: Multiple XOR Characterizes Unique Rule Activation
+
+Relates `multiple_xor` over activation bits to the logical predicate `exactlyOneActive` for rules.
+-/
 theorem multiple_xor_bool_iff_exactlyOneActive {n : ℕ} (rs : List (Rule n))  (h_nodup : rs.Nodup) :
   multiple_xor (rs.map is_rule_active) = true ↔ exactlyOneActive rs := by
   induction rs with
@@ -186,7 +309,7 @@ theorem multiple_xor_bool_iff_exactlyOneActive {n : ℕ} (rs : List (Rule n))  (
   | cons r rs ih =>
     have tail_nodup : rs.Nodup := List.nodup_cons.mp h_nodup |>.2
     cases hr : is_rule_active r
-    · -- Case: r is inactive
+    ·
       simp only [List.map, hr, multiple_xor]
       rw [multiple_xor_cons_false, ih tail_nodup]
       simp only [exactlyOneActive]
@@ -207,13 +330,12 @@ theorem multiple_xor_bool_iff_exactlyOneActive {n : ℕ} (rs : List (Rule n))  (
           contradiction
         | tail _ h_tail =>
           exact ⟨r₀, h_tail, h_act, fun r' h_in h_act' => h_uniq r' (List.mem_cons_of_mem _ h_in) h_act'⟩
-    · -- Case: r is active
+    ·
       simp only [List.map, hr, multiple_xor]
       rw [multiple_xor_cons_true]
       simp only [exactlyOneActive]
       constructor
       · intro h
-        -- or (rs.map is_rule_active) = false means all others are inactive
         have all_false : ∀ a ∈ rs, is_rule_active a = false := by
           intro a ha
           have all_false_bools := List.or_eq_false_iff_all_false.mp h
@@ -233,13 +355,12 @@ theorem multiple_xor_bool_iff_exactlyOneActive {n : ℕ} (rs : List (Rule n))  (
       · intro ⟨r₁, hr₁_mem, hr₁_active, h_unique⟩
         cases hr₁_mem with
         | head =>
-          -- if the active rule is r itself
           simp [List.or_eq_false_iff_all_false]
           intro b hb
           by_contra h_contra
           have hb_true : is_rule_active b = true := by
             cases h_b : is_rule_active b
-            · contradiction -- trivial since h_contra assumes it's not false
+            · contradiction
             · rfl
           have eq_b := h_unique b (List.mem_cons_of_mem _ hb) hb_true
           let ⟨r_ne, _⟩ := List.nodup_cons.mp h_nodup
@@ -251,8 +372,20 @@ theorem multiple_xor_bool_iff_exactlyOneActive {n : ℕ} (rs : List (Rule n))  (
           let ⟨r_ne, _⟩ := List.nodup_cons.mp h_nodup
           contradiction
 
+/-!
+### Section 4: Auxiliary List and Vector Lemmas
 
+This section provides technical lemmas for reasoning about `List` and `List.Vector` operations,
+such as identities for `zipWith` with neutral elements, membership characterization, drop/get relationships,
+and equivalence between different ways to index or construct lists.
+These results are used in the proofs of main circuit correctness theorems.
+-/
 
+/-!
+#### Lemma: Zero Vector Is Neutral for zipWith Or
+
+Bitwise OR with an all-`false` vector acts as the identity for Boolean vectors.
+-/
 lemma zip_with_zero_identity :
   ∀ (N : ℕ) (v : List.Vector Bool N),
     (List.Vector.replicate N false).zipWith (λ x y => x || y) v = v
@@ -276,59 +409,29 @@ lemma zip_with_zero_identity :
     exact ih (List.length tl) ⟨tl, rfl⟩ rfl
 
 
-lemma mem_zipWith_map {α β γ : Type} (f : α → β → γ) (l : List α) (g : α → β)
-  (x : γ) (hx : x ∈ List.zipWith f l (l.map g)) : ∃ (r : α), r ∈ l ∧ x = f r (g r) :=
-by
-  induction l with
-  | nil =>
-      simp at hx
-  | cons a as ih =>
-      simp [List.zipWith, List.map] at hx
-      cases hx with
-      | inl h1 =>
-          exists a
-          constructor
-          · simp
-          · rw [h1]
-      | inr h₂ =>
-          obtain ⟨r, hr_in, h_eq⟩ := ih h₂
-          exists r
-          constructor
-          · exact (List.mem_cons_of_mem a hr_in)
-          · exact h_eq
+/-!
+#### Theorem: getElem and get Are Equivalent for Lists
 
-
-/--
-If exactly one rule in `rules` is active,
-then OR‑folding the result of `apply_activations rules masks inputs`
-yields exactly that rule’s `combine inputs`.
+States that the notation `l[i]` coincides with `l.get i` for valid indices.
 -/
-
-
-lemma drop_eq_get_cons {α : Type*} {l : List α} {n : ℕ} (h : n < l.length) :
-  l.drop n = l.get ⟨n, h⟩ :: l.drop (n + 1) :=
-by
-  induction l generalizing n with
-  | nil =>
-    simp at h
-  | cons x xs ih =>
-    cases n
-    case zero =>
-      simp [List.get, List.drop]
-    case succ n' =>
-      simp only [List.drop, List.get]
-      apply ih
-
-
-
 @[simp]
 theorem List.getElem_eq_get {α : Type*} (l : List α) (i : Fin l.length) : l[↑i] = l.get i :=
 rfl
 
-lemma nodup_head_notin_tail {α : Type*} {x : α} {xs : List α} (h : (x :: xs).Nodup) : x ∉ xs :=
-List.nodup_cons.mp h |>.1
+/-!
+#### Definition: List.nthLe
 
+Safe indexed access for lists using a proof that the index is in bounds.
+-/
+def List.nthLe {α : Type u} (l : List α) (i : Nat) (h : i < l.length) : α :=
+  -- `List.get` takes a `Fin l.length` — here we pack `i` and `h` into one
+  l.get ⟨i, h⟩
 
+/-!
+#### Lemma: Commutativity of zipWith for Vectors
+
+If the function `f` is commutative, then `zipWith f` applied to two vectors is order-independent.
+-/
 @[simp]
 lemma List.Vector.zipWith_comm {n : ℕ} (f : Bool → Bool → Bool)
     (h : ∀ x y, f x y = f y x)
@@ -342,7 +445,20 @@ lemma List.Vector.zipWith_comm {n : ℕ} (f : Bool → Bool → Bool)
   rw [List.getElem_zipWith, List.getElem_zipWith]
   apply h
 
+/-!
+#### Theorem: nthLe is get
 
+Shows that nthLe is just get with a packed Fin.
+-/
+theorem List.nthLe_eq_get {α : Type u} (l : List α) (i : ℕ) (h : i < l.length) :
+  l.nthLe i h = l.get ⟨i, h⟩ :=
+rfl
+
+/-!
+#### Lemma: foldl Adding Zero Vector Leaves Vector Unchanged
+
+Folding with zipWith OR using an all-`false` vector as the neutral element leaves the original vector unchanged.
+-/
 lemma foldl_add_false {n : ℕ} (v : List.Vector Bool n) (l : List α) :
   List.foldl (fun acc (_ : α) => acc.zipWith (fun x y => x || y) (List.Vector.replicate n false)) v l = v :=
 by
@@ -354,12 +470,40 @@ by
     rw [zip_with_zero_identity]
     exact ih
 
+/--
+Relates `List.getLastD` (with a default) to the standard `getLast?` option accessor for lists.
+-/
+@[simp]
+theorem List.getLastD_eq_getLast_getD {α : Type*} (l : List α) (d : α) :
+  l.getLastD d = l.getLast?.getD d := by
+  cases l with
+  | nil => simp [List.getLastD, List.getLast?, Option.getD]
+  | cons a as =>
+    simp [List.getLastD, List.getLast?, Option.getD]
 
-lemma List.getElem_cast {α} {l : List α} {n} (i : Fin n) (h : l.length = n) :
-  l[↑(h ▸ i)] = l[↑i] :=
+/--
+Lemma: relates the operation of taking the last element of a nonempty list with a default,
+as either an option with default (`getLast?.getD`) or direct defaulting (`getLastD`).
+-/
+lemma List.getLast?_cons_getD {α} (x : α) (l : List α) :
+  (x :: l).getLast?.getD x = l.getLastD x :=
 by
-  cases h; rfl
+  cases l with
+  | nil => simp [List.getLast?, Option.getD, List.getLastD]
+  | cons _ _ => simp [List.getLast?, Option.getD, List.getLastD]
 
+/-!
+# Section 5: Node Correctness
+
+This section contains the core lemmas about the node correctness.
+
+-/
+
+/-!
+#### Lemma: Unique Active Rule Output for Node OR
+
+If exactly one rule in `rules` is active, then OR-combining the outputs yields the output of the active rule only.
+-/
 lemma list_or_apply_unique_active_of_exactlyOne {n : ℕ}
   {rules : List (Rule n)} (h_nonempty : rules ≠ [])
   {r0 : Rule n} (hr0_mem : r0 ∈ rules)
@@ -372,24 +516,18 @@ by
   induction rules with
   | nil => contradiction
   | cons r rs ih =>
-      -- Show r0 is either r or in rs
       have h_r0 : r0 = r ∨ r0 ∈ rs := by
         cases hr0_mem
         case head => exact Or.inl rfl
         case tail h' => exact Or.inr h'
       cases h_r0 with
       | inl r0_eq_r =>
-          -- Unpack exactlyOneActive for this case
           rcases h_one with ⟨_, ⟨mem_head, r_active, uniq⟩⟩
-          -- Show all in rs are inactive
           have tail_inactive : ∀ r', r' ∈ rs → is_rule_active r' = false := by
             intros r' h_mem
             by_contra h_act
             let act : is_rule_active r' = true := Bool.eq_true_of_not_eq_false h_act
-            -- Now r' ∈ rs, so r' ∈ r :: rs via List.mem_cons_of_mem _ h_mem
             let eq := uniq r' (List.mem_cons_of_mem _ h_mem) act
-            -- But r ≠ r' since r' ∈ rs
-            -- have nodup_head_notin_tail : r ∉ rs := List.nodup_cons.mp h_nodup |>.1
             let eq := uniq r' (List.mem_cons_of_mem _ h_mem) act
             subst eq
             subst r0_eq_r
@@ -398,8 +536,6 @@ by
             let ⟨r_not_in_rs, _⟩ := List.nodup_cons.mp h_nodup
             exact r_not_in_rs h_mem
 
-
-          -- Compute outputs
           dsimp [apply_activations, extract_activations, list_or]
           rw [←r0_eq_r, hr0_active]
           have outs_tail_eq : (List.zipWith (fun r m => if m then r.combine inputs else List.Vector.replicate n false) rs (rs.map is_rule_active))
@@ -473,34 +609,28 @@ by
           rw [zip_with_zero_identity n (List.Vector.replicate n false)]
           exact ih h_nonempty_tail r0_in_rs rs_nodup h_one_tail
 
+/-!
+#### Theorem: Node Output Correctness
 
-
+If exactly one rule in a node is active, running the node produces the output of that rule.
+-/
 theorem node_correct {n} (c : CircuitNode n)
     (inputs : List (List.Vector Bool n))
     (h_one : exactlyOneActive c.rules) :
   ∃ r ∈ c.rules, c.run inputs = r.combine inputs := by
 
-  -- 0) immediately derive the Bool‐onehot:
   have h_bool : multiple_xor (c.rules.map is_rule_active) = true :=
     (multiple_xor_bool_iff_exactlyOneActive c.rules c.nodup).mpr h_one
 
   let h_one_prop := h_one
 
-  -- 1) now unpack the unique‐active Prop
   rcases h_one with ⟨r0, hr0_mem, hr0_active, hr0_unique⟩
 
-  -- 2) simplify the let-chain, *including* extract_activations
   dsimp [CircuitNode.run, node_logic, extract_activations]
 
-  -- 3) now use simp, telling it both `h_bool` *and* `and_bool_list`
-  --    this unfolds `and_bool_list true xs = xs` and rewrites the one-hot test
-  -- 3) Rewrite away the Bool test and the mask
-  rw [h_bool]                   -- replaces multiple_xor … with true
-  dsimp [and_bool_list]         -- uses and_bool_list true xs = xs
-  -- 1) replace the Boolean test with `true`
-  -- 2) unfold the definition of `and_bool_list` so `and_bool_list true xs = xs`
+  rw [h_bool]
+  dsimp [and_bool_list]
 
-    -- 4) now c.rules ≠ [] follows from hr0_mem
   let h_nonempty := List.ne_nil_of_mem hr0_mem
   simp [List.map_map, true_and]
 
@@ -512,218 +642,43 @@ theorem node_correct {n} (c : CircuitNode n)
   · exact hr0_mem
   · exact eq
 
+/-!
+# Section 5: Grid Evaluation
 
-
--- Function to count occurrences of true in a boolean lis
-
-def exactlyOne (l : List Bool) : Bool :=
-  match l with
-  | []      => false
-  | [x]     => x
-  | x :: xs => (x && not (List.or xs)) || (not x && exactlyOne xs)
-
-
-def exactlyOneIndexTrue (l : List Bool) : Prop :=
-  ∃ (i : Nat),
-    i < l.length ∧
-    l[i]? = some true ∧
-    ∀ j, j < l.length → l[j]? = some true → j = i
-
-
-def initial_inputs {n} : List (List.Vector Bool n) :=
-  List.replicate n (List.Vector.replicate n false)
-
-namespace List
+This section implements the layered evaluation of the DLDS Boolean circuit grid. It includes the functions for propagating dependency vectors through the grid’s layers, handling selector-driven activation, and querying outputs from arbitrary nodes. The design allows efficient simulation and correctness proofs for parallel, tree-like subgraphs corresponding to DLDS proofs.
+-/
 
 /--
-`nthLe l i h` returns the `i`th element of `l`, given a proof `h : i < l.length`.
+Represents how each rule in a node receives its activation from previous layer selectors.
+Each element is a pair `(source_node_idx, edge_idx)` indicating the source selector and the bit.
 -/
-def nthLe {α : Type u} (l : List α) (i : Nat) (h : i < l.length) : α :=
-  -- `List.get` takes a `Fin l.length` — here we pack `i` and `h` into one
-  l.get ⟨i, h⟩
-
-
-def init {α : Type u} : List α → List α
-| []        => []
-| [_]       => []              -- if there’s exactly one element, drop it
-| x :: y :: xs => x :: init (y :: xs)
-
-end List
-
-
-def evalStep (grid : Grid n (CircuitNode n))
-             (inputs : List (List.Vector Bool n))
-             (sel : Fin n)
-  : List (List.Vector Bool n) :=
-  ((grid.nodes.drop (sel.val * n)).take n).map (·.run inputs)
-
-def evalStepOne (grid   : Grid n (CircuitNode n))
-                (state  : List.Vector Bool n)
-                (sel    : Fin (n * n))
-  : List.Vector Bool n :=
-  let node := grid.nodes.nthLe sel.val (by simp [grid.grid_size])
-  -- wrap the single state vector into a singleton list,
-  -- because CircuitNode.run expects List (List.Vector Bool n)
-  node.run [state]
-
-def evalGrid {n L : ℕ}
-  (initial : List.Vector Bool n)
-  (grid    : Grid n (CircuitNode n))
-  (p       : GraphPath n L)
-: List.Vector Bool n :=
-  p.idxs.foldl (fun st sel => evalStepOne grid st sel) initial
-
-@[simp] lemma nthLe_cons_succ {α} (a : α) (l : List α) (i h1 h₂) :
-  (a :: l).nthLe (i+1) h₂ = l.nthLe i h1 := rfl
-
-theorem List.nthLe_eq_get {α : Type u} (l : List α) (i : ℕ) (h : i < l.length) :
-  l.nthLe i h = l.get ⟨i, h⟩ :=
-rfl
-
-@[simp]
-theorem List.nthLe_cons_zero {α : Type*} (x : α) (xs : List α) (h : 0 < (x :: xs).length) :
-  (x :: xs).nthLe 0 h = x :=
-rfl
-
-theorem grid_correct {n L : ℕ}
-  (grid : Grid n (CircuitNode n))
-  (h_act : ∀ i hi,
-    exactlyOneActive (grid.nodes.nthLe i hi).rules)
-  (initial : List.Vector Bool n)
-  (p : GraphPath n L)
-: ∃ (vs : List (List.Vector Bool n)) (vs_len : vs.length = L + 1),
-    vs.length = L + 1 ∧
-    -- head = initial:
-    vs.nthLe 0 (by simp [vs_len]) = initial ∧
-    -- last = evalGrid initial grid p:
-    vs.nthLe L (by simp [vs_len])
-      = evalGrid initial grid p ∧
-    -- each step applies exactly one node:
-    ∀ (i : Fin L),
-      let inputs := vs.nthLe i.val
-        (by simpa [vs_len] using Nat.lt_succ_of_lt i.isLt);
-      let sel := p.idxs.nthLe i.val (by simp [p.len]);
-      vs.nthLe (i.val + 1) (by simp [vs_len])
-        = (grid.nodes.nthLe sel.val (by simp [grid.grid_size])).run [inputs] :=
-by
-induction L generalizing initial with
-  | zero =>
-      rcases p with ⟨idxs, idxs_len⟩
-      have : idxs = [] := by simpa using idxs_len
-      subst this
-      exists [initial]
-      simp [evalGrid, List.nthLe_eq_get]
-  | succ L' ih =>
-    -- split the path into its list-of-selectors
-    rcases p with ⟨idxs, idxs_len⟩
-    -- now idxs_len : idxs.length = L'+1
-    -- break idxs into head :: tail
-    cases idxs with
-    | nil =>
-      -- impossible, since idxs.length = L'+1 > 0
-      simp at idxs_len
-    | cons sel rest =>
-      -- from idxs_len : rest.length + 1 = L'+1, we get
-      have rest_len : rest.length = L' := by simpa [List.length_cons] using idxs_len
-
-      -- 1) pick the one node at index sel.val
-      let c := grid.nodes.nthLe sel.val (by simp [grid.grid_size])
-
-      -- 2) by hypothesis that node has exactly one active rule
-      have hi_sel : sel.val < grid.nodes.length := by simp [grid.grid_size]
-      have h_one := h_act sel.val hi_sel
-
-      -- 3) apply your existing `node_correct`
-      rcases node_correct c [initial] h_one with ⟨r, hr_mem, hr_eq⟩
-
-      -- `c.run [initial] = r.combine [initial]`
-      let next := r.combine [initial]
-
-      -- 4) recurse on the tail with `next` as the new initial
-      let p' : GraphPath n L' := ⟨rest, rest_len⟩
-
-      rcases ih next p' with ⟨vs', vs'_len, h_head, h_last, h_steps⟩
-
-      -- 5) stitch together the full list of states
-      let vs := initial :: vs'
-      have vs_len : List.length vs = (L' + 1) + 1 := by
-        -- `List.length_cons` : ∀ {α} {a l}, List.length (a :: l) = l.length + 1
-        rw [List.length_cons, vs'_len]
-
-      use vs, vs_len
-
-            -- 1) length
-      constructor
-      -- 1) proves A : vs.length = L' + 1 + 1
-      · dsimp [vs]; simp [vs'_len]
-
-      -- 2) proves B : vs.nthLe 0 _ = initial
-      constructor
-      · rfl
-
-      -- 3) proves C : vs.nthLe (L'+1) _ = evalGrid initial grid (sel :: rest)
-      constructor
-      · -- Final state correctness
-        simp [evalGrid, evalStepOne, hr_eq, h_last]
-        rw [nthLe_cons_succ]
-        rw [h_steps.1]
-        dsimp [evalGrid]
-        dsimp [evalStepOne]
-        rw [hr_eq]
-
-
-      · -- Intermediate correctness at each step
-        intro i
-        cases i using Fin.cases with
-        | zero =>
-          -- First step explicitly
-          simp [evalStepOne, hr_eq]
-          simp [vs, h_last, vs_len, evalStepOne]
-          rw [nthLe_cons_succ]
-          rw [List.nthLe]
-          have h_get : vs'.get ⟨0, by simp [vs'_len]⟩ = next := by rw [← List.nthLe_eq_get, h_last]
-          rw [h_get, hr_eq]
-
-        | succ i' =>
-          -- Subsequent steps by induction hypothesis
-          simp [vs]
-          rw [nthLe_cons_succ]    -- first one succeeds
-          exact h_steps.right i'
-
-  -- define function that changes only activation
-def set_activation (n : ℕ) (r : Rule n) (a : ActivationBits) : Rule n :=
-  { r with activation := a }
-
-
-lemma map_over_fin_get_preserves_nodup
-  {α β : Type*}
-  (l : List α)
-  (f : Nat → α → β)
-  (h_inj : ∀ i j : Fin l.length, f i.val (l.get i) = f j.val (l.get j) → i = j)
-  : ((List.finRange l.length).map (λ i : Fin l.length => f i.val (l.get i))).Nodup :=
-by
-  apply List.Nodup.map
-  · intros i j h
-    exact h_inj i j h
-  · exact List.nodup_finRange l.length
-
-
-/-- Type alias: for each rule in a node, where to read activation from (previous layer) -/
 abbrev IncomingMap := List (Nat × Nat)
-/-- For all nodes in a layer -/
+
+/--
+Maps each node in a layer to its IncomingMap (one per node).
+-/
 abbrev IncomingMapsLayer := List IncomingMap
-/-- For all layers -/
+
+/--
+Full selector wiring for all layers: one IncomingMapsLayer per grid layer.
+-/
 abbrev IncomingMaps := List IncomingMapsLayer
 
+/--
+Represents a single layer of the DLDS Boolean circuit grid.
+
+- `nodes`: The circuit nodes for this layer.
+- `incoming`: Wiring information describing, for each node/rule, how to fetch activations from previous selectors.
+-/
 structure GridLayer (n : ℕ) where
   nodes : List (CircuitNode n)
   incoming : IncomingMapsLayer
 
-def GridLayers (n : ℕ) := List (GridLayer n)
+/--
+Constructs the list of rules for a node after updating activation bits based on incoming selectors.
 
-def dummyIncomingMapsLayer (num_nodes : Nat) : IncomingMapsLayer :=
-  List.replicate num_nodes []
-
+- For each rule, fetches the relevant selector bit(s) as indicated by `incoming_map` and sets the activation bits accordingly.
+-/
 def make_new_rules {n : ℕ}
   (node : CircuitNode n)
   (prev_selectors : List (List Bool))
@@ -748,13 +703,22 @@ def make_new_rules {n : ℕ}
     | ActivationBits.elim _ _ => { rule with activation := ActivationBits.elim act act }
   )
 
+/--
+Axiom: The updated rules produced by `make_new_rules` are always nodup (no duplicates),
+assuming the original node was nodup. This is required for circuit correctness.
+-/
 axiom nodup_labels_new_rules {n : ℕ}
   (node : CircuitNode n)
   (prev_selectors : List (List Bool))
   (incoming_map : IncomingMap)
   : (make_new_rules node prev_selectors incoming_map).Nodup
 
+/--
+Given a node, updates all its rules with fresh activation bits
+according to the provided selectors and incoming wiring.
 
+Returns a new CircuitNode with updated rules and the nodup proof.
+-/
 def activateNodeFromSelectors {n : Nat}
   (prev_selectors : List (List Bool))
   (incoming_map   : IncomingMap)
@@ -766,8 +730,15 @@ def activateNodeFromSelectors {n : Nat}
     nodup := nodup_labels_new_rules node prev_selectors incoming_map
   }
 
+/--
+Activates all nodes in a grid layer according to the given selector vectors from the previous layer.
 
-/-- Activates all nodes in a layer via selector wiring -/
+- `prev_selectors`: List of selector vectors, one per node in the previous layer.
+- `layer`: The `GridLayer` whose nodes will be activated.
+- Returns a list of `CircuitNode` instances with updated activations for this layer.
+
+This handles per-node selector-driven activation and prepares the layer for evaluation.
+-/
 def activateLayerFromSelectors {n : Nat}
   (prev_selectors : List (List Bool))
   (layer : GridLayer n)
@@ -781,6 +752,15 @@ def activateLayerFromSelectors {n : Nat}
     activateNodeFromSelectors prev_selectors incoming_map node
   )
 
+/--
+Evaluates the first layer (base case) of the grid using initial dependency vectors and initial selector configuration.
+
+- `layer`: The first grid layer to evaluate.
+- `initial_vectors`: The input dependency vectors (e.g., initial proof assumptions).
+- `initial_selectors`: The selectors for the first activation, typically derived from initial input.
+
+Returns the outputs of all nodes in the layer after evaluation.
+-/
 def evalGridSelectorBase {n : Nat}
   (layer : GridLayer n)
   (initial_vectors : List (List.Vector Bool n))
@@ -789,6 +769,15 @@ def evalGridSelectorBase {n : Nat}
   let activated_layer := activateLayerFromSelectors initial_selectors layer
   activated_layer.map (λ node => node.run initial_vectors)
 
+/--
+Evaluates a single layer of the grid, given the output dependency vectors from the previous layer.
+
+- `prev_results`: The dependency vectors output by the previous layer.
+- `layer`: The current grid layer to evaluate.
+
+Selector vectors are automatically computed from the previous outputs and used to activate the current layer’s nodes.
+Returns the output dependency vectors for all nodes in this layer.
+-/
 def evalGridSelectorStep {n : Nat}
   (prev_results : List (List.Vector Bool n))
   (layer : GridLayer n)
@@ -797,6 +786,15 @@ def evalGridSelectorStep {n : Nat}
   let activated_layer := activateLayerFromSelectors selectors layer
   activated_layer.map (λ node => node.run prev_results)
 
+
+/--
+Auxiliary recursive function for full grid evaluation.
+
+- `layers`: The remaining layers to process.
+- `acc`: The current accumulated dependency vectors (starting with the initial vectors).
+
+Returns a list of result vectors, one per layer (including the initial state).
+-/
 def evalGridSelector_aux {n : Nat}
   (layers : List (GridLayer n))
   (acc : List (List.Vector Bool n))
@@ -807,7 +805,15 @@ def evalGridSelector_aux {n : Nat}
       let next_result := evalGridSelectorStep acc layer
       next_result :: evalGridSelector_aux layers' next_result
 
+/--
+Evaluates the entire DLDS Boolean circuit grid, propagating dependency vectors layer by layer.
 
+- `layers`: The grid layers (each containing circuit nodes and selector wiring).
+- `initial_vectors`: The dependency vectors at the start (e.g., representing initial assumptions).
+- Returns a list of results, one for each layer, where each result is a list of dependency vectors for all nodes in that layer.
+
+This is the main function for simulating or verifying a DLDS proof via Boolean circuit propagation.
+-/
 def evalGridSelector {n : Nat}
   (layers : List (GridLayer n))
   (initial_vectors : List (List.Vector Bool n))
@@ -821,7 +827,16 @@ def evalGridSelector {n : Nat}
   aux initial_vectors layers
 
 
-/-- Query the output dependency vector of a goal node after grid evaluation -/
+/--
+Queries the output dependency vector of a specific node in the evaluated grid.
+
+- `results`: The layered results as returned by `evalGridSelector`.
+- `goal_layer`: The layer (as a `Fin` index) where the target node resides.
+- `goal_idx`: The index (as a `Fin`) of the node within that layer.
+- Returns the dependency vector for that node.
+
+Used for extracting the computed dependencies of any node after full grid evaluation.
+-/
 def goalNodeOutput {n : Nat}
   (results : List (List (List.Vector Bool n)))
   (goal_layer : Fin results.length)
@@ -830,122 +845,21 @@ def goalNodeOutput {n : Nat}
   (results.get goal_layer).get goal_idx
 
 
-/-! ## 5. Full Grid Correctness for Parallel/Tree-Like Subgraphs -/
+/-! ## Section 6. Full Grid Correctness for Tree-Like Subgraphs -/
 
 /--
-Let `layers` be a grid (list of layers, each a list of circuit nodes).
-Let `incomingMaps` describe selector-driven wiring.
-Let `initial_vectors` give the initial dependency vectors at layer 0.
-Let `initial_selectors` describe the initial activation selectors.
-
-Suppose that for each active node at each layer (as determined by selectors/subgraph),
-the selectors induce exactlyOneActive in its rules.
-
-Then for every node `(l, i)` that is reachable via some path from an initial node
-(along the active subgraph), the output dependency vector at `(l, i)` computed by
-`evalGridSelector` equals the unique composition of rule applications along that path.
-
-This expresses full, parallel/global correctness of the Boolean circuit for DLDS proof checking.
-
-The selectors supplied for the first layer (layer 0) are ignored and act as padding.
-They are not read or used during the evaluation of the initial state; only the initial dependency
-vectors are relevant for the output at layer 0.
-
-
+Lemma: The number of activated nodes from a grid layer equals the number of nodes in that layer.
+This ensures that the activation process preserves layer structure.
 -/
-
-@[simp]
-theorem List.getD_cons {α : Type*} (x : α) (xs : List α) (n : Nat) (d : α) :
-  (x :: xs).getD n d = if n = 0 then x else xs.getD (n - 1) d := by
-  cases n <;> simp [List.getD]
-
-/-- `List.getD_zero`: getD at zero returns the head of the list, or default for nil. -/
-@[simp]
-theorem List.getD_zero {α : Type*} (l : List α) (d : α) :
-  l.getD 0 d = l.headD d := by
-  cases l <;> simp [List.getD, List.headD]
-
-
-
-lemma List.get?_append_right {α} (l₁ l₂ : List α) (i : Nat) (h : i ≥ l₁.length) :
-  (l₁ ++ l₂)[i]? = l₂[i - l₁.length]? := by
-  induction l₁ generalizing i with
-  | nil => simp
-  | cons _ tl ih =>
-    cases i with
-    | zero => simp at h
-    | succ i' =>
-      simp [ih _ (Nat.le_of_succ_le_succ h)]
-
-@[simp]
-theorem List.getLastD_eq_getLast_getD {α : Type*} (l : List α) (d : α) :
-  l.getLastD d = l.getLast?.getD d := by
-  cases l with
-  | nil => simp [List.getLastD, List.getLast?, Option.getD]
-  | cons a as =>
-    simp [List.getLastD, List.getLast?, Option.getD]
-
-lemma List.get?_singleton_zero {α} (x : α) : [x][0]? = some x := by simp
-
-
-@[simp]
-lemma List.getD_singleton {α} (x : α) (n : Nat) (d : α) :
-  ([x] : List α).getD n d = if n = 0 then x else d :=
-by
-  cases n
-  · simp [List.getD] -- n = 0
-  · simp [List.getD] -- n = n'+1
-
-lemma List.getD_singleton_succ {α} (x d : α) (n : ℕ) :
-  ([x] : List α).getD (n + 1) d = d :=
-by simp [List.getD]
-
-
-
 @[simp]
 lemma activateLayerFromSelectors_length {n : ℕ}
   (s : List (List Bool)) (layer : GridLayer n) :
   (activateLayerFromSelectors s layer).length = layer.nodes.length :=
 by simp [activateLayerFromSelectors]
 
-
-@[simp]
-lemma option_getD_some {α} (a : α) (d : α) : (some a).getD d = a := by simp [Option.getD]
-@[simp]
-lemma option_getD_none {α} (d : α) : (none : Option α).getD d = d := by simp [Option.getD]
-@[simp]
-lemma list_singleton_getD {α} (x : α) (d : α) : ([x] : List α)[0]?.getD d = x := by simp
-
-
-
 /--
-Predicate asserting that for every node (l, i) in the grid,
-the selectors induce exactly one active rule in that node.
+Lemma: The output of `evalGridSelector_aux` always contains one more entry than the number of layers.
 -/
-def RuleActivationCorrect {n : ℕ}
-  (layers : List (GridLayer n))
-  (initial_vectors : List (List.Vector Bool n))
-  (initial_selectors : List (List Bool))
-: Prop :=
-  ∀ (l : Fin layers.length) (i : Fin (layers.get l).nodes.length),
-    let prev_results :=
-      if _ : l.val = 0 then initial_vectors
-      else
-        (evalGridSelector (layers.take l.val)
-          initial_vectors).getLastD initial_vectors
-    let prev_selectors :=
-      if _ : l.val = 0 then initial_selectors
-      else prev_results.map (λ v => selector v.toList)
-    let act_nodes := activateLayerFromSelectors prev_selectors (layers.get l)
-    let hlen : act_nodes.length = (layers.get l).nodes.length :=
-      activateLayerFromSelectors_length prev_selectors (layers.get l)
-    let node := act_nodes.get (Fin.cast (Eq.symm hlen) i)
-    exactlyOneActive node.rules
-
-
-
-@[simp] lemma List.getLastD_singleton {α} (x d : α) : ([x] : List α).getLastD d = x := rfl
-
 @[simp]
 lemma evalGridSelector_aux_length {n : Nat}
   (acc : List (List.Vector Bool n)) (layers : List (GridLayer n)) :
@@ -957,6 +871,9 @@ by
       simp [evalGridSelector.aux]
       rw [ih]
 
+/--
+Lemma: The result list from `evalGridSelector` is one longer than the number of layers in the grid.
+-/
 lemma evalGridSelector_length {n : Nat}
   (layers : List (GridLayer n))
   (initial_vectors : List (List.Vector Bool n)) :
@@ -964,20 +881,10 @@ lemma evalGridSelector_length {n : Nat}
 by
   simp [evalGridSelector, evalGridSelector_aux_length]
 
-
-lemma evalGridSelector_aux_get0 {n : ℕ}
-  (layers : List (GridLayer n)) (acc : List (List.Vector Bool n))
-  (h : 0 < (evalGridSelector_aux layers acc).length) :
-  (evalGridSelector_aux layers acc).get ⟨0, h⟩ =
-    match layers with
-    | [] => acc
-    | l :: _ => evalGridSelectorStep acc l :=
-by
-  cases layers
-  · simp [evalGridSelector_aux]
-  · simp [evalGridSelector_aux]
-
-
+/--
+Lemma: The length of the dependency vector list at a given layer in the evaluation result
+matches the number of nodes in that layer.
+-/
 lemma evalGridSelector_layer_length
   {n : ℕ}
   (layers : List (GridLayer n))
@@ -1034,90 +941,18 @@ by
 
         exact ih acc goal_layer
 
+/--
+Lemma: The output of `evalGridSelectorStep` always has length equal to the number of nodes in the processed layer.
+-/
 @[simp] lemma evalGridSelectorStep_length {n} (xs : List (List.Vector Bool n)) (layer : GridLayer n) :
   (evalGridSelectorStep xs layer).length = layer.nodes.length := by
   dsimp [evalGridSelectorStep, activateLayerFromSelectors]
   simp [List.length_map, activateLayerFromSelectors_length]
 
-lemma selectors_base_eq (initial_vectors : List (List.Vector Bool n)) (initial_selectors : List (List Bool))
-  (h : initial_selectors = List.map (fun v => selector v.toList) initial_vectors) :
-  List.map (fun v => selector v.toList) initial_vectors = initial_selectors :=
-by rw [h]
-
-
-lemma evalGridSelector_cons_succ_get
-  {n : ℕ}
-  (layer_hd : GridLayer n)
-  (layers_tl : List (GridLayer n))
-  (initial_vectors : List (List.Vector Bool n))
-  (goal_layer' : Fin layers_tl.length)
-:
-  (evalGridSelector (layer_hd :: layers_tl) initial_vectors).get
-      ⟨goal_layer'.val + 1, by
-        have h := goal_layer'.isLt
-        simp [evalGridSelector_length] at *
-        have bound : goal_layer'.val + 1 < layers_tl.length + 2 :=
-          by linarith [goal_layer'.isLt]
-        exact Nat.lt_of_succ_lt_succ bound
-      ⟩
-  =
-  (evalGridSelector layers_tl
-    (evalGridSelectorStep initial_vectors layer_hd)
-  ).get (Fin.cast (by simp [evalGridSelector_length]) goal_layer'.castSucc)
-
-:=
-by
-  rfl
-
-lemma match_getLast_of_ne_nil_two_args {α : Type*} (xs : List α) (a₀ : α) (h : xs ≠ []) :
-  (match xs, a₀ with
-   | [], a₀ => a₀
-   | a :: as, _ => (a :: as).getLast h)
-  = xs.getLast h :=
-by cases xs <;> simp [List.getLast]; contradiction
-
-lemma match_getLast_of_ne_nil_three_args {α : Type*} (xs : List α) (acc : α) (h : xs ≠ []) :
-    (match xs, acc, h with
-     | [], a₀, _ => a₀
-     | a :: as, _, _ => (a :: as).getLast (by simp)) = xs.getLast h :=
-by
-  cases xs
-  · contradiction
-  · simp [List.getLast]
-
-
-lemma getLast_eq_after_cons {α : Type*} (xs : List α) (x : α) (h : xs ≠ []) :
-    (match xs, x with
-     | [], a₀ => a₀
-     | a :: as, _ => (a :: as).getLast (by simp)) =
-    (x :: xs).getLast (by simp) :=
-by
-  cases xs with
-  | nil => contradiction
-  | cons a as => simp [List.getLast]
-
-
-
-
-@[simp]
-lemma evalGridSelector_getLastD_eq_aux {n}
-  (layers : List (GridLayer n)) (initial_vectors : List (List.Vector Bool n)) :
-  (evalGridSelector layers initial_vectors).getLastD initial_vectors
-  =
-  (evalGridSelector.aux initial_vectors layers).getLast?.getD initial_vectors :=
-by
-  simp [evalGridSelector]
-
-lemma List.getLastD_eq_getLast_of_ne_nil {α} (xs : List α) (d : α) (h : xs ≠ []) :
-    xs.getLastD d = xs.getLast h := by
-  cases xs with
-  | nil => contradiction
-  | cons a as =>
-    cases as with
-    | nil => simp [List.getLastD, List.getLast]
-    | cons b bs =>
-      simp [List.getLastD, List.getLast]
-
+/--
+Lemma: The recursive auxiliary evaluation of a grid (via `evalGridSelector.aux`) always produces a nonempty list, regardless of the number of layers.
+This is often required to justify `.get` operations in other proofs.
+-/
 lemma evalGridSelector_aux_ne_nil
   (acc : List (List.Vector Bool n)) (ls : List (GridLayer n)) :
   evalGridSelector.aux acc ls ≠ [] :=
@@ -1128,7 +963,23 @@ by
     simp [evalGridSelector.aux]
 
 
+/--
+Lemma: If the initial selectors are constructed as the image of `selector` applied to each initial dependency vector,
+then recomputing this image yields the original selector list.
+This is useful for unfolding and refolding selector logic in proofs of grid initialization.
+-/
+lemma selectors_base_eq (initial_vectors : List (List.Vector Bool n)) (initial_selectors : List (List Bool))
+  (h : initial_selectors = List.map (fun v => selector v.toList) initial_vectors) :
+  List.map (fun v => selector v.toList) initial_vectors = initial_selectors :=
+by rw [h]
 
+
+
+/--
+**Key Shift Lemma for Layered Evaluation:**
+This lemma establishes the relationship between the "previous results" at an arbitrary layer (in terms of the split between the head and tail of the layer list), and the results when the head is explicitly included.
+It is essential for inductive proofs on grid evaluation, allowing a stepwise argument about how dependency vectors propagate through the layers.
+-/
 lemma prev_results_shift
   {n : ℕ}
   (layer_hd : GridLayer n) (layers_tl : List (GridLayer n))
@@ -1163,7 +1014,33 @@ lemma prev_results_shift
         simp [List.getLastD]
 
 /--
-If every node of `layer_hd :: layers_tl` has exactly one active rule
+Predicate asserting global correctness of rule activation for every node in every layer of the grid.
+States that, given the selector wiring, exactly one rule in each node is activated.
+Used as an invariant in correctness proofs for grid evaluation.
+-/
+def RuleActivationCorrect {n : ℕ}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n))
+  (initial_selectors : List (List Bool))
+: Prop :=
+  ∀ (l : Fin layers.length) (i : Fin (layers.get l).nodes.length),
+    let prev_results :=
+      if _ : l.val = 0 then initial_vectors
+      else
+        (evalGridSelector (layers.take l.val)
+          initial_vectors).getLastD initial_vectors
+    let prev_selectors :=
+      if _ : l.val = 0 then initial_selectors
+      else prev_results.map (λ v => selector v.toList)
+    let act_nodes := activateLayerFromSelectors prev_selectors (layers.get l)
+    let hlen : act_nodes.length = (layers.get l).nodes.length :=
+      activateLayerFromSelectors_length prev_selectors (layers.get l)
+    let node := act_nodes.get (Fin.cast (Eq.symm hlen) i)
+    exactlyOneActive node.rules
+
+
+/--
+Lemma: If every node of `layer_hd :: layers_tl` has exactly one active rule
 (with respect to the original vectors / selectors), then the same holds
 for the tail once we evaluate the head layer and push its selectors
 forward.
@@ -1179,34 +1056,22 @@ lemma RuleActivationCorrect.tail
       (evalGridSelectorStep init_vecs layer_hd)
       ((evalGridSelectorStep init_vecs layer_hd).map (fun v => selector v.toList)) :=
 by
-  -- abbreviations just to shorten formulas
   let acc          := evalGridSelectorStep init_vecs layer_hd
   let newSelectors := acc.map (fun v => selector v.toList)
   let sels := acc.map (fun v => selector v.toList)
 
-
-  -- goal after unfolding the `let`s
   intro l i
-  -- reuse the fact we already know on the *full* list,
-  -- indexed by `Fin.succ l`
   have h := h_act l.succ i
 
   have h0 : (l.succ.val = 0) = False := by
-    -- `l.succ.val` is `l.val + 1`
     simp
 
-    -- fact for the full list, at index `succ l`
   have h_full := h_act l.succ i
 
 
   by_cases hl0 : l.val = 0
-  ----------------------------------------------------------------
-  -- CASE 1 :  l.val = 0  ---------------------------------------
-  ----------------------------------------------------------------
-  · -- turn it into an equality of Fins
+  ·
     have l0 : Fin layers_tl.length := ⟨0, by
-  -- `l.isLt` already tells us `layers_tl.length > 0`
-  -- so `0 < layers_tl.length`
       simpa using Nat.zero_lt_of_lt l.isLt⟩
 
     have length_pos : 0 < layers_tl.length := by
@@ -1221,11 +1086,7 @@ by
       have : (0 : Nat) < layers_tl.length := length_pos
       simpa [List.length] using Nat.succ_lt_succ this
     simpa [acc, newSelectors] using h_act ⟨1, one_lt⟩ i
-    ----------------------------------------------------------------
-  -- CASE 2 :  l.val ≠ 0  ---------------------------------------
-  ----------------------------------------------------------------
-  · -- here  (l.val = 0) = False
-
+  ·
     have hl0_false : (l.val = 0) = False := by
       simp [hl0]
     have h_shift :=
@@ -1286,41 +1147,13 @@ by
     rw [← h_eq]
     exact h_full'
 
-
-
-lemma evalGridSelector_index_eq_get {iv} {l : ℕ}
-  (h : l < (evalGridSelector gs iv).length) :
-  (evalGridSelector gs iv)[l] = (evalGridSelector gs iv).get ⟨l, h⟩ := rfl
-
-
-lemma match_getLast_of_ne_nil {α : Type*} (xs : List α) (acc : α) (h : xs ≠ []) :
-    (match match xs with
-        | [] => none
-        | a :: as => some ((a :: as).getLast (by simp))
-     with
-     | some x => x
-     | none => acc) = xs.getLast h :=
-by
-  cases xs with
-  | nil => contradiction
-  | cons a as => simp
-
-
-
-@[simp]
-lemma Fin.cast_cast {n₁ n₂ n₃ : ℕ} (h₁ : n₁ = n₂) (h₂ : n₂ = n₃) (i : Fin n₁) :
-    Fin.cast h₂ (Fin.cast h₁ i) = Fin.cast (h₁.trans h₂) i :=
-by cases h₁; cases h₂; rfl
-
-@[simp] lemma Fin.cast_eq {n : ℕ} (h : n = n) (i : Fin n) : Fin.cast h i = i := by cases h; rfl
-
-lemma List.getLast?_cons_getD {α} (x : α) (l : List α) :
-  (x :: l).getLast?.getD x = l.getLastD x :=
-by
-  cases l with
-  | nil => simp [List.getLast?, Option.getD, List.getLastD]
-  | cons _ _ => simp [List.getLast?, Option.getD, List.getLastD]
-
+/--
+**Index-Shift Lemma for Layered Evaluation Lists:**
+Given the layered structure of `evalGridSelector`, this lemma shows how indices for grid layers shift
+when you prepend a new layer. It relates the (goal_layer'+2)th element of the extended evaluation
+to the (goal_layer'+1)th element of the original tail evaluation.
+Essential for induction over grid layers.
+-/
 lemma evalGridSelector_tail_index_shift_get
   {n : ℕ}
   (layer_hd : GridLayer n) (layers_tl : List (GridLayer n))
@@ -1348,6 +1181,12 @@ by
   dsimp [evalGridSelector]
   rfl
 
+/--
+**GetLastD Shift Lemma for Partial Grid Evaluation:**
+This lemma connects the "get last with default" result of a tail-evaluated grid
+with the option-based get-last result when a new head layer is included.
+It's essential for unfolding and refolding grid evaluation during inductive proofs.
+-/
 lemma evalGridSelector_getLastD_shift {n : ℕ}
   (layer_hd : GridLayer n) (layers_tl : List (GridLayer n))
   (initial_vectors acc : List (List.Vector Bool n))
@@ -1388,6 +1227,29 @@ by
       rfl
 
 
+/--
+# Full Grid Evaluation Correctness Theorem
+
+Let `layers` be a list of `GridLayer`s (each representing a layer of nodes in the DLDS Boolean circuit grid).
+Let `incomingMaps` (embedded in each layer) specify the selector-driven wiring.
+Let `initial_vectors` be the initial dependency vectors for the first layer.
+Let `initial_selectors` provide the selectors for that initial layer (only used for padding; not actually read for layer 0 computation).
+
+Assume the following:
+- For every node in every layer, the selectors activate **exactly one rule** per node (`RuleActivationCorrect`).
+- The initial selectors correspond to the initial dependency vectors (`h_sel0`).
+
+**Claim**:
+For any target node `(goal_layer, goal_idx)` in the grid (reachable via the active subgraph dictated by selectors),
+the dependency vector output by `evalGridSelector` at that node equals the value produced by the unique rule composition along the corresponding path.
+In particular, the output at `(goal_layer, goal_idx)` matches the output of the unique active rule for that node, given the outputs of the previous layer as inputs.
+
+This theorem establishes the **parallel, global soundness** of the layered Boolean circuit for checking a DLDS proof:
+the circuit grid accurately propagates dependency vectors across all nodes, respecting unique selector-based activations, so that each node computes its correct proof-dependent output.
+
+_Note_:
+The selectors for the first layer are only "dummy values" (for padding); they are not actually consulted in layer 0’s evaluation.
+-/
 
 theorem full_grid_correctness
   {n : Nat}
@@ -1525,16 +1387,13 @@ by
       let h_act_tl : RuleActivationCorrect layers_tl acc new_selectors :=
         RuleActivationCorrect.tail h_act
 
-      -- Inductive hypothesis
       have ih_app := ih acc new_selectors h_act_tl h_sel' goal_layer' goal_idx
       rcases ih_app with ⟨r, r_mem, r_eq⟩
 
-      -- Use your tail index shift lemma to adjust indices
       have shift := evalGridSelector_tail_index_shift_get
         layer_hd layers_tl initial_vectors acc goal_layer'
         rfl rfl
 
-      -- Set up indices: goal_layer'.succ.succ = ↑goal_layer' + 2
       let idx₁ : Fin (evalGridSelector (layer_hd :: layers_tl) initial_vectors).length :=
         ⟨goal_layer'.val + 2, by
           rw [evalGridSelector_length]; simp [List.length]⟩
@@ -1542,7 +1401,6 @@ by
         ⟨goal_layer'.val + 1, by
           simp [evalGridSelector_length]⟩
 
-      -- The lengths of the "row" at the indices
       let node_len_eq : ((evalGridSelector (layer_hd :: layers_tl) initial_vectors).get idx₁).length
             = ((layer_hd :: layers_tl).get goal_layer'.succ).nodes.length :=
         evalGridSelector_layer_length (layer_hd :: layers_tl) initial_vectors goal_layer'.succ
@@ -1644,3 +1502,4 @@ by
 
         rw [←last_eq]
         congr
+
