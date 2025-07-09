@@ -214,6 +214,24 @@ def CircuitNode.run {n: Nat} (c : CircuitNode n)
     (inputs : List (List.Vector Bool n)) : List.Vector Bool n :=
   node_logic c.rules inputs
 
+/--!
+  Runs a circuit node and returns:
+  - The output vector (or a zero vector if no rule is valid), and
+  - A Boolean flag indicating whether the node is malformed *and* selected.
+    A node is considered malformed if:
+    - No rule is uniquely active (`multiple_xor` is false), and
+    - At least one of the input bits is active (i.e., this node is selected).
+-/
+def CircuitNode.runWithError {n: Nat}
+  (c : CircuitNode n)
+  (inputs : List (List.Vector Bool n))
+  : (List.Vector Bool n) × Bool :=
+  let acts := extract_activations c.rules
+  let xor := multiple_xor acts
+  let node_selected := inputs.any (λ v => v.toList.any id)
+  let is_error := !xor && node_selected
+  (node_logic c.rules inputs, is_error)
+
 /--
 Predicate: returns true iff *exactly one* rule in the given list is active.
 This property is central for circuit correctness and unique path selection.
@@ -787,6 +805,21 @@ def evalGridSelectorStep {n : Nat}
   activated_layer.map (λ node => node.run prev_results)
 
 
+/--!
+  Evaluates a single grid layer and propagates error information.
+  Returns the output values for this layer and a flag indicating whether any node failed.
+-/
+def evalGridSelectorStepWithError {n : Nat}
+  (prev_results : List (List.Vector Bool n))
+  (layer : GridLayer n)
+  : (List (List.Vector Bool n)) × Bool :=
+  let selectors := prev_results.map (λ v => selector v.toList)
+  let activated_layer := activateLayerFromSelectors selectors layer
+  let node_outputs := activated_layer.map (λ node => node.runWithError prev_results)
+  let values := node_outputs.map Prod.fst
+  let errors := node_outputs.map Prod.snd
+  (values, errors.any id)
+
 /--
 Auxiliary recursive function for full grid evaluation.
 
@@ -825,6 +858,31 @@ def evalGridSelector {n : Nat}
         let res := evalGridSelectorStep acc l
         acc :: aux res ls
   aux initial_vectors layers
+
+/--!
+  Evaluates all layers of the circuit with error propagation.
+  Returns:
+  - The list of layer outputs (each layer is a list of output vectors),
+  - A flag indicating whether any node was malformed and selected.
+-/
+def evalGridSelectorWithError {n : Nat}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n))
+  : (List (List (List.Vector Bool n))) × Bool :=
+
+  let rec aux
+    (acc : List (List.Vector Bool n))
+    (rest_layers : List (GridLayer n))
+    (errs : Bool)
+    : (List (List (List.Vector Bool n))) × Bool :=
+    match rest_layers with
+    | [] => ([acc], errs)
+    | layer :: more =>
+      let (out, step_err) := evalGridSelectorStepWithError acc layer
+      let (future, all_errs) := aux out more (errs || step_err)
+      (acc :: future, all_errs)
+
+  aux initial_vectors layers false
 
 
 /--
@@ -1226,6 +1284,23 @@ by
       rw [eq1, eq2]
       rfl
 
+/-- A property stating that the output at the goal node in the circuit matches
+    the output of running the corresponding active node on the correct inputs. -/
+def GoalNodeCorrect {n : Nat}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n))
+  (goal_layer : Fin layers.length)
+  (goal_idx : Fin (layers.get goal_layer).nodes.length) : Prop :=
+let prev_results := evalGridSelector (layers.take goal_layer.val) initial_vectors
+let prev_result := prev_results.getLastD initial_vectors
+let selectors := prev_result.map (λ v => selector v.toList)
+let act_layer := activateLayerFromSelectors selectors (layers.get goal_layer)
+let out_idx := Fin.cast (Eq.symm (evalGridSelector_length layers initial_vectors)) goal_layer.succ
+let layer_length_eq := evalGridSelector_layer_length layers initial_vectors goal_layer
+let real_goal_idx := Fin.cast layer_length_eq.symm goal_idx
+∃ r ∈ act_layer,
+  ((evalGridSelector layers initial_vectors).get out_idx).get real_goal_idx
+    = r.run prev_result
 
 /--
 # Full Grid Evaluation Correctness Theorem
@@ -1260,17 +1335,7 @@ theorem full_grid_correctness
   (h_sel0 : initial_selectors = List.map (fun v => selector v.toList) initial_vectors)
   (goal_layer : Fin layers.length)
   (goal_idx : Fin (layers.get goal_layer).nodes.length) :
-    let prev_results := evalGridSelector (layers.take goal_layer.val) initial_vectors
-    let prev_result := prev_results.getLastD initial_vectors
-    let selectors := prev_result.map (λ v => selector v.toList)
-    let act_layer := activateLayerFromSelectors selectors (layers.get goal_layer)
-    let out_idx := Fin.cast (Eq.symm (evalGridSelector_length layers initial_vectors )) goal_layer.succ
-    let layer_length_eq := evalGridSelector_layer_length layers initial_vectors goal_layer
-    let real_goal_idx := Fin.cast layer_length_eq.symm goal_idx
-
-    ∃ r ∈ act_layer,
-      ((evalGridSelector layers initial_vectors).get out_idx).get real_goal_idx
-        = r.run prev_result :=
+  GoalNodeCorrect layers initial_vectors goal_layer goal_idx :=
 by
   induction layers generalizing initial_vectors initial_selectors with
   | nil =>
@@ -1502,4 +1567,3 @@ by
 
         rw [←last_eq]
         congr
-
