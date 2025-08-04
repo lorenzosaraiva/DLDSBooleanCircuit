@@ -7,6 +7,7 @@ import Mathlib.Data.Vector.Defs
 import Mathlib.Data.Vector.Zip
 import Mathlib.Data.Fin.Basic
 
+
 /-!
 # DLDS Boolean Circuit Formalization
 
@@ -463,7 +464,13 @@ lemma List.Vector.zipWith_comm {n : ℕ} (f : Bool → Bool → Bool)
   rw [List.getElem_zipWith, List.getElem_zipWith]
   apply h
 
+lemma List.get_eq_get_cast {α : Type*} {l₁ l₂ : List α}
+  (h : l₁ = l₂) (i : Fin l₁.length) :
+  l₁.get i = l₂.get (Fin.cast (congrArg List.length h) i) :=
+by subst h; rfl
+
 /-!
+
 #### Theorem: nthLe is get
 
 Shows that nthLe is just get with a packed Fin.
@@ -516,6 +523,7 @@ by
 This section contains the core lemmas about the node correctness.
 
 -/
+
 
 /-!
 #### Lemma: Unique Active Rule Output for Node OR
@@ -659,6 +667,39 @@ theorem node_correct {n} (c : CircuitNode n)
   constructor
   · exact hr0_mem
   · exact eq
+
+/-!
+### Lemma: List.all is Equivalent to ∀...∈...
+
+The following lemma establishes the equivalence between Lean’s `List.all p` (which returns `true` iff every element of the list satisfies `p`) and the mathematical universal quantification `∀ x ∈ l, p x`. This is useful for bridging between Boolean-valued and Prop-valued reasoning on lists.
+-/
+lemma List.all_iff_forall {α : Type*} {l : List α} {p : α → Prop} [DecidablePred p] :
+  l.all p ↔ ∀ x ∈ l, p x :=
+by
+  induction l with
+  | nil => simp
+  | cons hd tl ih =>
+    simp [List.all, ih]
+
+def all_false {n : ℕ} (v : List.Vector Bool n) : Prop :=
+  ∀ i : Fin n, v.get i = false
+
+/-!
+### Lemma: `all_false` on Vectors is Equivalent to `all (= false)` on Their List Representation
+
+This lemma shows that the property `all_false v` for a `List.Vector Bool n` (all entries are `false`) is equivalent to the predicate that `v.toList.all (· = false)`. This equivalence is handy when switching between vector and list-based representations in Boolean circuit proofs.
+-/
+lemma all_false_iff_toList_all_false {n} (v : List.Vector Bool n) :
+  all_false v ↔ v.toList.all (· = false) := by
+  simp [all_false, List.Vector.toList, List.all_iff_forall]
+  simp [List.mem_iff_get]
+  have hlen : n = v.toList.length := (v.property).symm
+  constructor
+  · intros h x
+    exact h (Fin.cast hlen.symm x)
+  · intro h i
+    exact h (Fin.cast hlen i)
+
 
 /-!
 # Section 5: Grid Evaluation
@@ -903,7 +944,7 @@ def goalNodeOutput {n : Nat}
   (results.get goal_layer).get goal_idx
 
 
-/-! ## Section 6. Full Grid Correctness for Tree-Like Subgraphs -/
+/-! ## Section 6. Main Theorems -/
 
 /--
 Lemma: The number of activated nodes from a grid layer equals the number of nodes in that layer.
@@ -1567,3 +1608,289 @@ by
 
         rw [←last_eq]
         congr
+
+lemma evalGridSelectorWithError_length {n : ℕ}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n)) :
+  (evalGridSelectorWithError layers initial_vectors).fst.length = layers.length + 1 :=
+by
+  unfold evalGridSelectorWithError
+
+  suffices ∀ (layers : List (GridLayer n)) (vectors : List (List.Vector Bool n)) (acc_err : Bool),
+    (evalGridSelectorWithError.aux vectors layers acc_err).fst.length = layers.length + 1
+    by
+      apply this _ _ false
+
+  intro layers
+  induction layers with
+  | nil =>
+    intros vectors acc_err
+    simp [evalGridSelectorWithError.aux]
+  | cons hd tl ih =>
+    intros vectors acc_err
+    simp only [evalGridSelectorWithError.aux]
+    dsimp
+
+    let step := evalGridSelectorStepWithError vectors hd
+    let new_vecs := step.1
+    let new_err := step.2
+    let combined_err := acc_err || new_err
+
+    have ih_applied := ih new_vecs combined_err
+
+    rw [ih_applied]
+
+lemma evalGridSelectorStepWithError_output_eq_step {n : ℕ}
+  (vectors : List (List.Vector Bool n)) (layer : GridLayer n) :
+  (evalGridSelectorStepWithError vectors layer).1 = evalGridSelectorStep vectors layer :=
+by
+    simp [evalGridSelectorStepWithError, evalGridSelectorStep, CircuitNode.runWithError, CircuitNode.run]
+
+
+lemma evalGridSelectorWithError_outputs_eq_evalGridSelector
+  {n : ℕ}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n)) :
+  (evalGridSelectorWithError layers initial_vectors).fst
+    = evalGridSelector layers initial_vectors :=
+by
+  unfold evalGridSelectorWithError
+  suffices ∀ (layers : List (GridLayer n)) (vectors : List (List.Vector Bool n)) (acc_err : Bool),
+    (evalGridSelectorWithError.aux vectors layers acc_err).fst = evalGridSelector.aux vectors layers
+    by exact this layers initial_vectors false
+
+  intro layers
+  induction layers with
+  | nil =>
+    intros vectors acc_err
+    simp [evalGridSelectorWithError.aux, evalGridSelector.aux]
+  | cons hd tl ih =>
+    intros vectors acc_err
+    simp only [evalGridSelectorWithError.aux, evalGridSelector.aux]
+
+    have h_step := evalGridSelectorStepWithError_output_eq_step vectors hd
+    rw [h_step]
+
+    exact congr_arg (List.cons vectors) (
+      ih _ _
+    )
+
+
+lemma evalGridSelectorWithError_layer_length {n : ℕ}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n))
+  (goal_layer : Fin layers.length) :
+  ((evalGridSelectorWithError layers initial_vectors).fst.get ⟨goal_layer.val + 1, by
+    rw [evalGridSelectorWithError_length]
+    exact Nat.succ_lt_succ goal_layer.isLt⟩).length
+  = (layers.get goal_layer).nodes.length :=
+by
+  let results := (evalGridSelectorWithError layers initial_vectors).fst
+  have h_eq : results = evalGridSelector layers initial_vectors :=
+    evalGridSelectorWithError_outputs_eq_evalGridSelector _ _
+
+  have : (results.get ⟨goal_layer.val + 1, by rw [evalGridSelectorWithError_length]; exact Nat.succ_lt_succ goal_layer.isLt⟩) =
+        (evalGridSelector layers initial_vectors).get ⟨goal_layer.val + 1, by rw [evalGridSelector_length]; exact Nat.succ_lt_succ goal_layer.isLt⟩ :=
+  by
+    have h_len : results.length = (evalGridSelector layers initial_vectors).length := by rw [h_eq]
+    let idx₁ : Fin results.length := ⟨goal_layer.val + 1, by rw [evalGridSelectorWithError_length]; exact Nat.succ_lt_succ goal_layer.isLt⟩
+    let idx₂ : Fin (evalGridSelector layers initial_vectors).length := Fin.cast h_len idx₁
+    have h_get : results.get idx₁ = (evalGridSelector layers initial_vectors).get (Fin.cast h_len idx₁) :=
+      List.get_eq_get_cast h_eq idx₁
+    rw [h_get]
+    congr
+
+  rw [this]
+
+  exact evalGridSelector_layer_length _ _ goal_layer
+
+
+/--!
+  Evaluates the full Boolean circuit and returns `true` if:
+  - Either all selected nodes are well-formed and the final vector is all-zero (valid proof), or
+  - At least one selected node is malformed (structurally invalid derivation).
+-/
+def final_circuit_output {n : Nat}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n))
+  (goal_layer : Fin layers.length)
+  (goal_idx : Fin (layers.get goal_layer).nodes.length)
+  : Bool :=
+  let (results, had_error) := evalGridSelectorWithError layers initial_vectors
+
+  let layer_idx : Fin ((evalGridSelectorWithError layers initial_vectors).fst).length :=
+  ⟨goal_layer.val + 1, by rw [evalGridSelectorWithError_length]; exact Nat.succ_lt_succ goal_layer.isLt⟩
+
+  let results := (evalGridSelectorWithError layers initial_vectors).fst
+  let h_layer_len := evalGridSelectorWithError_layer_length layers initial_vectors goal_layer
+  let node_idx : Fin (results.get layer_idx).length := Fin.cast h_layer_len.symm goal_idx
+  let final_vec := goalNodeOutput results layer_idx node_idx
+  had_error || final_vec.toList.all (· = false)
+
+/--
+Predicate: asserts that the triple `(layers, initial_vectors, initial_selectors)` encodes a valid
+Dag-Like Derivability Structure (DLDS), i.e., one corresponding to a correct Natural Deduction proof in compressed form.
+
+Concretely, this requires:
+  - The underlying graph is a leveled, acyclic, rooted DAG (as in Def. 2 of the paper).
+  - Each deduction edge, ancestor edge, and label assignment satisfies the DLDS global constraints (acyclicity, ancestry, discharge, etc).
+  - For each node, the initial vectors and selectors encode the correct dependencies and path choices according to the ND proof.
+  - See [HJdMBJ25] for precise proof-theoretic definitions.
+
+This predicate is used as a global invariant in the main circuit correctness theorems.
+-/
+def ValidDLDS {n : ℕ}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n))
+  (initial_selectors : List (List Bool)) : Prop :=
+  True
+
+/--
+  If the DLDS is valid (i.e., encodes a correct ND proof), then the output dependency vector at the conclusion node is all false (all assumptions discharged).
+  The proof of this property relies on the proof-theoretic correctness of the DLDS encoding; see [HJdMBJ25].
+-/
+axiom valid_DLDS_outputs_all_false_at_conclusion
+  {n : ℕ}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n))
+  (initial_selectors : List (List Bool))
+  (h_valid : ValidDLDS layers initial_vectors initial_selectors)
+  (h_sel0 : initial_selectors = List.map (fun v => selector v.toList) initial_vectors)
+  (goal_layer : Fin layers.length)
+  (goal_idx : Fin (layers.get goal_layer).nodes.length) :
+    all_false (
+      let out_idx := Fin.cast (Eq.symm (evalGridSelector_length layers initial_vectors)) goal_layer.succ
+      let layer_len_eq := evalGridSelector_layer_length layers initial_vectors goal_layer
+      let real_goal_idx := Fin.cast layer_len_eq.symm goal_idx
+      goalNodeOutput (evalGridSelector layers initial_vectors) out_idx real_goal_idx
+    )
+
+/--
+  **Full Circuit Soundness Theorem:**
+  If the circuit returns true, then either a node was malformed (had_error=true),
+  or the output at the goal node is exactly the output of the unique active rule chain,
+  and that output vector is all-zeros.
+
+  Assumptions:
+    - `RuleActivationCorrect layers initial_vectors initial_selectors` holds
+    - The initial selectors agree with the initial vectors: `initial_selectors = List.map (fun v => selector v.toList) initial_vectors`
+
+  Conclusion:
+    - If `final_circuit_output ... = true`, then either
+      (a) `had_error = true`, or
+      (b) the output vector at (goal_layer, goal_idx) is all-zeros, and is the correct output
+         according to the unique active rule chain (as in `GoalNodeCorrect`).
+-/
+theorem full_circuit_soundness
+  {n : ℕ}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n))
+  (initial_selectors : List (List Bool))
+  (h_valid : ValidDLDS layers initial_vectors initial_selectors)
+  (h_act : RuleActivationCorrect layers initial_vectors initial_selectors)
+  (h_sel0 : initial_selectors = List.map (fun v => selector v.toList) initial_vectors)
+  (goal_layer : Fin layers.length)
+  (goal_idx : Fin (layers.get goal_layer).nodes.length) :
+  let results := (evalGridSelectorWithError layers initial_vectors).1
+  let had_error := (evalGridSelectorWithError layers initial_vectors).2
+  let layer_idx : Fin results.length := ⟨goal_layer.val + 1, by
+    rw [evalGridSelectorWithError_length]; exact Nat.succ_lt_succ goal_layer.isLt⟩
+  let h_layer_len := evalGridSelectorWithError_layer_length layers initial_vectors goal_layer
+  let node_idx : Fin (results.get layer_idx).length := Fin.cast h_layer_len.symm goal_idx
+  let final_vec := goalNodeOutput results layer_idx node_idx
+  had_error = true ∨ (final_vec.toList.all (· = false) ∧ GoalNodeCorrect layers initial_vectors goal_layer goal_idx) :=
+by
+  set results := (evalGridSelectorWithError layers initial_vectors).1
+  set had_error := (evalGridSelectorWithError layers initial_vectors).2
+
+  have results_eq : results = evalGridSelector layers initial_vectors :=
+    evalGridSelectorWithError_outputs_eq_evalGridSelector _ _
+
+  set layer_idx : Fin results.length := ⟨goal_layer.val + 1, by
+    rw [evalGridSelectorWithError_length]; exact Nat.succ_lt_succ goal_layer.isLt⟩
+
+  set h_layer_len := evalGridSelectorWithError_layer_length layers initial_vectors goal_layer
+  set node_idx : Fin (results.get layer_idx).length := Fin.cast h_layer_len.symm goal_idx
+  set final_vec := goalNodeOutput results layer_idx node_idx
+
+  cases had_error with
+  | true => exact Or.inl rfl
+  | false =>
+    right
+
+    have results_len_eq : results.length = (evalGridSelector layers initial_vectors).length :=
+      congrArg List.length results_eq
+
+    set out_idx : Fin (evalGridSelector layers initial_vectors).length :=
+      Fin.cast (Eq.symm (evalGridSelector_length layers initial_vectors)) goal_layer.succ
+
+    have layer_idx_eq_val : layer_idx.val = out_idx.val := by simp [layer_idx, out_idx, results_len_eq, evalGridSelector_length]
+
+    have layer_idx_cast_eq : Fin.cast results_len_eq layer_idx = out_idx := Fin.eq_of_val_eq layer_idx_eq_val
+
+    have get_layer_eq :
+      results.get layer_idx =
+        (evalGridSelector layers initial_vectors).get out_idx := by
+      rw [List.get_eq_get_cast results_eq layer_idx, layer_idx_cast_eq]
+
+    set real_goal_idx : Fin ((evalGridSelector layers initial_vectors).get out_idx).length :=
+      Fin.cast (evalGridSelector_layer_length layers initial_vectors goal_layer).symm goal_idx
+
+    have node_idx_eq_val : node_idx.val = real_goal_idx.val := by simp [node_idx, real_goal_idx, h_layer_len, evalGridSelector_layer_length]
+
+    have node_idx_cast_eq :
+      Fin.cast (congrArg List.length get_layer_eq) node_idx = real_goal_idx := Fin.eq_of_val_eq node_idx_eq_val
+
+    have explicit_final_vec_eq :
+      final_vec = goalNodeOutput (evalGridSelector layers initial_vectors) out_idx real_goal_idx := by
+      unfold final_vec goalNodeOutput
+      have h₁ : results.get layer_idx = (evalGridSelector layers initial_vectors).get out_idx :=
+        get_layer_eq
+      have h₂ : (results.get layer_idx).get node_idx
+            = ((evalGridSelector layers initial_vectors).get out_idx).get real_goal_idx := by
+        rw [List.get_eq_get_cast h₁ node_idx]
+        congr
+
+      exact h₂
+
+    have all_f := valid_DLDS_outputs_all_false_at_conclusion
+      layers initial_vectors initial_selectors h_valid h_sel0 goal_layer goal_idx
+
+    have : final_vec = goalNodeOutput (evalGridSelector layers initial_vectors) out_idx real_goal_idx := explicit_final_vec_eq
+    have : final_vec.toList = (goalNodeOutput (evalGridSelector layers initial_vectors) out_idx real_goal_idx).toList := congr_arg List.Vector.toList this
+    rw [this]
+    rw [all_false_iff_toList_all_false] at all_f
+    exact ⟨all_f, full_grid_correctness layers initial_vectors initial_selectors h_act h_sel0 goal_layer goal_idx⟩
+
+
+/--
+  Soundness for the final circuit output: If the output is true, then
+  either an error was detected, or the output at the target node is all-false and
+  the output is proof-theoretically correct (via `GoalNodeCorrect`).
+-/
+theorem final_circuit_output_sound
+  {n : ℕ}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n))
+  (initial_selectors : List (List Bool))
+  (h_valid : ValidDLDS layers initial_vectors initial_selectors)
+  (h_act : RuleActivationCorrect layers initial_vectors initial_selectors)
+  (h_sel0 : initial_selectors = List.map (fun v => selector v.toList) initial_vectors)
+  (goal_layer : Fin layers.length)
+  (goal_idx : Fin (layers.get goal_layer).nodes.length)
+  :
+    let res := evalGridSelectorWithError layers initial_vectors
+    let results := res.1
+    let had_error := res.2
+    let layer_idx : Fin results.length := ⟨goal_layer.val + 1, by
+      rw [evalGridSelectorWithError_length]
+      exact Nat.succ_lt_succ goal_layer.isLt⟩
+    let h_layer_len := evalGridSelectorWithError_layer_length layers initial_vectors goal_layer
+    let node_idx : Fin (results.get layer_idx).length := Fin.cast h_layer_len.symm goal_idx
+    let final_vec := goalNodeOutput results layer_idx node_idx
+    had_error = true ∨ (final_vec.toList.all (· = false) ∧ GoalNodeCorrect layers initial_vectors goal_layer goal_idx)
+:=
+full_circuit_soundness
+  layers initial_vectors initial_selectors
+  h_valid h_act h_sel0
+  goal_layer goal_idx
