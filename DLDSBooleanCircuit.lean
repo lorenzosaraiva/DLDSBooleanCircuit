@@ -711,7 +711,8 @@ This section implements the layered evaluation of the DLDS Boolean circuit grid.
 Represents how each rule in a node receives its activation from previous layer selectors.
 Each element is a pair `(source_node_idx, edge_idx)` indicating the source selector and the bit.
 -/
-abbrev IncomingMap := List (Nat × Nat)
+abbrev IncomingMap := List (List (Nat × Nat))
+
 
 /--
 Maps each node in a layer to its IncomingMap (one per node).
@@ -746,21 +747,33 @@ def make_new_rules {n : ℕ}
   let len := node.rules.length
   List.finRange len |>.map (fun i =>
     let rule := node.rules.get i
-    let (src_idx, edge_idx) :=
-      if h_map : i.val < incoming_map.length then
-        incoming_map.get ⟨i.val, h_map⟩
+
+    let ps : List (Nat × Nat) :=
+      if h : i.val < incoming_map.length then
+        incoming_map.get ⟨i.val, h⟩
       else
-        (0, 0)
-    let act :=
-      if h_src : src_idx < prev_selectors.length then
-        let sel := prev_selectors.get ⟨src_idx, h_src⟩
-        if h_edge : edge_idx < sel.length then sel.get ⟨edge_idx, h_edge⟩ else false
+        []
+
+    let getBit (src edge : Nat) : Bool :=
+      if hS : src < prev_selectors.length then
+        let sel := prev_selectors.get ⟨src, hS⟩
+        if hE : edge < sel.length then sel.get ⟨edge, hE⟩ else false
       else
         false
+
+    let b1b2 :=
+      match ps with
+      | (s1,e1) :: (s2,e2) :: _ => (getBit s1 e1, getBit s2 e2)
+      | (s1,e1) :: []           => (getBit s1 e1, false)
+      | []                      => (false, false)
+
     match rule.activation with
-    | ActivationBits.intro _ => { rule with activation := ActivationBits.intro act }
-    | ActivationBits.elim _ _ => { rule with activation := ActivationBits.elim act act }
+    | ActivationBits.intro _ =>
+        { rule with activation := ActivationBits.intro b1b2.fst }
+    | ActivationBits.elim _ _ =>
+        { rule with activation := ActivationBits.elim b1b2.fst b1b2.snd }
   )
+
 
 /--
 Axiom: The updated rules produced by `make_new_rules` are always nodup (no duplicates),
@@ -771,6 +784,7 @@ axiom nodup_labels_new_rules {n : ℕ}
   (prev_selectors : List (List Bool))
   (incoming_map : IncomingMap)
   : (make_new_rules node prev_selectors incoming_map).Nodup
+
 
 /--
 Given a node, updates all its rules with fresh activation bits
@@ -784,10 +798,7 @@ def activateNodeFromSelectors {n : Nat}
   (node           : CircuitNode n)
 : CircuitNode n :=
   let new_rules := make_new_rules node prev_selectors incoming_map
-  {
-    rules := new_rules,
-    nodup := nodup_labels_new_rules node prev_selectors incoming_map
-  }
+  { rules := new_rules, nodup := nodup_labels_new_rules node prev_selectors incoming_map }
 
 /--
 Activates all nodes in a grid layer according to the given selector vectors from the previous layer.
@@ -1410,10 +1421,13 @@ by
 
             rw [head_eq]
             have acc_len : acc.length = (activateLayerFromSelectors (List.map (fun v => selector v.toList) initial_vectors) layer_hd).length := by simp [acc]
-            have act_len : (activateLayerFromSelectors (List.map (fun v => selector v.toList) initial_vectors) layer_hd).length = layer_hd.nodes.length :=
-              activateLayerFromSelectors_length (List.map (fun v => selector v.toList) initial_vectors) layer_hd
-            simp [acc, activateLayerFromSelectors_length]
+            let selectors₀ : List (List Bool) :=
+              List.map (fun v : List.Vector Bool n => selector v.toList) initial_vectors
 
+            have act_len :
+              (activateLayerFromSelectors selectors₀ layer_hd).length = layer_hd.nodes.length :=
+              activateLayerFromSelectors_length selectors₀ layer_hd
+            simp [acc, activateLayerFromSelectors_length]
 
 
         let real_goal_idx := Fin.cast layer_length_match.symm goal_idx
@@ -2296,39 +2310,40 @@ def List.replicateM {m : Type u → Type v} [Monad m] {α : Type u} (n : Nat) (x
     let rest ← replicateM n x
     pure (a :: rest)
 
-def Vector.replicateM {m α} [Monad m] (n : Nat) (x : m α) : m (Vector α n) := do
-  let xs ← List.replicateM n x
-  match xs.toVector with
-  | .some v => pure v
-  | .none   => panic! s!"replicateM: list wrong length (expected {n})"
+def vectorOfList {α} (xs : List α) : Vector α xs.length :=
+  Vector.ofFn (n := xs.length) (fun i => xs.get i)
 
-
+def constDepsOf {n} (vs : List (List.Vector Bool n)) : Builder (List (List Wire)) :=
+  vs.mapM constVecOf
 
 /-- Build activation wires for a whole layer, from previous dependency vectors,
-    using IncomingMaps wiring. Mirrors `activateLayerFromSelectors`. -/
+    using `IncomingMapsLayer` wiring (one (src,edge) list per rule). -/
 def compileActsForLayer
   (prevDeps : List (List Wire))
-  (incoming : IncomingMapsLayer)  -- same shape your semantics expects
+  (incoming : IncomingMapsLayer)
   : Builder (List (List (List Wire))) := do
-  let sels ← prevDeps.mapM (fun xs => compileSelector (Vector.ofFn (fun i => xs[i]!)))
-  -- one selector vector per previous node
-  -- For each node in this layer, incoming_map tells us which (src_idx, edge_idx) bits to use.
+  -- build selectors for each prev node, then drop to List
+  let sels : List (List Wire) ←
+    prevDeps.mapM (fun xs => do
+      let v ← compileSelector (vectorOfList xs)   -- n := xs.length
+      pure v.toList)
+
+  -- default selector if a source index is OOB
+  let defaultLen :=
+    match prevDeps.head? with
+    | some xs => 2 ^ xs.length
+    | none    => 1
+  let defaultSel : List Wire ← List.replicateM defaultLen (allocConst false)
+
+  -- produce per-node, per-rule activation bundles
   incoming.mapM (fun incMap => do
-    -- incMap : List (Nat × Nat), one per rule position
-    incMap.mapM (fun (src, idx) => do
-      -- safe indexing + default false if OOB is fine; or assert well-formed
-      let defaultLength := match prevDeps.head? with
-      | some xs => 2 ^ xs.length
-      | none    => 1  -- fallback value for empty case
-
-      let defaultSel ← Vector.replicateM defaultLength (allocConst false)
-      let sel := sels.getD src defaultSel
-      let b := sel.getD idx (← allocConst false)
-
-      -- The rule arity determines whether we need [b] or [b1,b2].
-      -- You can either pass arity in incMap, or rely on consistent construction.
-      pure [b]  -- or gather two bits if elim
-    ))
+    incMap.mapM (fun rulePairs => do
+      rulePairs.mapM (fun (src, idx) => do
+        let sel : List Wire := sels.getD src defaultSel
+        pure (sel.getD idx (← allocConst false))
+      )
+    )
+  )
 
 def compileGridEvalAutoActs {n}
   (layers : List (GridLayer n))
@@ -2346,6 +2361,138 @@ def compileGridEvalAutoActs {n}
   let z ← allocConst false
   go initDeps layers [] z
 
+def compileWholeGridAutoActs {n}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n))
+  : Builder (List (List (List Wire)) × Wire) := do
+  let initDeps ← constDepsOf initial_vectors
+  compileGridEvalAutoActs layers initDeps
+
+def simulateWholeGrid {n}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n))
+  : (Array Bool × Circuit) :=
+  let (outs, circ) := runBuilder (compileWholeGridAutoActs layers initial_vectors)
+  -- `outs` is structure; if you want a single “final error” bit out of the builder,
+  -- you can wire it to a final wire and read it here. For now, `circ` has all gate outputs.
+  (simulate circ #[], circ)
+
+/-- Read a list of wires from a simulated value array. -/
+def readVec (vals : Array Bool) (ws : List Wire) : List Bool :=
+  ws.map (fun w => vals[w]!)
+
+/-- Simulate the *structured* outputs: for every layer and node, give the Bool vector,
+    and also the global OR-of-errors. Returns (values, had_error, circuit). -/
+def simulateWholeGridAutoActsValues {n}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n))
+  : (List (List (List Bool)) × Bool × Circuit) :=
+  let ((outs, errWire), circ) := runBuilder (compileWholeGridAutoActs layers initial_vectors)
+  let vals := simulate circ #[]                          -- no primary inputs; circuit is self-contained
+  let outsB : List (List (List Bool)) :=
+    outs.map (fun layer => layer.map (fun vec => readVec vals vec))
+  let hadErr : Bool := vals[errWire]!
+  (outsB, hadErr, circ)
+
+/-- AND-of-NOTs = "all false" on a vector. -/
+def vecAllFalse (xs : List Wire) : Builder Wire := do
+  let any ← orList xs
+  allocNot any
+
+/-- Compile one wire that matches the semantic `final_circuit_output`:
+    had_error ∨ (goal vector is all false). -/
+def compileFinalOutputWire {n}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n))
+  (goal_layer : Fin layers.length)
+  (goal_idx   : Fin (layers.get goal_layer).nodes.length)
+  : Builder Wire := do
+  let (outs, err) ← compileWholeGridAutoActs layers initial_vectors
+  -- outs = initial :: layer1 :: ... :: layer_L
+  let layerOuts : List (List Wire) := outs.getD (goal_layer.val + 1) []
+  let goalVec   : List Wire        := layerOuts.getD goal_idx.val []
+  let allZero ← vecAllFalse goalVec
+  allocOr err allZero
+
+/-- Convenience: run `compileFinalOutputWire` and return the Boolean plus the circuit. -/
+def simulateFinalOutput {n}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n))
+  (goal_layer : Fin layers.length)
+  (goal_idx   : Fin (layers.get goal_layer).nodes.length)
+  : (Bool × Circuit) :=
+  let (w, c) := runBuilder (compileFinalOutputWire layers initial_vectors goal_layer goal_idx)
+  let vals := simulate c #[]
+  (vals[w]!, c)
+
+/-- Compare the compiled result at (goal_layer,goal_idx) with the semantic evaluator. -/
+def checkAgainstSemanticsAt {n}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n))
+  (goal_layer : Fin layers.length)
+  (goal_idx   : Fin (layers.get goal_layer).nodes.length)
+  : Bool := Id.run do
+  -- compiled
+  let (outsB, _, _) := simulateWholeGridAutoActsValues layers initial_vectors
+  let compiledGoal : List Bool :=
+    (outsB.getD (goal_layer.val + 1) []).getD goal_idx.val []
+  -- semantic
+  let sem := evalGridSelector layers initial_vectors
+  let out_idx : Fin sem.length :=
+    Fin.cast (Eq.symm (evalGridSelector_length layers initial_vectors)) goal_layer.succ
+  let layer_len_eq := evalGridSelector_layer_length layers initial_vectors goal_layer
+  let real_goal_idx : Fin (sem.get out_idx).length := Fin.cast layer_len_eq.symm goal_idx
+  let semGoal := ((sem.get out_idx).get real_goal_idx).toList
+  -- compare bitwise
+  decide (compiledGoal = semGoal)
+
+def n := 4
+def enc : List.Vector Bool n := ⟨[false,false,true,false], by decide⟩
+def rI : Rule n := mkIntroRule enc true
+def rE : Rule n := mkElimRule true true
+def node : CircuitNode n :=
+{ rules := [rI, rE]
+, nodup := by
+    -- show the two rules are different (intro vs elim)
+    have hne : rI ≠ rE := by
+      intro h
+      -- distinguish them via the `type` tag
+      have := congrArg (fun (r : Rule n) =>
+        match r.type with
+        | RuleData.intro _ => true
+        | RuleData.elim    => false) h
+      -- LHS reduces to true, RHS to false
+      simp [rI, rE, mkIntroRule, mkElimRule] at this
+    -- now `rI :: [rE]` is nodup iff `rI ∉ [rE]` and `[rE]` is nodup
+    refine List.nodup_cons.mpr ?_
+    refine And.intro ?notmem ?tail
+    · -- rI ∉ [rE]
+      simpa [List.mem_singleton] using hne
+    · -- [rE] is nodup
+      simp
+}
+
+def layer : GridLayer n :=
+  { nodes := [node],
+    -- one node, two rules; each rule has a list of (src,edge) pairs
+    -- e.g. pull two bits for elim from selector of prev node 0
+    incoming := [ [ [(0,1)], [(0,0),(0,3)] ] ] }
+
+def init : List (List.Vector Bool n) :=
+  [ ⟨[true,false,true,false], by decide⟩
+  , ⟨[false,false,false,false], by decide⟩
+  ]
+
+#eval simulateWholeGridAutoActsValues [layer] init
+-- → (all layer outputs as Bool lists, had_error flag, circuit)
+
+-- compare compiled vs. semantic at node 0 in layer 0:
+#eval checkAgainstSemanticsAt [layer] init ⟨0, by decide⟩ ⟨0, by decide⟩
+-- true = match
+
+def semLayersToBools {n} (xs : List (List (List.Vector Bool n))) :
+    List (List (List Bool)) :=
+  xs.map (fun layer => layer.map (·.toList))
 
 
 
