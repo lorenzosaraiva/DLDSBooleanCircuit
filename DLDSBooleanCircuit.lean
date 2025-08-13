@@ -72,18 +72,19 @@ Structure representing a single inference rule, including:
 - The dependency vector update function.
 -/
 structure Rule (n : ℕ) where
+  ruleId    : Nat
   activation : ActivationBits
-  type : RuleData n
-  combine : List (List.Vector Bool n) → List.Vector Bool n
+  type       : RuleData n
+  combine    : List (List.Vector Bool n) → List.Vector Bool n
 
 /--
 Represents a node in the Boolean circuit (corresponds to a node in the DLDS).
 - Each node stores a list of possible inference rules.
 - Invariant: All rules must be unique.
 -/
-structure CircuitNode (n: Nat) where
-  rules : List (Rule n)
-  nodup : rules.Nodup
+structure CircuitNode (n : ℕ) where
+  rules    : List (Rule n)
+  nodupIds : (rules.map (·.ruleId)).Nodup
 
 /--
 Represents the N × N grid structure for the Boolean circuit.
@@ -100,8 +101,9 @@ Constructs an implication introduction rule for formulas of length `n`.
 - `bit`: Activation bit for this rule.
 - `combine` returns conjunction of the input dependency vector with the negation of `encoder`.
 -/
-def mkIntroRule {n : ℕ} (encoder : List.Vector Bool n) (bit : Bool) : Rule n :=
+def mkIntroRule {n : ℕ} (rid : Nat) (encoder : List.Vector Bool n) (bit : Bool) : Rule n :=
 {
+  ruleId    := rid,
   activation := ActivationBits.intro bit,
   type       := RuleData.intro encoder,
   combine    := fun deps =>
@@ -116,8 +118,9 @@ Constructs an implication elimination rule for formulas of length `n`.
 - `combine` returns conjunction of the two dependency vectors.
 
 -/
-def mkElimRule {n : ℕ} (bit1 bit2 : Bool) : Rule n :=
+def mkElimRule {n : ℕ} (rid : Nat) (bit1 bit2 : Bool) : Rule n :=
 {
+  ruleId    := rid,
   activation := ActivationBits.elim bit1 bit2,
   type       := RuleData.elim,
   combine    := fun deps =>
@@ -267,6 +270,19 @@ This section contains auxiliary lemmas and theorems about Boolean list operation
 especially those related to the multiple_xor function and its connection to unique activation.
 These are essential for the correctness and reasoning about rule activation in the circuit.
 -/
+
+lemma nodup_of_map {α β} (f : α → β) {l : List α} :
+  (l.map f).Nodup → l.Nodup := by
+  induction l with
+  | nil => intro _; simp
+  | cons a tl ih =>
+    intro h
+    rcases List.nodup_cons.mp h with ⟨h_notin, h_tl⟩
+    have ih' := ih h_tl
+    have a_notin : a ∉ tl := by
+      intro hmem
+      exact h_notin (List.mem_map.mpr ⟨a, hmem, rfl⟩)
+    exact List.nodup_cons.mpr ⟨a_notin, ih'⟩
 
 /-!
 ### Lemma: Cons False Invariance for Multiple XOR
@@ -645,8 +661,12 @@ theorem node_correct {n} (c : CircuitNode n)
     (h_one : exactlyOneActive c.rules) :
   ∃ r ∈ c.rules, c.run inputs = r.combine inputs := by
 
-  have h_bool : multiple_xor (c.rules.map is_rule_active) = true :=
-    (multiple_xor_bool_iff_exactlyOneActive c.rules c.nodup).mpr h_one
+  have h_nodup : c.rules.Nodup :=
+    nodup_of_map (fun (r : Rule n) => r.ruleId) c.nodupIds
+
+  have h_bool :
+    multiple_xor (c.rules.map is_rule_active) = true :=
+    (multiple_xor_bool_iff_exactlyOneActive c.rules h_nodup).mpr h_one
 
   let h_one_prop := h_one
 
@@ -661,7 +681,7 @@ theorem node_correct {n} (c : CircuitNode n)
   simp [List.map_map, true_and]
 
   let eq := list_or_apply_unique_active_of_exactlyOne
-    h_nonempty hr0_mem c.nodup h_one_prop hr0_active inputs
+    h_nonempty hr0_mem h_nodup h_one_prop hr0_active inputs
 
   use r0
   constructor
@@ -734,6 +754,7 @@ structure GridLayer (n : ℕ) where
   nodes : List (CircuitNode n)
   incoming : IncomingMapsLayer
 
+
 /--
 Constructs the list of rules for a node after updating activation bits based on incoming selectors.
 
@@ -767,23 +788,43 @@ def make_new_rules {n : ℕ}
       | (s1,e1) :: []           => (getBit s1 e1, false)
       | []                      => (false, false)
 
-    match rule.activation with
-    | ActivationBits.intro _ =>
-        { rule with activation := ActivationBits.intro b1b2.fst }
-    | ActivationBits.elim _ _ =>
-        { rule with activation := ActivationBits.elim b1b2.fst b1b2.snd }
+    let newAct :=
+      match rule.activation with
+      | ActivationBits.intro _   => ActivationBits.intro b1b2.fst
+      | ActivationBits.elim _ _  => ActivationBits.elim b1b2.fst b1b2.snd
+    { rule with activation := newAct }
   )
 
+@[simp] lemma ruleId_updateAct {n} (r : Rule n) (a : ActivationBits) :
+  ({ r with activation := a }).ruleId = r.ruleId := rfl
 
-/--
-Axiom: The updated rules produced by `make_new_rules` are always nodup (no duplicates),
-assuming the original node was nodup. This is required for circuit correctness.
--/
-axiom nodup_labels_new_rules {n : ℕ}
-  (node : CircuitNode n)
-  (prev_selectors : List (List Bool))
-  (incoming_map : IncomingMap)
-  : (make_new_rules node prev_selectors incoming_map).Nodup
+lemma make_new_rules_map_ruleId_eq
+  {n : ℕ} (node : CircuitNode n) (prev_selectors : List (List Bool)) (incoming_map : IncomingMap) :
+  (make_new_rules node prev_selectors incoming_map).map (·.ruleId)
+  = node.rules.map (·.ruleId) := by
+  apply List.ext_get
+  · simp [make_new_rules]
+  · intro i h₁ h₂
+    simp [make_new_rules, ruleId_updateAct]
+
+
+lemma nodup_of_nodup_map {α β} (f : α → β) :
+  ∀ {l : List α}, (l.map f).Nodup → l.Nodup
+| [],       _ => by simp
+| a :: tl,  h => by
+  have hcons : (f a :: tl.map f).Nodup := by simpa using h
+  rcases List.nodup_cons.mp hcons with ⟨hfa_notin, h_tl⟩
+  have ih : tl.Nodup := nodup_of_nodup_map f h_tl
+  refine List.nodup_cons.mpr ?_
+  constructor
+  · intro hmem
+    exact hfa_notin (List.mem_map.mpr ⟨a, hmem, rfl⟩)
+  · exact ih
+
+-- helper: map-get over finRange reproduces the list
+@[simp] lemma map_get_finRange_eq {α} (l : List α) :
+  (List.finRange l.length).map (fun i => l.get i) = l := by
+  simp [List.ofFn_eq_map]
 
 
 /--
@@ -798,7 +839,31 @@ def activateNodeFromSelectors {n : Nat}
   (node           : CircuitNode n)
 : CircuitNode n :=
   let new_rules := make_new_rules node prev_selectors incoming_map
-  { rules := new_rules, nodup := nodup_labels_new_rules node prev_selectors incoming_map }
+  -- Prove (map ruleId new_rules) = (map ruleId node.rules) indexwise, then reuse node.nodupIds
+  let nodupIds :=
+    by
+      classical
+      -- 1) Lists have the same length
+      have len_eq : new_rules.length = node.rules.length := by
+        simp [new_rules, make_new_rules]      -- finRange/map preserves length
+
+      -- 2) Pointwise same ruleId at every index
+      have ids_eq :
+        new_rules.map (·.ruleId) = node.rules.map (·.ruleId) :=
+      by
+        apply List.ext_get
+        · simp [new_rules, make_new_rules]      -- lengths
+        · intro i hiL hiR
+          -- align Fin indices on both sides
+          have fi_rules  : Fin node.rules.length := ⟨i, by simpa using hiR⟩
+          have fi_new    : Fin new_rules.length  := ⟨i, by simpa [len_eq] using hiL⟩
+          -- both sides reduce to the same `node.rules[fi_rules].ruleId`
+          simp [new_rules, make_new_rules, len_eq]
+
+      -- 3) Transfer Nodup through the equality
+      simpa [ids_eq] using node.nodupIds
+
+  { rules := new_rules, nodupIds := nodupIds }
 
 /--
 Activates all nodes in a grid layer according to the given selector vectors from the previous layer.
@@ -2372,7 +2437,7 @@ def simulateWholeGrid {n}
   (layers : List (GridLayer n))
   (initial_vectors : List (List.Vector Bool n))
   : (Array Bool × Circuit) :=
-  let (outs, circ) := runBuilder (compileWholeGridAutoActs layers initial_vectors)
+  let (_, circ) := runBuilder (compileWholeGridAutoActs layers initial_vectors)
   -- `outs` is structure; if you want a single “final error” bit out of the builder,
   -- you can wire it to a final wire and read it here. For now, `circ` has all gate outputs.
   (simulate circ #[], circ)
