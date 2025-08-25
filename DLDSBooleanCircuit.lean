@@ -807,20 +807,6 @@ lemma make_new_rules_map_ruleId_eq
   · intro i h₁ h₂
     simp [make_new_rules, ruleId_updateAct]
 
-
-lemma nodup_of_nodup_map {α β} (f : α → β) :
-  ∀ {l : List α}, (l.map f).Nodup → l.Nodup
-| [],       _ => by simp
-| a :: tl,  h => by
-  have hcons : (f a :: tl.map f).Nodup := by simpa using h
-  rcases List.nodup_cons.mp hcons with ⟨hfa_notin, h_tl⟩
-  have ih : tl.Nodup := nodup_of_nodup_map f h_tl
-  refine List.nodup_cons.mpr ?_
-  constructor
-  · intro hmem
-    exact hfa_notin (List.mem_map.mpr ⟨a, hmem, rfl⟩)
-  · exact ih
-
 -- helper: map-get over finRange reproduces the list
 @[simp] lemma map_get_finRange_eq {α} (l : List α) :
   (List.finRange l.length).map (fun i => l.get i) = l := by
@@ -2513,29 +2499,21 @@ def checkAgainstSemanticsAt {n}
 
 def n := 4
 def enc : List.Vector Bool n := ⟨[false,false,true,false], by decide⟩
-def rI : Rule n := mkIntroRule enc true
-def rE : Rule n := mkElimRule true true
+
+-- Reuse your rule constructors, just give each rule a distinct ruleId.
+-- If your mkIntroRule/mkElimRule already take a ruleId argument, use that.
+-- Otherwise, set it via structure-update as below.
+-- new API: (ruleId : Nat) → encoder/bits…
+def rI : Rule n := mkIntroRule 0 enc true
+def rE : Rule n := mkElimRule 1 true true
+
 def node : CircuitNode n :=
-{ rules := [rI, rE]
-, nodup := by
-    -- show the two rules are different (intro vs elim)
-    have hne : rI ≠ rE := by
-      intro h
-      -- distinguish them via the `type` tag
-      have := congrArg (fun (r : Rule n) =>
-        match r.type with
-        | RuleData.intro _ => true
-        | RuleData.elim    => false) h
-      -- LHS reduces to true, RHS to false
-      simp [rI, rE, mkIntroRule, mkElimRule] at this
-    -- now `rI :: [rE]` is nodup iff `rI ∉ [rE]` and `[rE]` is nodup
-    refine List.nodup_cons.mpr ?_
-    refine And.intro ?notmem ?tail
-    · -- rI ∉ [rE]
-      simpa [List.mem_singleton] using hne
-    · -- [rE] is nodup
-      simp
+{
+  rules := [rI, rE], nodupIds := by
+    -- map ruleId over [rI, rE] is [0, 1], so it's Nodup
+    simp [rI, rE, mkIntroRule, mkElimRule]
 }
+
 
 def layer : GridLayer n :=
   { nodes := [node],
@@ -2548,17 +2526,377 @@ def init : List (List.Vector Bool n) :=
   , ⟨[false,false,false,false], by decide⟩
   ]
 
-#eval simulateWholeGridAutoActsValues [layer] init
--- → (all layer outputs as Bool lists, had_error flag, circuit)
+-- #eval simulateWholeGridAutoActsValues [layer] init
+-- -- → (all layer outputs as Bool lists, had_error flag, circuit)
 
--- compare compiled vs. semantic at node 0 in layer 0:
-#eval checkAgainstSemanticsAt [layer] init ⟨0, by decide⟩ ⟨0, by decide⟩
+-- -- compare compiled vs. semantic at node 0 in layer 0:
+-- #eval checkAgainstSemanticsAt [layer] init ⟨0, by decide⟩ ⟨0, by decide⟩
 -- true = match
 
 def semLayersToBools {n} (xs : List (List (List.Vector Bool n))) :
     List (List (List Bool)) :=
   xs.map (fun layer => layer.map (·.toList))
 
+
+
+/-- Build circuit + keep the wire handles for (layer outputs, error). -/
+def buildCircuitWithHandles {n}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n))
+  : (Circuit × List (List (List Wire)) × Wire) :=
+  let ((outs, err), circ) := runBuilder (compileWholeGridAutoActs layers initial_vectors)
+  (circ, outs, err)
+
+/-- Just the gate list. -/
+def gatesFor {n}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n)) : List Gate :=
+  (buildCircuitWithHandles layers initial_vectors).fst.gates
+
+/-- Pretty quick peek: returns `(gates, (layerOutputs, errorWire))`. -/
+def gatesAndHandlesFor {n}
+  (layers : List (GridLayer n))
+  (initial_vectors : List (List.Vector Bool n))
+  : (List Gate × (List (List (List Wire)) × Wire)) :=
+  let (c, outs, e) := buildCircuitWithHandles layers initial_vectors
+  (c.gates, (outs, e))
+
+-- #eval (CircuitOp.gatesFor [layer] init).length       -- how many gates?
+-- #eval (CircuitOp.gatesAndHandlesFor [layer] init)     -- full details (prints via `Repr`)
+
+/-- rule “shape” coming from the proof (no activation bits here). -/
+inductive RuleSpec (n : ℕ)
+  | intro (encoder : List.Vector Bool n)   -- ⊃I
+  | elim                                   -- ⊃E
+
+/-- one node: just the rule specs; wiring lives at the layer level. -/
+structure NodeSpec (n : ℕ) where
+  rules : List (RuleSpec n)
+
+/-- one layer: nodes + incoming wiring for each node’s rules. -/
+structure LayerSpec (n : ℕ) where
+  nodes    : List (NodeSpec n)
+  incoming : IncomingMapsLayer              -- same shape you already use
+
+/-- whole proof IR for size `n`. -/
+structure ProofSpec (n : ℕ) where
+  layers          : List (LayerSpec n)
+  initial_vectors : List (List.Vector Bool n)
+
+def ruleOfSpec {n} (rid : Nat) : RuleSpec n → Rule n
+  | RuleSpec.intro enc => mkIntroRule rid enc true
+  | RuleSpec.elim      => mkElimRule rid true true
+
+-- (optional but makes the next simp bulletproof)
+@[simp] lemma ruleOfSpec_ruleId {n} (i : Nat) (rs : RuleSpec n) :
+  (ruleOfSpec i rs).ruleId = i := by
+  cases rs <;> simp [ruleOfSpec, mkIntroRule, mkElimRule]
+
+@[simp] lemma map_val_finRange (len : Nat) :
+  (List.finRange len).map (fun i : Fin len => (i : Nat)) = List.range len := by
+  apply List.ext_get
+  · simp
+  · intro i _ _
+    simp [List.get]
+
+def nodeOfSpec {n} (ns : NodeSpec n) : CircuitNode n := by
+  classical
+  let len := ns.rules.length
+  -- Build rules by safe Fin indexing
+  let rules : List (Rule n) :=
+    (List.finRange len).map (fun i : Fin len =>
+      ruleOfSpec (i : Nat) (ns.rules.get i))
+
+  -- map ruleId over `rules` collapses to mapping Fin→Nat over finRange
+  have ids_eq₁ :
+      rules.map (·.ruleId)
+      = (List.finRange len).map (fun i : Fin len => (i : Nat)) := by
+    -- prove by pointwise equality on indices
+    apply List.ext_get
+    ·
+      simp [rules]
+    ·
+      intro i hiL hiR
+      simp [rules, List.getElem_map, ruleOfSpec_ruleId]
+
+  -- Fin→Nat over finRange is exactly `range`
+  have ids_eq₂ :
+      (List.finRange len).map (fun i : Fin len => (i : Nat))
+      = List.range len :=
+    map_val_finRange len
+
+  have ids_eq : rules.map (·.ruleId) = List.range len :=
+    ids_eq₁.trans ids_eq₂
+
+  exact
+  {
+    rules    := rules,
+    nodupIds := by
+      -- `range len` is nodup; transport via equality
+      have h : (List.range len).Nodup := List.nodup_range (n := len)
+      simpa [ids_eq] using h,
+  }
+
+
+
+def layerOfSpec {n} (ls : LayerSpec n) : GridLayer n :=
+  { nodes := ls.nodes.map nodeOfSpec, incoming := ls.incoming }
+
+def gridOfProof {n} (ps : ProofSpec n) : (List (GridLayer n)) × (List (List.Vector Bool n)) :=
+  (ps.layers.map layerOfSpec, ps.initial_vectors)
+
+
+inductive Formula
+  | atom (name : String)
+  | impl (A B : Formula)
+  deriving DecidableEq, Repr
+
+structure Vertex where
+  node      : Nat
+  LEVEL     : Nat
+  FORMULA   : Formula
+  HYPOTHESIS : Bool
+  COLLAPSED : Bool
+  PAST      : List Nat
+  deriving Repr
+
+structure Deduction where
+  START : Vertex
+  END   : Vertex
+  COLOUR : Nat
+  DEPENDENCY : List Formula
+  deriving Repr
+
+structure DLDS where
+  V : List Vertex
+  E : List Deduction
+  A : List (Vertex × Vertex) := []
+  deriving Repr
+
+def collectFormulas (d : DLDS) : List Formula :=
+  -- include subformulas if you want full closure; otherwise just node labels:
+  (d.V.map (·.FORMULA)).eraseDups
+
+-- pick your order (lex by shape/name is fine)
+def compareFormula : Formula → Formula → Ordering
+  | .atom a, .atom b => compare a b
+  | .atom _, .impl _ _ => .lt
+  | .impl _ _, .atom _ => .gt
+  | .impl a b, .impl c d =>
+      match compareFormula a c with
+      | .eq => compareFormula b d
+      | o   => o
+
+def orderΓ [DecidableEq Formula] (Γ : List Formula) : List Formula :=
+  Γ.eraseDups
+
+def buildUniverse [DecidableEq Formula] (d : DLDS) : List Formula :=
+  orderΓ (d.V.map (·.FORMULA))
+
+def indexOf (Γ : List Formula) (φ : Formula) : Nat :=
+  (Γ.idxOf φ)  -- assumes DecidableEq; safe after `orderΓ`
+
+-- needs membership decidability
+def encodeSet [DecidableEq Formula]
+  (Γord : List Formula) (fs : List Formula) :
+  List.Vector Bool Γord.length :=
+  ⟨
+    -- i ranges over indices of Γord
+    List.ofFn (fun (i : Fin Γord.length) =>
+      decide (Γord.get i ∈ fs)),
+    -- length (List.ofFn ...) = Γord.length
+    by simp
+  ⟩
+
+def encoderForIntro [DecidableEq Formula]
+  (Γord : List Formula) (φ : Formula) :
+  Option (List.Vector Bool Γord.length) :=
+  match φ with
+  | .impl A _ =>
+      let bits := Γord.map (fun ψ => decide (ψ = A))
+      -- expose `bits` to `simp` so it can use `List.length_map`
+      some ⟨bits, by simp [bits]⟩
+  | _ => none
+
+
+def specOfFormula (Γord : List Formula) (φ : Formula) :
+  NodeSpec Γord.length :=
+  match encoderForIntro Γord φ with
+  | some enc => { rules := [RuleSpec.intro enc, RuleSpec.elim] }
+  | none     => { rules := [RuleSpec.elim] }
+
+
+def buildLayer (Γord : List Formula) : GridLayer Γord.length :=
+  let rowNodes :=
+    Γord.map (fun φ => nodeOfSpec (specOfFormula Γord φ))
+  { nodes := rowNodes, incoming := [] }
+
+/-- Group vertices by `LEVEL`, sort each layer by `node`,
+    and carry an association list for node indices.
+    Skipping levels is allowed; edges must satisfy ls < le. -/
+structure LayeredDLDS where
+  layers     : List (List Vertex)
+  indexAlist : List (Nat × (Nat × Nat))  -- (nodeId ↦ (layerIdx, idxInLayer))
+  deriving Repr
+
+/-- Lookup `(layerIdx, idxInLayer)` for a node id in a `LayeredDLDS`. -/
+def LayeredDLDS.indexOf? (L : LayeredDLDS) (n : Nat) : Option (Nat × Nat) :=
+  (L.indexAlist.find? (fun p => p.fst = n)).map (·.snd)
+
+/-- assoc-list lookup used internally in `layerize` checks -/
+def idxLookup (idx : List (Nat × (Nat × Nat))) (n : Nat) : Option (Nat × Nat) :=
+  (idx.find? (fun p => p.fst = n)).map (·.snd)
+
+namespace List
+
+def insertBy {α} (lt : α → α → Bool) (a : α) : List α → List α
+  | []       => [a]
+  | b :: bs  =>
+    if lt a b then
+      a :: b :: bs
+    else
+      b :: insertBy lt a bs
+
+/-- Insertion sort by a boolean comparator `lt`. -/
+def sortBy {α} (lt : α → α → Bool) : List α → List α
+  | []       => []
+  | a :: as  =>
+    insertBy lt a (sortBy lt as)
+end List
+
+/-- Helper: collect all vertices at a given level and sort them by `node`. -/
+def verticesAtLevelSorted (vs : List Vertex) (ℓ : Nat) : List Vertex :=
+  let atL := vs.filter (fun v => v.LEVEL = ℓ)
+  List.sortBy (fun a b => a.node < b.node) atL
+
+/-- Build the list of layers 0..maxLev, each sorted by `node`. -/
+def buildLayers (d : DLDS) : List (List Vertex) :=
+  let maxLev := (d.V.map (·.LEVEL)).foldl Nat.max 0
+  (List.range (maxLev + 1)).map (fun ℓ => verticesAtLevelSorted d.V ℓ)
+
+/-- Pair each element with its 0-based index. -/
+def zipWithIndex {α} (xs : List α) : List (Nat × α) :=
+  let rec go : List α → Nat → List (Nat × α)
+    | [],      _ => []
+    | a :: as, i => (i, a) :: go as (i + 1)
+  go xs 0
+
+/-- Build a `(nodeId → (layerIdx, idxInLayer))` association list. -/
+def buildIndex (layers : List (List Vertex)) : List (Nat × (Nat × Nat)) :=
+  let withLayerIdx := zipWithIndex layers
+  withLayerIdx.foldl
+    (fun acc (ℓ, row) =>
+      let rowWithIdx := zipWithIndex row
+      acc ++ rowWithIdx.map (fun (i, v) => (v.node, (ℓ, i)))
+    )
+    []
+
+/-- Returns a structured layering if:
+    - layers are built from LEVEL,
+    - each layer is sorted by node,
+    - and every deduction goes from a lower level to a strictly higher level (ls < le).
+    Otherwise, returns an explanatory error. -/
+
+
+def layerize (d : DLDS) : Except String LayeredDLDS := do
+  let layers := buildLayers d
+  let idx    := buildIndex layers
+
+  -- sanity: every vertex appears in the index
+  for v in d.V do
+    match idxLookup idx v.node with
+    | none   => throw s!"Unknown vertex id in index: {v.node}"
+    | some _ => pure ()
+
+  -- edges must go forward (skips allowed): ls < le
+  for e in d.E do
+    let some (ls, _) := idxLookup idx e.START.node
+      | throw s!"Edge START not found in index: {e.START.node}"
+    let some (le, _) := idxLookup idx e.END.node
+      | throw s!"Edge END not found in index: {e.END.node}"
+    if ¬ (ls < le) then
+      throw s!"Non-forward edge {e.START.node}@L{ls} → {e.END.node}@L{le} (expected ls < le)"
+
+  let result : LayeredDLDS :=
+  {
+    layers     := layers,
+    indexAlist := idx,
+  }
+
+  pure result
+
+/-- Compact the layered view by dropping empty layers and
+    remapping to consecutive indices 0..L-1. -/
+structure CompactDLDS where
+  layers      : List (List Vertex)              -- nonempty, consecutive
+  indexAlist  : List (Nat × (Nat × Nat))      -- nodeId ↦ (compactLayer, idxInLayer)
+  deriving Repr
+
+
+/-- Drop empty layers from `LayeredDLDS` and reindex. -/
+def compactify (L : LayeredDLDS) : CompactDLDS :=
+  let nonempty := L.layers.filter (fun row => ¬ row.isEmpty)
+  let idx      := buildIndex nonempty
+  {
+    layers      := nonempty,
+    indexAlist  := idx,
+  }
+
+/-- Lookup helper on the compact index. -/
+def CompactDLDS.indexOf? (C : CompactDLDS) (n : Nat) : Option (Nat × Nat) :=
+  (C.indexAlist.find? (fun p => p.fst = n)).map (·.snd)
+
+
+/-- Build LayerSpec skeletons (rules only; incoming wiring is empty for now). -/
+def buildLayerSpecs {n : Nat}
+  (Γord : List Formula)
+  (C    : CompactDLDS)
+  : List (CircuitOp.LayerSpec n) :=
+  -- ensure `n = Γord.length` at use sites
+  C.layers.map (fun row =>
+    {
+      nodes    := row.map (fun v => specOfFormula Γord v.FORMULA),
+      incoming := [],
+    })
+
+/-- Extract the *initial dependency vectors* for the compact layer 0.
+    Policy: a vertex is initially “selected” iff it is a hypothesis (`HYPOTHESIS = true`).
+    We encode the set of dependencies using `encodeSet` you defined. -/
+def initialVectorsOfLayer0 (Γord : List Formula) (C : CompactDLDS)
+  : List (List.Vector Bool Γord.length) :=
+  match C.layers with
+  | []       => []
+  | row :: _ =>
+    row.map (fun v =>
+      CircuitOp.encodeSet Γord (if v.HYPOTHESIS then [v.FORMULA] else [])
+    )
+
+/-- Convenience: check that the `n` parameter matches `Γord.length`. -/
+def assertN (n : Nat) (Γord : List Formula) : Except String PUnit :=
+  if h : n = Γord.length then
+    pure ()
+  else
+    throw s!"Dimension mismatch: n = {n} but |Γ| = {Γord.length}."
+
+/-- Top-level step 2:
+    From DLDS + chosen Γ ordering, produce:
+      - compact consecutive layers,
+      - LayerSpec skeletons (rules present, empty wiring),
+      - initial dependency vectors for layer 0.
+    The wiring (`incoming`) will be filled in Step 3. -/
+def dldsToLayerSpecs
+  (d    : DLDS)
+  (Γord : List Formula)
+  : Except String (CompactDLDS × List (CircuitOp.LayerSpec Γord.length) × List (List.Vector Bool Γord.length)) := do
+  -- Build the permissive layered view (ls < le), sort by node:
+  let layered ← layerize d
+  -- Compact to consecutive, nonempty layers for evaluation:
+  let compact := compactify layered
+  -- Build specs for each layer (no wiring yet):
+  let specs   := buildLayerSpecs Γord compact
+  -- Initial dependency vectors (layer 0):
+  let init    := initialVectorsOfLayer0 Γord compact
+  pure (compact, specs, init)
 
 
 end CircuitOp
