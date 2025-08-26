@@ -196,6 +196,7 @@ def anyOfVecsA {m} [Monad m] [BitVecAlg m] {n}
   let tails ← vs.mapM (fun v => BitVecAlg.vreduceOr v)
   orListA tails
 
+
 /-!
 # Section 1: Core Types and Structures
 
@@ -463,6 +464,23 @@ def nodeLogicWithErrorGivenActsA {m} [Monad m] [BitVecAlg m] {n}
   let notX ← BitVecAlg.bnot xor
   let err  ← BitVecAlg.band notX sel
   pure (out, err)
+
+/-- Activation over the algebra: intro uses 1 bit, elim uses 2 bits; otherwise false. -/
+def isRuleActiveA {m} [Monad m] [BitVecAlg m]
+  (act : ActivationBits)
+  (ws  : List (BitVecAlg.Bit (m := m))) :
+  m (BitVecAlg.Bit (m := m)) :=
+  match act, ws with
+  | ActivationBits.intro _,  [b]        => BitVecAlg.buf b
+  | ActivationBits.elim _ _, [b1, b2]   => BitVecAlg.band b1 b2
+  | _,                    _             => BitVecAlg.const false
+
+/-- For each rule, compute its single activation bit from its activation *inputs*. -/
+def actsFromRuleActWiresA {m} [Monad m] [BitVecAlg m] {n}
+  (rules    : List (Rule n))
+  (ruleActs : List (List (BitVecAlg.Bit (m := m)))) :
+  m (List (BitVecAlg.Bit (m := m))) :=
+  (List.zip rules ruleActs).mapM (fun (r, ws) => isRuleActiveA (m := m) r.activation ws)
 
 /-!
 ## Section 3: Boolean List Lemmas and Multiple XOR Properties
@@ -1090,6 +1108,9 @@ def evalGridSelectorBase {n : Nat}
 : List (List.Vector Bool n) :=
   let activated_layer := activateLayerFromSelectors initial_selectors layer
   activated_layer.map (λ node => node.run initial_vectors)
+
+def selectorSem (input : List Bool) : List Bool :=
+  (selectorA (m := Pure.M) (input := input))  -- Pure.M = Id
 
 /--
 Evaluates a single layer of the grid, given the output dependency vectors from the previous layer.
@@ -2420,41 +2441,76 @@ def compileRule {n : Nat}
     | RuleData.elim      => compileElimCombine n deps
   pure (out, act)
 
-/-- Gate-level version of your `node_logic` + the `runWithError` error bit. -/
-def compileNodeLogic {n : Nat}
-  -- semantic rules (the encoders are inside RuleData; we ignore the Boolean bits inside ActivationBits here,
-  -- because the actual *wires* come from the layer wiring / selectors)
-  (rules      : List (Rule n))
-  -- activation wires for each rule: for `intro` supply [b], for `elim` supply [b1, b2]
-  (ruleActs   : List (List Wire))
-  -- dependency inputs (the same list-of-vector shape your semantics expects)
-  (inputs     : List (List Wire))
+
+
+-- Interpret the tagless algebra in the gate-level builder
+instance : BitVecAlg CircuitOp.Builder where
+  Bit := CircuitOp.Wire
+  Vec := fun _ => List CircuitOp.Wire
+
+  const  := CircuitOp.allocConst
+  buf    := CircuitOp.allocBuf
+  bnot   := CircuitOp.allocNot
+  band   := CircuitOp.allocAnd
+  bor    := CircuitOp.allocOr
+  bxor   := CircuitOp.allocXor
+
+  vconst    := fun {n} b => CircuitOp.allocConstVec n b
+  vmap      := fun f v => v.mapM f
+  vzipWith  := fun f v1 v2 => (List.zip v1 v2).mapM (fun (a,b) => f a b)
+  vreduceOr := fun v => CircuitOp.orList v
+
+  -- Lists of wires already serve as Vecs here
+  vfromList := fun bs _h => pure bs
+  vtoList   := fun v => pure v
+
+  -- Build a Vec from Bool literals (allocate constants)
+  vfromBools := fun bs _h => bs.mapM CircuitOp.allocConst
+
+  -- Mask a vector by a bit: out[i] = bit ∧ v[i]
+  vmaskBy := fun bit v => v.mapM (fun a => CircuitOp.allocAnd bit a)
+
+def compileNodeLogic {n}
+  (rules : List (Rule n)) (ruleActs : List (List Wire)) (inputs : List (List Wire))
   : Builder ((List Wire) × Wire) := do
-  let nLen :=
-    match inputs with
-    | v :: _ => v.length
-    | _      => 0
+  let acts ← actsFromRuleActWiresA (m := Builder) (n := n) rules ruleActs
+  nodeLogicWithErrorGivenActsA (m := Builder) (n := n) rules acts inputs
 
-  -- Compile each rule to (outVec_i, act_i)
-  let compiled ← (List.zip rules ruleActs).mapM (fun (r, acts) => compileRule r acts inputs)
-  let outs   := compiled.map Prod.fst
-  let acts   := compiled.map Prod.snd
+-- /-- Gate-level version of your `node_logic` + the `runWithError` error bit. -/
+-- def compileNodeLogic {n : Nat}
+--   -- semantic rules (the encoders are inside RuleData; we ignore the Boolean bits inside ActivationBits here,
+--   -- because the actual *wires* come from the layer wiring / selectors)
+--   (rules      : List (Rule n))
+--   -- activation wires for each rule: for `intro` supply [b], for `elim` supply [b1, b2]
+--   (ruleActs   : List (List Wire))
+--   -- dependency inputs (the same list-of-vector shape your semantics expects)
+--   (inputs     : List (List Wire))
+--   : Builder ((List Wire) × Wire) := do
+--   let nLen :=
+--     match inputs with
+--     | v :: _ => v.length
+--     | _      => 0
 
-  -- xor = multiple_xor acts
-  let xorOne ← compileMultipleXor acts
-  -- masks = map (xor ∧ act_i)
-  let masks ← acts.mapM (fun a => allocAnd xorOne a)
+--   -- Compile each rule to (outVec_i, act_i)
+--   let compiled ← (List.zip rules ruleActs).mapM (fun (r, acts) => compileRule r acts inputs)
+--   let outs   := compiled.map Prod.fst
+--   let acts   := compiled.map Prod.snd
 
-  -- masked outs and OR-reduce
-  let masked ← List.zip masks outs |>.mapM (fun (m,ov) => vecMaskByBit m ov)
-  let outVec ← vecOrReduce masked nLen
+--   -- xor = multiple_xor acts
+--   let xorOne ← compileMultipleXor acts
+--   -- masks = map (xor ∧ act_i)
+--   let masks ← acts.mapM (fun a => allocAnd xorOne a)
 
-  -- error bit = (¬xor) ∧ node_selected, where node_selected = any input bit is true
-  let sel ← anyOfVecs inputs
-  let notX ← allocNot xorOne
-  let err ← allocAnd notX sel
+--   -- masked outs and OR-reduce
+--   let masked ← List.zip masks outs |>.mapM (fun (m,ov) => vecMaskByBit m ov)
+--   let outVec ← vecOrReduce masked nLen
 
-  pure (outVec, err)
+--   -- error bit = (¬xor) ∧ node_selected, where node_selected = any input bit is true
+--   let sel ← anyOfVecs inputs
+--   let notX ← allocNot xorOne
+--   let err ← allocAnd notX sel
+
+--   pure (outVec, err)
 
 /-- Activation arity (metadata), ignoring the booleans inside. -/
 def actArity : ActivationBits → Nat
@@ -2473,17 +2529,13 @@ def actWiresWellFormed (expected : List Nat) (given : List (List Wire)) : Bool :
     `deps` is the list of dependency vectors (wires) from the previous layer. -/
 def compileNode {n : Nat}
   (node         : CircuitNode n)
-  (ruleActWires : List (List Wire))   -- for each rule, the wires that activate it
+  (ruleActWires : List (List Wire))
   (deps         : List (List Wire))
   : Builder ((List Wire) × Wire) := do
-  -- (Optional) sanity: check arities; if mismatch, produce 0-vector + err=true
   let ok := actWiresWellFormed (nodeActArities node) ruleActWires
   if !ok then
-    let nLen :=
-      match deps with
-      | v :: _ => v.length
-      | _      => 0
-    let z ← allocConstVec nLen false
+    let nLen := match deps with | v::_ => v.length | _ => 0
+    let z   ← allocConstVec nLen false
     let one ← allocConst true
     pure (z, one)
   else
@@ -3166,34 +3218,6 @@ def runCompiledFromDLDS (d : DLDS) :
 
 end CircuitOp
 
-
--- Interpret the tagless algebra in the gate-level builder
-instance : BitVecAlg CircuitOp.Builder where
-  Bit := CircuitOp.Wire
-  Vec := fun _ => List CircuitOp.Wire
-
-  const  := CircuitOp.allocConst
-  buf    := CircuitOp.allocBuf
-  bnot   := CircuitOp.allocNot
-  band   := CircuitOp.allocAnd
-  bor    := CircuitOp.allocOr
-  bxor   := CircuitOp.allocXor
-
-  vconst    := fun {n} b => CircuitOp.allocConstVec n b
-  vmap      := fun f v => v.mapM f
-  vzipWith  := fun f v1 v2 => (List.zip v1 v2).mapM (fun (a,b) => f a b)
-  vreduceOr := fun v => CircuitOp.orList v
-
-  -- Lists of wires already serve as Vecs here
-  vfromList := fun bs _h => pure bs
-  vtoList   := fun v => pure v
-
-  -- Build a Vec from Bool literals (allocate constants)
-  vfromBools := fun bs _h => bs.mapM CircuitOp.allocConst
-
-  -- Mask a vector by a bit: out[i] = bit ∧ v[i]
-  vmaskBy := fun bit v => v.mapM (fun a => CircuitOp.allocAnd bit a)
-
 /-- Gate-level node logic driven by the generic tagless function.
     `ruleActs` supplies, per rule: `[b]` for intro, `[b1,b2]` for elim. -/
 def compileNodeLogic_tagless {n}
@@ -3285,3 +3309,31 @@ def D0 : CircuitOp.DLDS :=
         init.map (fun (v : List.Vector Bool (CircuitOp.buildUniverse D0).length) => v.toList)
       -- use `repr` for nested lists
       s!"layers={layers.length}, init={repr initB}, outs={repr outsB}, hadErr={hadErr}"
+
+def n := 4
+def enc : List.Vector Bool n := ⟨[false,false,true,false], by decide⟩
+def rI : Rule n := mkIntroRule 0 enc true
+def rE : Rule n := mkElimRule 1 true true
+def node : CircuitNode n :=
+  { rules := [rI, rE], nodupIds := by simp [rI, rE, mkIntroRule, mkElimRule] }
+def layer : GridLayer n :=
+  { nodes := [node],
+    incoming := [ [ [(0,1)], [(0,0),(0,3)] ] ] }
+def init : List (List.Vector Bool n) :=
+  [ ⟨[true,false,true,false], by decide⟩
+  , ⟨[false,false,false,false], by decide⟩
+  ]
+
+#eval CircuitOp.checkAgainstSemanticsAt [layer] init ⟨0, by decide⟩ ⟨0, by decide⟩
+
+@[simp] lemma CircuitOp.compileNodeLogic_def
+  {n}
+  (rules  : List (Rule n))
+  (actsW  : List (List Wire))
+  (inputs : List (List Wire)) :
+  CircuitOp.compileNodeLogic (n := n) rules actsW inputs
+    =
+  (do
+    let acts ← actsFromRuleActWiresA (m := CircuitOp.Builder) (n := n) rules actsW
+    nodeLogicWithErrorGivenActsA (m := CircuitOp.Builder) (n := n) rules acts inputs
+  ) := rfl
