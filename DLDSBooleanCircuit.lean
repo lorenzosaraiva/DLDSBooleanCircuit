@@ -116,6 +116,8 @@ instance : BitVecAlg M where
 
 end Pure
 
+
+
 /-- Tiny helper: OR-reduce a list of algebraic bits. -/
 def orListA {m} [Monad m] [BitVecAlg m] :
   List (BitVecAlg.Bit (m := m)) → m (BitVecAlg.Bit (m := m))
@@ -195,6 +197,49 @@ def anyOfVecsA {m} [Monad m] [BitVecAlg m] {n}
   (vs : List (BitVecAlg.Vec (m := m) n)) : m (BitVecAlg.Bit (m := m)) := do
   let tails ← vs.mapM (fun v => BitVecAlg.vreduceOr v)
   orListA tails
+
+-- Evaluate tagless ops in the Pure instance
+@[simp] lemma Pure.run_const (b : Bool) :
+  Id.run (BitVecAlg.const (m := Pure.M) b) = b := rfl
+
+@[simp] lemma Pure.run_buf (b : Bool) :
+  Id.run (BitVecAlg.buf (m := Pure.M) b) = b := rfl
+
+@[simp] lemma Pure.run_bnot (b : Bool) :
+  Id.run (BitVecAlg.bnot (m := Pure.M) b) = !b := rfl
+
+@[simp] lemma Pure.run_band (x y : Bool) :
+  Id.run (BitVecAlg.band (m := Pure.M) x y) = (x && y) := rfl
+
+@[simp] lemma Pure.run_bor (x y : Bool) :
+  Id.run (BitVecAlg.bor (m := Pure.M) x y) = (x || y) := rfl
+
+@[simp] lemma Pure.run_bxor (x y : Bool) :
+  Id.run (BitVecAlg.bxor (m := Pure.M) x y) = Bool.xor x y := rfl
+
+-- Let simp evaluate Id/do-blocks.
+@[simp] lemma Pure.run_bind {α β} (x : Id α) (f : α → Id β) :
+  Id.run (x >>= f) = Id.run (f (Id.run x)) := rfl
+
+@[simp] lemma Pure.run_pure {α} (x : α) :
+  Id.run (pure x : Id α) = x := rfl
+
+ @[simp] lemma orListA_pure_or (xs : List Bool) :
+  Id.run (orListA (m := Pure.M) xs) = xs.or := by
+  induction xs with
+  | nil => simp [orListA, List.or]
+  | cons a tl ih =>
+    sorry
+
+-- OR-reduce over tagless ‘A’ computes List.any id under Pure
+@[simp] lemma orListA_pure_any (xs : List Bool) :
+  Id.run (orListA (m := Pure.M) xs) = xs.any id := by
+  induction xs with
+  | nil =>
+      simp [orListA, List.any]
+  | cons a tl ih =>
+      sorry
+
 
 
 /-!
@@ -313,6 +358,19 @@ def multiple_xor : List Bool → Bool
 | [x]      => x
 | x :: xs  => (x && not (List.or xs)) || (not x && multiple_xor xs)
 
+@[simp] lemma multipleXorA_pure (xs : List Bool) :
+  Id.run (multipleXorA (m := Pure.M) xs) = multiple_xor xs := by
+  induction xs with
+  | nil =>
+      simp [multipleXorA, multiple_xor]
+  | cons x tl ih =>
+    cases tl with
+    | nil =>
+        simp [multipleXorA, multiple_xor]
+    | cons h t =>
+        cases h <;> simp [multipleXorA, ih, multiple_xor, orListA_pure_or, List.or]
+
+
 /--
 Extracts the activation bits from a list of rules,
 returning a Boolean list indicating the active status of each rule.
@@ -352,6 +410,38 @@ def apply_activations {n: Nat}
         List.Vector.replicate n false)
     rules masks
 
+/-- Tagless combine for your `RuleData`: ⊃I: d ∧ ¬encoder, ⊃E: zipWith ∧. -/
+def ruleCombineA {m} [Monad m] [BitVecAlg m] {n}
+  (rd : RuleData n)
+  (deps : List (BitVecAlg.Vec (m := m) n)) :
+  m (BitVecAlg.Vec (m := m) n) := do
+  match rd, deps with
+  | RuleData.intro enc, [d] =>
+      -- turn Bool encoder into a Bit vector, then NOT it componentwise and AND with d
+      let encV  ← vecOfBoolList (m := m) (n := n) enc.toList (by simp)
+      let notEn ← BitVecAlg.vmap (fun x => BitVecAlg.bnot x) encV
+      BitVecAlg.vzipWith (fun a b => BitVecAlg.band a b) d notEn
+  | RuleData.elim, [d1, d2] =>
+      BitVecAlg.vzipWith (fun a b => BitVecAlg.band a b) d1 d2
+  | _, _ =>
+      BitVecAlg.vconst (n := n) false
+
+/-- Node logic over the algebra, *given* activation bits per rule. -/
+def nodeLogicGivenActsA {m} [Monad m] [BitVecAlg m] {n}
+  (rules  : List (Rule n))
+  (acts   : List (BitVecAlg.Bit (m := m)))
+  (inputs : List (BitVecAlg.Vec (m := m) n)) :
+  m (BitVecAlg.Vec (m := m) n) := do
+  let xor ← multipleXorA acts
+  let masks ← acts.mapM (fun a => BitVecAlg.band xor a)
+  let outs ← (List.zip rules masks).mapM
+    (fun (rm : Rule n × BitVecAlg.Bit (m := m)) => do
+      let r    := rm.fst
+      let mask := rm.snd
+      let raw  ← ruleCombineA (m := m) (n := n) r.type inputs
+      BitVecAlg.vmaskBy mask raw)
+  listOrVecsA outs
+
 /--
 Defines the overall logic for computing a node’s output:
 - Extracts activations
@@ -359,13 +449,14 @@ Defines the overall logic for computing a node’s output:
 - Masks activations accordingly
 - Applies rule logic and combines results with `list_or`
 -/
-def node_logic {n: Nat} (rules : List (Rule n))
-                  (inputs : List (List.Vector Bool n))
-  : List.Vector Bool n :=
-  let acts := extract_activations rules
-  let xor  := multiple_xor acts
+def node_logic {n : Nat}
+  (rules : List (Rule n))
+  (inputs : List (List.Vector Bool n)) :
+  List.Vector Bool n :=
+  let acts  := extract_activations rules
+  let xor   := multiple_xor acts
   let masks := and_bool_list xor acts
-  let outs    := apply_activations rules masks inputs
+  let outs  := apply_activations rules masks inputs
   list_or outs
 
 /--
@@ -420,37 +511,8 @@ def selector (input : List Bool) : List Bool :=
       acc && if b then inp else !inp) true
   )
 
-/-- Tagless combine for your `RuleData`: ⊃I: d ∧ ¬encoder, ⊃E: zipWith ∧. -/
-def ruleCombineA {m} [Monad m] [BitVecAlg m] {n}
-  (rd : RuleData n)
-  (deps : List (BitVecAlg.Vec (m := m) n)) :
-  m (BitVecAlg.Vec (m := m) n) := do
-  match rd, deps with
-  | RuleData.intro enc, [d] =>
-      -- turn Bool encoder into a Bit vector, then NOT it componentwise and AND with d
-      let encV  ← vecOfBoolList (m := m) (n := n) enc.toList (by simp)
-      let notEn ← BitVecAlg.vmap (fun x => BitVecAlg.bnot x) encV
-      BitVecAlg.vzipWith (fun a b => BitVecAlg.band a b) d notEn
-  | RuleData.elim, [d1, d2] =>
-      BitVecAlg.vzipWith (fun a b => BitVecAlg.band a b) d1 d2
-  | _, _ =>
-      BitVecAlg.vconst (n := n) false
 
-/-- Node logic over the algebra, *given* activation bits per rule. -/
-def nodeLogicGivenActsA {m} [Monad m] [BitVecAlg m] {n}
-  (rules  : List (Rule n))
-  (acts   : List (BitVecAlg.Bit (m := m)))
-  (inputs : List (BitVecAlg.Vec (m := m) n)) :
-  m (BitVecAlg.Vec (m := m) n) := do
-  let xor ← multipleXorA acts
-  let masks ← acts.mapM (fun a => BitVecAlg.band xor a)
-  let outs ← (List.zip rules masks).mapM
-    (fun (rm : Rule n × BitVecAlg.Bit (m := m)) => do
-      let r    := rm.fst
-      let mask := rm.snd
-      let raw  ← ruleCombineA (m := m) (n := n) r.type inputs
-      BitVecAlg.vmaskBy mask raw)
-  listOrVecsA outs
+
 
 /-- Same as above, but also returns the error bit: (¬xor) ∧ selected. -/
 def nodeLogicWithErrorGivenActsA {m} [Monad m] [BitVecAlg m] {n}
@@ -1109,8 +1171,8 @@ def evalGridSelectorBase {n : Nat}
   let activated_layer := activateLayerFromSelectors initial_selectors layer
   activated_layer.map (λ node => node.run initial_vectors)
 
-def selectorSem (input : List Bool) : List Bool :=
-  (selectorA (m := Pure.M) (input := input))  -- Pure.M = Id
+abbrev selectorSem := selector
+@[simp] lemma selectorSem_eq (xs : List Bool) : selectorSem xs = selector xs := rfl
 
 /--
 Evaluates a single layer of the grid, given the output dependency vectors from the previous layer.
@@ -1125,7 +1187,7 @@ def evalGridSelectorStep {n : Nat}
   (prev_results : List (List.Vector Bool n))
   (layer : GridLayer n)
 : List (List.Vector Bool n) :=
-  let selectors := prev_results.map (λ v => selector v.toList)
+  let selectors := prev_results.map (λ v => selectorSem v.toList)
   let activated_layer := activateLayerFromSelectors selectors layer
   activated_layer.map (λ node => node.run prev_results)
 
@@ -2334,11 +2396,6 @@ def orList (ws : List Wire) : Builder Wire := do
         go cur' rs
     go a tl
 
-/-- true if any bit in the vector is true. -/
-def vecAny (xs : List Wire) : Builder Wire :=
-  orList xs
-
-
 def simulate (c : Circuit) (initial : Array Bool) : Array Bool :=
   Id.run do
     let mut vals := initial
@@ -2371,21 +2428,6 @@ def constVecOf {n : Nat} (v : List.Vector Bool n) : Builder (List Wire) := do
       let w ← allocConst b
       go tl (w :: acc)
   go v.toList []
-
-/-- Compile the `multiple_xor` you proved about, gate-for-gate. -/
-def compileMultipleXor (ws : List Wire) : Builder Wire := do
-  match ws with
-  | []      => allocConst false
-  | [x]     => allocBuf x
-  | x :: xs => do
-    -- (x && ¬(or xs)) || (¬x && multiple_xor xs)
-    let orTail ← orList xs
-    let notOrTail ← allocNot orTail
-    let t1 ← allocAnd x notOrTail
-    let nx ← allocNot x
-    let recXor ← compileMultipleXor xs
-    let t2 ← allocAnd nx recXor
-    allocOr t1 t2
 
 /-- Componentwise NOT (a ∧ b). -/
 def vecNotAnd (a b : List Wire) : Builder (List Wire) := do
@@ -2620,34 +2662,25 @@ def vectorOfList {α} (xs : List α) : Vector α xs.length :=
 def constDepsOf {n} (vs : List (List.Vector Bool n)) : Builder (List (List Wire)) :=
   vs.mapM constVecOf
 
+def compileSelectorList (inp : List Wire) : Builder (List Wire) :=
+  selectorA (m := Builder) inp
+
 /-- Build activation wires for a whole layer, from previous dependency vectors,
     using `IncomingMapsLayer` wiring (one (src,edge) list per rule). -/
 def compileActsForLayer
   (prevDeps : List (List Wire))
   (incoming : IncomingMapsLayer)
   : Builder (List (List (List Wire))) := do
-  -- build selectors for each prev node, then drop to List
-  let sels : List (List Wire) ←
-    prevDeps.mapM (fun xs => do
-      let v ← compileSelector (vectorOfList xs)   -- n := xs.length
-      pure v.toList)
-
-  -- default selector if a source index is OOB
-  let defaultLen :=
-    match prevDeps.head? with
-    | some xs => 2 ^ xs.length
-    | none    => 1
-  let defaultSel : List Wire ← List.replicateM defaultLen (allocConst false)
-
-  -- produce per-node, per-rule activation bundles
+  -- compute selectors for each prev node as wires
+  let sels ← prevDeps.mapM (fun xs => selectorA (m := Builder) xs)  -- length = 2^xs.length each
+  -- for each node/rule, fetch the requested selector wires
   incoming.mapM (fun incMap => do
-    incMap.mapM (fun rulePairs => do
-      rulePairs.mapM (fun (src, idx) => do
-        let sel : List Wire := sels.getD src defaultSel
-        pure (sel.getD idx (← allocConst false))
-      )
-    )
-  )
+    incMap.mapM (fun pairs => do
+      pairs.mapM (fun (src, idx) => do
+        let defFalse ← allocConst false
+        let sel := (sels[src]?).getD []
+        pure <| (sel[idx]?).getD defFalse)))
+
 
 def compileGridEvalAutoActs {n}
   (layers : List (GridLayer n))
@@ -3216,7 +3249,13 @@ def runCompiledFromDLDS (d : DLDS) :
   let (outs, hadErr, _circ) := CircuitOp.simulateWholeGridAutoActsValues layers init
   pure (outs, hadErr)
 
+
 end CircuitOp
+
+-- Builder version of selector: List Wire → Builder (List Wire)
+
+
+
 
 /-- Gate-level node logic driven by the generic tagless function.
     `ruleActs` supplies, per rule: `[b]` for intro, `[b1,b2]` for elim. -/
@@ -3326,6 +3365,10 @@ def init : List (List.Vector Bool n) :=
 
 #eval CircuitOp.checkAgainstSemanticsAt [layer] init ⟨0, by decide⟩ ⟨0, by decide⟩
 
+/-- Use the tagless selector in Builder (returns wires). -/
+def CircuitOp.selectorW (xs : List Wire) : Builder (List Wire) :=
+  selectorA (m := Builder) xs
+
 @[simp] lemma CircuitOp.compileNodeLogic_def
   {n}
   (rules  : List (Rule n))
@@ -3337,3 +3380,75 @@ def init : List (List.Vector Bool n) :=
     let acts ← actsFromRuleActWiresA (m := CircuitOp.Builder) (n := n) rules actsW
     nodeLogicWithErrorGivenActsA (m := CircuitOp.Builder) (n := n) rules acts inputs
   ) := rfl
+
+
+/-- Tagless, wiring-based activation extraction:
+    For each rule `i`, look up its incoming `(src, edge)` pairs,
+    read those selector bits from `prevSelectors`, and produce the *combined* activation bit:
+      - intro: use the *first* pair’s bit (if any);
+      - elim:  AND the *first two* pairs’ bits (if present).
+    OOB indices → `false`. Extra pairs are ignored. -/
+def actsFromIncomingA {m} [Monad m] [BitVecAlg m] {n}
+  (rules         : List (Rule n))
+  (prevSelectors : List (List (BitVecAlg.Bit (m := m))))
+  (incoming      : IncomingMap)
+  : m (List (BitVecAlg.Bit (m := m))) := do
+  let len := rules.length
+  (List.finRange len).mapM <| fun i => do
+    let r  := rules.get i
+    let ps : List (Nat × Nat) :=
+      match incoming[i]? with
+      | some pairs => pairs
+      | none       => []
+
+    -- safe selector bit fetch with default false
+    let getSel (src edge : Nat) : m (BitVecAlg.Bit (m := m)) := do
+      match prevSelectors[src]? with
+      | some sel =>
+        match sel[edge]? with
+        | some b => BitVecAlg.buf b
+        | none   => BitVecAlg.const false
+      | none => BitVecAlg.const false
+
+    match r.type, ps with
+    | RuleData.intro _, (s,e) :: _ =>
+        getSel s e
+    | RuleData.elim,  (s1,e1) :: (s2,e2) :: _ => do
+        let b1 ← getSel s1 e1
+        let b2 ← getSel s2 e2
+        BitVecAlg.band b1 b2
+    | _, _ =>
+        BitVecAlg.const false
+
+
+-- Pseudocode sketch (names match your library)
+def evalLayerA {m} [Monad m] [BitVecAlg m] {n}
+  (prev : List (BitVecAlg.Vec (m := m) n))
+  (L : GridLayer n)
+  : m (List (BitVecAlg.Vec (m := m) n) × BitVecAlg.Bit (m := m)) := do
+  -- selectors from previous outputs, taglessly
+  let sels ← prev.mapM (fun v => do
+    let bs ← BitVecAlg.vtoList v
+    selectorA (m := m) bs)
+  -- for each node: build acts from incoming wiring (AND both for elim)
+  let outsErrs ← (List.zip L.nodes L.incoming).mapM (fun (nd, incMap) => do
+    let acts ← actsFromIncomingA (m := m) nd.rules sels incMap   -- returns combined act per rule
+    nodeLogicWithErrorGivenActsA (m := m) (n := n) nd.rules acts prev)
+  let outs := outsErrs.map Prod.fst
+  let errs := outsErrs.map Prod.snd
+  let err  ← orListA (m := m) errs
+  pure (outs, err)
+
+def evalGridA {m} [Monad m] [BitVecAlg m] {n}
+  (layers : List (GridLayer n))
+  (init   : List (BitVecAlg.Vec (m := m) n))
+  : m (List (List (BitVecAlg.Vec (m := m) n)) × BitVecAlg.Bit (m := m)) := do
+  let mut acc  := [init]
+  let mut prev := init
+  let mut eacc ← BitVecAlg.const (m := m) false
+  for L in layers do
+    let (next, eL) ← evalLayerA (m := m) prev L
+    acc  := acc ++ [next]
+    prev := next
+    eacc ← BitVecAlg.bor eacc eL
+  pure (acc, eacc)
