@@ -1171,8 +1171,6 @@ def evalGridSelectorBase {n : Nat}
   let activated_layer := activateLayerFromSelectors initial_selectors layer
   activated_layer.map (λ node => node.run initial_vectors)
 
-abbrev selectorSem := selector
-@[simp] lemma selectorSem_eq (xs : List Bool) : selectorSem xs = selector xs := rfl
 
 /--
 Evaluates a single layer of the grid, given the output dependency vectors from the previous layer.
@@ -1187,7 +1185,7 @@ def evalGridSelectorStep {n : Nat}
   (prev_results : List (List.Vector Bool n))
   (layer : GridLayer n)
 : List (List.Vector Bool n) :=
-  let selectors := prev_results.map (λ v => selectorSem v.toList)
+  let selectors := prev_results.map (λ v => selector v.toList)
   let activated_layer := activateLayerFromSelectors selectors layer
   activated_layer.map (λ node => node.run prev_results)
 
@@ -2323,7 +2321,6 @@ def allocXor (a b : Wire) : Builder Wire := do
   emit (Gate.xor a b out)
   pure out
 
-
 def allocConstVec (n : Nat) (val : Bool) : Builder (List Wire) := do
   let rec go (k : Nat) (acc : List Wire) := do
     if k = 0 then pure acc.reverse
@@ -2331,56 +2328,6 @@ def allocConstVec (n : Nat) (val : Bool) : Builder (List Wire) := do
       let w ← allocConst val
       go (k-1) (w :: acc)
   go n []
-
-def vecNot (xs : List Wire) : Builder (List Wire) :=
-  xs.mapM allocNot
-
-def vecAnd (xs ys : List Wire) : Builder (List Wire) :=
-  (List.zip xs ys).mapM (fun (a,b) => allocAnd a b)
-
-def vecAndReduce (ws : List Wire) : Builder Wire := do
-  match ws with
-  | []      => allocConst true
-  | [w]     => pure w
-  | w1::w2::rest =>
-    let mut acc ← allocAnd w1 w2
-    for w in rest do
-      acc ← allocAnd acc w
-    pure acc
-
-def vecOr (xs ys : List Wire) : Builder (List Wire) :=
-  (List.zip xs ys).mapM (fun (a,b) => allocOr a b)
-
-/-- Mask a vector by one bit: out[i] = bit ∧ xs[i]. -/
-def vecMaskByBit (bit : Wire) (xs : List Wire) : Builder (List Wire) :=
-  xs.mapM (fun a => allocAnd bit a)
-
-/-- OR-reduce a list of vectors (returns all-false vector if empty). -/
-def vecListOr (vs : List (List Wire)) (n : Nat) : Builder (List Wire) := do
-  match vs with
-  | []      => allocConstVec n false
-  | v :: tl =>
-    let rec fold (acc : List Wire) (rest : List (List Wire)) := do
-      match rest with
-      | [] => pure acc
-      | w :: ws =>
-        let acc' ← vecOr acc w
-        fold acc' ws
-    fold v tl
-
-/-- XOR-reduce a list of wires. Returns const false if empty. -/
-def foldXor (ws : List Wire) : Builder Wire := do
-  match ws with
-  | []      => allocConst false
-  | [a]     => allocBuf a
-  | a :: tl =>
-    let rec go (cur : Wire) (rest : List Wire) := do
-      match rest with
-      | []     => pure cur
-      | b::rs  =>
-        let cur' ← allocXor cur b
-        go cur' rs
-    go a tl
 
 /-- OR-reduce a list of wires. Returns const false if empty. -/
 def orList (ws : List Wire) : Builder Wire := do
@@ -2429,17 +2376,6 @@ def constVecOf {n : Nat} (v : List.Vector Bool n) : Builder (List Wire) := do
       go tl (w :: acc)
   go v.toList []
 
-/-- Componentwise NOT (a ∧ b). -/
-def vecNotAnd (a b : List Wire) : Builder (List Wire) := do
-  let zipped := (List.zip a b)
-  zipped.mapM (fun (x,y) => do
-    let xy ← allocAnd x y
-    allocNot xy)
-
-/-- OR-reduce a list of vector wires; if empty, all-false of length `n`. -/
-def vecOrReduce (vs : List (List Wire)) (n : Nat) : Builder (List Wire) :=
-  vecListOr vs n
-
 /-- Reduce all bits from a list of vectors with OR (used to detect selection). -/
 def anyOfVecs (vs : List (List Wire)) : Builder Wire := do
   let flat := vs.foldl (· ++ ·) []
@@ -2450,40 +2386,6 @@ def isRuleActiveW : ActivationBits → (List Wire) → Builder Wire
   | ActivationBits.intro _,    [b]      => allocBuf b
   | ActivationBits.elim _ _,   [b1, b2] => allocAnd b1 b2
   | _,                         _        => allocConst false   -- defensive (ill-formed)
-
--- === Compiling "combine" ===
-
-/-- Combine for ⊃E: zipWith AND on the two inputs; else all-false of length `n`. -/
-def compileElimCombine (n : Nat) (deps : List (List Wire)) : Builder (List Wire) := do
-  match deps with
-  | [d1, d2] => vecAnd d1 d2
-  | _        => allocConstVec n false
-
-/-- Combine for ⊃I: `deps` must be `[d]`; compute d ∧ ¬encoder. -/
-def compileIntroCombine {n : Nat}
-  (encoder : List.Vector Bool n) (deps : List (List Wire)) : Builder (List Wire) := do
-  match deps with
-  | [d] =>
-      let encWires ← (encoder.toList).mapM allocConst
-      let notEnc   ← vecNot encWires
-      vecAnd d notEnc
-  | _   => allocConstVec n false
-
-/-- Given a semantic `Rule n` and its activation wires, build `(ruleOutVec, actBit)`. -/
-def compileRule {n : Nat}
-  (r : Rule n) (actBits : List Wire) (deps : List (List Wire)) : Builder ((List Wire) × Wire) := do
-  let act ←
-    match r.activation, actBits with
-    | ActivationBits.intro _,  [b]     => allocBuf b
-    | ActivationBits.elim _ _, [b1,b2] => allocAnd b1 b2
-    | _,                      _        => allocConst false
-  let out ←
-    match r.type with
-    | RuleData.intro enc => compileIntroCombine enc deps
-    | RuleData.elim      => compileElimCombine n deps
-  pure (out, act)
-
-
 
 -- Interpret the tagless algebra in the gate-level builder
 instance : BitVecAlg CircuitOp.Builder where
@@ -2517,42 +2419,6 @@ def compileNodeLogic {n}
   : Builder ((List Wire) × Wire) := do
   let acts ← actsFromRuleActWiresA (m := Builder) (n := n) rules ruleActs
   nodeLogicWithErrorGivenActsA (m := Builder) (n := n) rules acts inputs
-
--- /-- Gate-level version of your `node_logic` + the `runWithError` error bit. -/
--- def compileNodeLogic {n : Nat}
---   -- semantic rules (the encoders are inside RuleData; we ignore the Boolean bits inside ActivationBits here,
---   -- because the actual *wires* come from the layer wiring / selectors)
---   (rules      : List (Rule n))
---   -- activation wires for each rule: for `intro` supply [b], for `elim` supply [b1, b2]
---   (ruleActs   : List (List Wire))
---   -- dependency inputs (the same list-of-vector shape your semantics expects)
---   (inputs     : List (List Wire))
---   : Builder ((List Wire) × Wire) := do
---   let nLen :=
---     match inputs with
---     | v :: _ => v.length
---     | _      => 0
-
---   -- Compile each rule to (outVec_i, act_i)
---   let compiled ← (List.zip rules ruleActs).mapM (fun (r, acts) => compileRule r acts inputs)
---   let outs   := compiled.map Prod.fst
---   let acts   := compiled.map Prod.snd
-
---   -- xor = multiple_xor acts
---   let xorOne ← compileMultipleXor acts
---   -- masks = map (xor ∧ act_i)
---   let masks ← acts.mapM (fun a => allocAnd xorOne a)
-
---   -- masked outs and OR-reduce
---   let masked ← List.zip masks outs |>.mapM (fun (m,ov) => vecMaskByBit m ov)
---   let outVec ← vecOrReduce masked nLen
-
---   -- error bit = (¬xor) ∧ node_selected, where node_selected = any input bit is true
---   let sel ← anyOfVecs inputs
---   let notX ← allocNot xorOne
---   let err ← allocAnd notX sel
-
---   pure (outVec, err)
 
 /-- Activation arity (metadata), ignoring the booleans inside. -/
 def actArity : ActivationBits → Nat
@@ -2626,28 +2492,6 @@ def compileGridEval {n : Nat}
   let (rest, e) ← go initDeps layers actsGrid [] zero_
   pure (initDeps :: rest, e)
 
-/-- Gate version of your `selector : List Bool → List Bool`. -/
-def compileSelector (inp : Vector Wire n) : Builder (Vector Wire (2^n)) := do
-  let mut outs := #[]
-  for i in List.range (2^n) do
-    let bits := natToBits i n  -- List Bool of length n
-    let mut conds := #[]
-    for idx in List.range n do
-      if h : idx < n then
-        let finIdx : Fin n := ⟨idx, h⟩
-        let bit := bits.getD idx false
-        let wire := inp.get finIdx
-        let w ← if bit then
-          pure wire
-        else
-          allocNot wire
-        conds := conds.push w
-    let eqᵢ ← vecAndReduce conds.toList
-    outs := outs.push eqᵢ
-  let outList := outs.toList
-  pure (Vector.ofFn (fun i => outList[i]!))
-
-
 def List.replicateM {m : Type u → Type v} [Monad m] {α : Type u} (n : Nat) (x : m α) : m (List α) :=
   match n with
   | 0     => pure []
@@ -2656,14 +2500,8 @@ def List.replicateM {m : Type u → Type v} [Monad m] {α : Type u} (n : Nat) (x
     let rest ← replicateM n x
     pure (a :: rest)
 
-def vectorOfList {α} (xs : List α) : Vector α xs.length :=
-  Vector.ofFn (n := xs.length) (fun i => xs.get i)
-
 def constDepsOf {n} (vs : List (List.Vector Bool n)) : Builder (List (List Wire)) :=
   vs.mapM constVecOf
-
-def compileSelectorList (inp : List Wire) : Builder (List Wire) :=
-  selectorA (m := Builder) inp
 
 /-- Build activation wires for a whole layer, from previous dependency vectors,
     using `IncomingMapsLayer` wiring (one (src,edge) list per rule). -/
@@ -3252,10 +3090,6 @@ def runCompiledFromDLDS (d : DLDS) :
 
 end CircuitOp
 
--- Builder version of selector: List Wire → Builder (List Wire)
-
-
-
 
 /-- Gate-level node logic driven by the generic tagless function.
     `ruleActs` supplies, per rule: `[b]` for intro, `[b1,b2]` for elim. -/
@@ -3452,3 +3286,13 @@ def evalGridA {m} [Monad m] [BitVecAlg m] {n}
     prev := next
     eacc ← BitVecAlg.bor eacc eL
   pure (acc, eacc)
+
+/-- For any BitVecAlg instance, evalGridA is natural in algebra morphisms.
+    Instantiating the morphism Builder→Pure (simulate+read) yields equality of results. -/
+theorem evalGridA_builder_sound
+  (layers : List (GridLayer n))
+  (init   : List (List.Vector Bool n)) :
+  let ((outsW, errW), circ) := CircuitOp.runBuilder (CircuitOp.compileWholeGridAutoActs layers init)
+  let vals := CircuitOp.simulate circ #[]
+  (outsW.map (·.map (CircuitOp.readVec vals)), vals[errW]!)
+    = evalGridSelectorWithError layers init
