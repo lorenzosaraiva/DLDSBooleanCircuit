@@ -7,7 +7,6 @@ import Mathlib.Data.Vector.Defs
 import Mathlib.Data.Vector.Zip
 import Mathlib.Data.Fin.Basic
 
-
 /-!
 # DLDS Boolean Circuit Formalization
 
@@ -85,15 +84,6 @@ Represents a node in the Boolean circuit (corresponds to a node in the DLDS).
 structure CircuitNode (n : ℕ) where
   rules    : List (Rule n)
   nodupIds : (rules.map (·.ruleId)).Nodup
-
-/--
-Represents the N × N grid structure for the Boolean circuit.
-- `nodes`: List of all circuit nodes.
-- `grid_size`: Total number of nodes in the grid.
--/
-structure Grid (n : Nat) (Rule : Type) where
-  nodes : List Rule
-  grid_size : nodes.length =  n * n
 
 /--
 Constructs an implication introduction rule for formulas of length `n`.
@@ -731,47 +721,46 @@ This section implements the layered evaluation of the DLDS Boolean circuit grid.
 Represents how each rule in a node receives its activation from previous layer selectors.
 Each element is a pair `(source_node_idx, edge_idx)` indicating the source selector and the bit.
 -/
-abbrev IncomingMap := List (List (Nat × Nat))
+abbrev PathMap := List (List (Nat × Nat))
 
 
 /--
-Maps each node in a layer to its IncomingMap (one per node).
+Maps each node in a layer to its PathMap (one per node).
 -/
-abbrev IncomingMapsLayer := List IncomingMap
+abbrev PathMapsLayer := List PathMap
 
 /--
-Full selector wiring for all layers: one IncomingMapsLayer per grid layer.
+Full selector wiring for all layers: one PathMapsLayer per grid layer.
 -/
-abbrev IncomingMaps := List IncomingMapsLayer
+abbrev PathMaps := List PathMapsLayer
 
 /--
 Represents a single layer of the DLDS Boolean circuit grid.
 
 - `nodes`: The circuit nodes for this layer.
-- `incoming`: Wiring information describing, for each node/rule, how to fetch activations from previous selectors.
+- `Path`: Wiring information describing, for each node/rule, how to fetch activations from previous selectors.
 -/
 structure GridLayer (n : ℕ) where
   nodes : List (CircuitNode n)
-  incoming : IncomingMapsLayer
-
+  Path : PathMapsLayer
 
 /--
-Constructs the list of rules for a node after updating activation bits based on incoming selectors.
+Constructs the list of rules for a node after updating activation bits based on Path selectors.
 
-- For each rule, fetches the relevant selector bit(s) as indicated by `incoming_map` and sets the activation bits accordingly.
+- For each rule, fetches the relevant selector bit(s) as indicated by `Path_map` and sets the activation bits accordingly.
 -/
 def make_new_rules {n : ℕ}
   (node : CircuitNode n)
   (prev_selectors : List (List Bool))
-  (incoming_map : IncomingMap)
+  (Path_map : PathMap)
   : List (Rule n) :=
   let len := node.rules.length
   List.finRange len |>.map (fun i =>
     let rule := node.rules.get i
 
     let ps : List (Nat × Nat) :=
-      if h : i.val < incoming_map.length then
-        incoming_map.get ⟨i.val, h⟩
+      if h : i.val < Path_map.length then
+        Path_map.get ⟨i.val, h⟩
       else
         []
 
@@ -799,8 +788,8 @@ def make_new_rules {n : ℕ}
   ({ r with activation := a }).ruleId = r.ruleId := rfl
 
 lemma make_new_rules_map_ruleId_eq
-  {n : ℕ} (node : CircuitNode n) (prev_selectors : List (List Bool)) (incoming_map : IncomingMap) :
-  (make_new_rules node prev_selectors incoming_map).map (·.ruleId)
+  {n : ℕ} (node : CircuitNode n) (prev_selectors : List (List Bool)) (Path_map : PathMap) :
+  (make_new_rules node prev_selectors Path_map).map (·.ruleId)
   = node.rules.map (·.ruleId) := by
   apply List.ext_get
   · simp [make_new_rules]
@@ -815,16 +804,16 @@ lemma make_new_rules_map_ruleId_eq
 
 /--
 Given a node, updates all its rules with fresh activation bits
-according to the provided selectors and incoming wiring.
+according to the provided selectors and Path wiring.
 
 Returns a new CircuitNode with updated rules and the nodup proof.
 -/
 def activateNodeFromSelectors {n : Nat}
   (prev_selectors : List (List Bool))
-  (incoming_map   : IncomingMap)
+  (Path_map   : PathMap)
   (node           : CircuitNode n)
 : CircuitNode n :=
-  let new_rules := make_new_rules node prev_selectors incoming_map
+  let new_rules := make_new_rules node prev_selectors Path_map
   -- Prove (map ruleId new_rules) = (map ruleId node.rules) indexwise, then reuse node.nodupIds
   let nodupIds :=
     by
@@ -866,11 +855,11 @@ def activateLayerFromSelectors {n : Nat}
 : List (CircuitNode n) :=
   List.finRange layer.nodes.length |>.map (fun i =>
     let node := layer.nodes.get i
-    let incoming_map :=
-      match layer.incoming[i.val]? with
+    let Path_map :=
+      match layer.Path[i.val]? with
       | some m => m
       | none   => []
-    activateNodeFromSelectors prev_selectors incoming_map node
+    activateNodeFromSelectors prev_selectors Path_map node
   )
 
 /--
@@ -1409,7 +1398,7 @@ let real_goal_idx := Fin.cast layer_length_eq.symm goal_idx
 # Full Grid Evaluation Correctness Theorem
 
 Let `layers` be a list of `GridLayer`s (each representing a layer of nodes in the DLDS Boolean circuit grid).
-Let `incomingMaps` (embedded in each layer) specify the selector-driven wiring.
+Let `PathMaps` (embedded in each layer) specify the selector-driven wiring.
 Let `initial_vectors` be the initial dependency vectors for the first layer.
 Let `initial_selectors` provide the selectors for that initial layer (only used for padding; not actually read for layer 0 computation).
 
@@ -1447,7 +1436,7 @@ by
     cases goal_layer using Fin.cases with
     | zero =>
         let selectors := initial_selectors
-        let incoming_map := layer_hd.incoming
+        let Path_map := layer_hd.Path
         let act_layer := activateLayerFromSelectors selectors layer_hd
         have act_layer_len : act_layer.length = layer_hd.nodes.length :=
           activateLayerFromSelectors_length selectors layer_hd
@@ -1931,7 +1920,7 @@ by
 /--
   Soundness for the final circuit output: If the output is true, then
   either an error was detected, or the output at the target node is all-false and
-  the output is proof-theoretically correct (via `GoalNodeCorrect`).
+  the output is correct (via `GoalNodeCorrect`).
 -/
 theorem final_circuit_output_sound
   {n : ℕ}
