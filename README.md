@@ -29,22 +29,32 @@ This allows you to experiment with the definitions without setting up Lean local
    cd DLDSBooleanCircuit
 3. Open DLDSBooleanCircuit.lean in VS Code with the Lean4 extension, or build it with:
    lake build
+   
+### 3. Run in GitHub Codespaces (no local install)
 
-### 3. Repository contents
+Launch a ready-to-use cloud dev environment:
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/<YOUR_GITHUB_USERNAME>/<YOUR_REPO>?quickstart=1)
+
+This opens VS Code in the browser with Lean 4 and the Lean extension preinstalled.
+No local setup required.
+
+> Devcontainer setup adapted from
+> [jeffsantos/lean-project-template](https://github.com/jeffsantos/lean-project-template).
+
+
+### 4. Repository contents
+
 DLDSBooleanCircuit.lean – main Lean development, including:
 - Definition of circuit nodes and activation rules
 - Layer-by-layer grid evaluation with error detection
 - Goal node semantics
 - Global soundness theorem (circuit correctness)
 
-### 4. Reference
+### 5. Reference
+
 This code accompanies the paper:
 
 Lorenzo Saraiva and Hermann Haeusler
 "From Dag-Like Proofs to Boolean Circuits in Lean"
 submitted to FoIKS 2026.
-
-
-
-   git clone https://github.com/<your-username>/DLDSBooleanCircuit.git
-   cd DLDSBooleanCircuit
