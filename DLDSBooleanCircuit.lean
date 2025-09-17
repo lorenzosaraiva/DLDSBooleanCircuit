@@ -63,6 +63,7 @@ Represents the data of a rule for formulas of length `n`:
 inductive RuleData (n : Nat)
   | intro (encoder : List.Vector Bool n)
   | elim
+  | repetition
 
 /--
 Structure representing a single inference rule, including:
@@ -117,6 +118,22 @@ def mkElimRule {n : ℕ} (rid : Nat) (bit1 bit2 : Bool) : Rule n :=
     match deps with
     | [d1, d2] => d1.zipWith (· && ·) d2
     | _        => List.Vector.replicate n false
+}
+
+/--
+Constructs a repetition rule for formulas of length `n`.
+- `bit`: Activation bit for this rule.
+- `combine` returns the input dependency vector.
+-/
+def mkRepetitionRule {n : ℕ} (rid : Nat) (bit : Bool) : Rule n :=
+{
+  ruleId    := rid,
+  activation := ActivationBits.intro bit,
+  type       := RuleData.repetition,
+  combine    := fun deps =>
+    match deps with
+    | [d] => d
+    | _   => List.Vector.replicate n false
 }
 
 
