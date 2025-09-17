@@ -58,3 +58,8 @@ This code accompanies the paper:
 Lorenzo Saraiva and Hermann Haeusler
 "From Dag-Like Proofs to Boolean Circuits in Lean"
 submitted to FoIKS 2026.
+
+## 6. License
+
+This project is released under the MIT License.  
+See the [LICENSE](LICENSE) file for details.
