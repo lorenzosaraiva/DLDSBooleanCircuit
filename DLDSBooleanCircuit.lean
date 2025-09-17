@@ -53,6 +53,7 @@ Represents the type of activation bits for each inference rule.
 inductive ActivationBits
   | intro (bit : Bool)
   | elim (bit1 : Bool) (bit2 : Bool)
+  | repetition (bit : Bool)
   deriving DecidableEq
 
 /--
@@ -153,6 +154,8 @@ def is_rule_active {n: Nat} (r : Rule n) : Bool :=
   match r.activation with
   | ActivationBits.intro b   => b
   | ActivationBits.elim b1 b2 => b1 && b2
+  | ActivationBits.repetition b   => b
+
 
 /--
 Computes whether exactly one element of a Boolean list is `true`.
@@ -798,6 +801,7 @@ def make_new_rules {n : ℕ}
       match rule.activation with
       | ActivationBits.intro _   => ActivationBits.intro b1b2.fst
       | ActivationBits.elim _ _  => ActivationBits.elim b1b2.fst b1b2.snd
+      | ActivationBits.repetition _   => ActivationBits.repetition b1b2.fst
     { rule with activation := newAct }
   )
 
