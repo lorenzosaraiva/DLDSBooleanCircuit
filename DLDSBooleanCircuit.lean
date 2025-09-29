@@ -129,7 +129,7 @@ Constructs a repetition rule for formulas of length `n`.
 def mkRepetitionRule {n : ℕ} (rid : Nat) (bit : Bool) : Rule n :=
 {
   ruleId    := rid,
-  activation := ActivationBits.intro bit,
+  activation := ActivationBits.repetition bit,
   type       := RuleData.repetition,
   combine    := fun deps =>
     match deps with
