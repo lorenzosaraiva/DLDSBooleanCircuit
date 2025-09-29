@@ -224,6 +224,13 @@ def anyOfVecsA {m} [Monad m] [BitVecAlg m] {n}
 @[simp] lemma Pure.run_pure {α} (x : α) :
   Id.run (pure x : Id α) = x := rfl
 
+/-- Decode `k` binary bits into a 1-hot vector of length `2^k`.
+    This is just a thin wrapper over your existing `selectorA`. -/
+def decodeIndex {m} [Monad m] [BitVecAlg m]
+  (bits : List (BitVecAlg.Bit (m := m)))
+  : m (List (BitVecAlg.Bit (m := m))) :=
+  selectorA bits
+
  @[simp] lemma orListA_pure_or (xs : List Bool) :
   Id.run (orListA (m := Pure.M) xs) = xs.or := by
   induction xs with
@@ -241,7 +248,6 @@ def anyOfVecsA {m} [Monad m] [BitVecAlg m] {n}
       sorry
 
 
-
 /-!
 # Section 1: Core Types and Structures
 
@@ -256,6 +262,7 @@ Represents the type of activation bits for each inference rule.
 inductive ActivationBits
   | intro (bit : Bool)
   | elim (bit1 : Bool) (bit2 : Bool)
+  | repetition (bit : Bool)
   deriving DecidableEq
 
 /--
@@ -360,7 +367,7 @@ def is_rule_active {n: Nat} (r : Rule n) : Bool :=
   match r.activation with
   | ActivationBits.intro b   => b
   | ActivationBits.elim b1 b2 => b1 && b2
-
+  | ActivationBits.repetition b => b
 /--
 Computes whether exactly one element of a Boolean list is `true`.
 - Implements "one-hot" logic for rule activation.
@@ -1085,6 +1092,7 @@ def make_new_rules {n : ℕ}
       match rule.activation with
       | ActivationBits.intro _   => ActivationBits.intro b1b2.fst
       | ActivationBits.elim _ _  => ActivationBits.elim b1b2.fst b1b2.snd
+      | ActivationBits.repetition _   => ActivationBits.repetition b1b2.fst
     { rule with activation := newAct }
   )
 
@@ -2284,6 +2292,9 @@ deriving Repr
 
 abbrev Builder := StateM BuildState
 
+def allocInput (i : Nat) : Builder Wire :=
+  pure i
+
 /-- Allocate a fresh wire. -/
 def fresh : Builder Wire := do
   let s ← get
@@ -2436,6 +2447,7 @@ def compileNodeLogic {n}
 def actArity : ActivationBits → Nat
   | ActivationBits.intro _   => 1
   | ActivationBits.elim _ _  => 2
+  | ActivationBits.repetition _ => 1
 
 /-- Arity list for a node’s rules (intro→1, elim→2). -/
 def nodeActArities {n : Nat} (c : CircuitNode n) : List Nat :=
@@ -3299,12 +3311,420 @@ def evalGridA {m} [Monad m] [BitVecAlg m] {n}
     eacc ← BitVecAlg.bor eacc eL
   pure (acc, eacc)
 
-/-- For any BitVecAlg instance, evalGridA is natural in algebra morphisms.
-    Instantiating the morphism Builder→Pure (simulate+read) yields equality of results. -/
-theorem evalGridA_builder_sound
-  (layers : List (GridLayer n))
-  (init   : List (List.Vector Bool n)) :
-  let ((outsW, errW), circ) := CircuitOp.runBuilder (CircuitOp.compileWholeGridAutoActs layers init)
-  let vals := CircuitOp.simulate circ #[]
-  (outsW.map (·.map (CircuitOp.readVec vals)), vals[errW]!)
-    = evalGridSelectorWithError layers init
+
+-- /-- For any BitVecAlg instance, evalGridA is natural in algebra morphisms.
+--     Instantiating the morphism Builder→Pure (simulate+read) yields equality of results. -/
+-- theorem evalGridA_builder_sound
+--   (layers : List (GridLayer n))
+--   (init   : List (List.Vector Bool n)) :
+--   let ((outsW, errW), circ) := CircuitOp.runBuilder (CircuitOp.compileWholeGridAutoActs layers init)
+--   let vals := CircuitOp.simulate circ #[]
+--   (outsW.map (·.map (CircuitOp.readVec vals)), vals[errW]!)
+--     = evalGridSelectorWithError layers init
+
+open CircuitOp BitVecAlg
+
+inductive EdgeKind where
+  | rep   (tgtIdx : Nat)
+  | intro (tgtIdx : Nat) (discharge : Formula)
+  | elim  (tgtIdx : Nat) (minorIdx : Nat) (ante : Formula)
+
+noncomputable instance : DecidableEq EdgeKind := Classical.decEq _
+
+instance : Repr EdgeKind where
+  reprPrec
+    | .rep t, _       => s!"EdgeKind.rep {repr t}"
+    | .intro t d, pr  =>
+        let ds := Repr.reprPrec d pr
+        s!"EdgeKind.intro {repr t} {ds}"
+    | .elim t m a, pr =>
+        let as := Repr.reprPrec a pr
+        s!"EdgeKind.elim {repr t} {repr m} {as}"
+
+
+
+/-- Per source (prev level) list all outgoing EdgeKind options towards curr level. -/
+abbrev OutgoingOptions := List EdgeKind
+
+def enumerateOutgoingForLevel
+  (prevFormulas : List Formula)
+  (currFormulas : List Formula)
+  : List OutgoingOptions :=
+Id.run do
+  let mut out : List OutgoingOptions := []
+
+  -- iterate sources with Fin indices (no Inhabited needed)
+  for s in List.finRange prevFormulas.length do
+    let Fs   := prevFormulas.get s
+    let _ := s.val
+    let mut opts : OutgoingOptions := []
+
+    -- REP: Fs == Ft
+    for t in List.finRange currFormulas.length do
+      let Ft   := currFormulas.get t
+      let tIdx := t.val
+      if Fs = Ft then
+        opts := EdgeKind.rep tIdx :: opts
+
+    -- INTRO: Ft = X ⊃ Y, Fs = Y
+    for t in List.finRange currFormulas.length do
+      let Ft   := currFormulas.get t
+      let tIdx := t.val
+      match Ft with
+      | Formula.impl X Y =>
+          if Fs = Y then
+            opts := EdgeKind.intro tIdx X :: opts
+      | _ => ()
+
+    -- ELIM: Fs = X ⊃ Y, Ft = Y, choose a minor m with X
+    match Fs with
+    | Formula.impl X Y =>
+        for t in List.finRange currFormulas.length do
+          let Ft   := currFormulas.get t
+          let tIdx := t.val
+          if Ft = Y then
+            for m in List.finRange prevFormulas.length do
+              let Fm   := prevFormulas.get m
+              let mIdx := m.val
+              if Fm = X then
+                opts := EdgeKind.elim tIdx mIdx X :: opts
+    | _ => ()
+
+    -- append this source's options (reverse to preserve original order)
+    out := out ++ [opts.reverse]
+
+  pure out
+
+/-- ceil(log2 n); by convention, `bitsForChoices 0 = 0`, and `bitsForChoices 1 = 0`. -/
+def bitsForChoices (n : Nat) : Nat :=
+  Id.run do
+    -- we want the least k with 2^k ≥ n', with n' = max(n, 1)
+    let n' := if n = 0 then 1 else n
+    let mut k := 0
+    while Nat.pow 2 k < n' do
+      k := k + 1
+    pure k
+
+structure SourcePathSpec where
+  bits  : Nat   -- K_s
+  start : Nat   -- starting offset into the global input array
+deriving Repr
+
+/-- At a level, we have one SourcePathSpec per **prev** node. -/
+abbrev LevelPathLayout := List SourcePathSpec
+
+/-- For the whole grid (between consecutive level pairs). Index i = specs for prev level i. -/
+abbrev PathLayout := List LevelPathLayout
+
+/-- Given choices per source, compute layout and total inputs consumed so far. -/
+def buildLevelPathLayout (runningStart : Nat) (outgoing : List OutgoingOptions)
+  : (LevelPathLayout × Nat) :=
+  let specs :=
+    outgoing.map (fun opts =>
+      let m := opts.length + 1  -- +1 for inactive index 0
+      let k := bitsForChoices m
+      SourcePathSpec.mk k 0  -- temp start=0
+    )
+  -- assign sequential starts
+  let rec assign (accStart : Nat) (ss : List SourcePathSpec) (acc : List SourcePathSpec)
+    : (List SourcePathSpec × Nat) :=
+    match ss with
+    | [] => (acc.reverse, accStart)
+    | s :: tl =>
+        let s' := { s with start := accStart }
+        assign (accStart + s.bits) tl (s' :: acc)
+  let (specs2, endStart) := assign runningStart specs []
+  (specs2, endStart)
+
+open CircuitOp
+
+/-- Read K path bits (indices `[start .. start+bits)`) as Builder wires, MSB→LSB or LSB→MSB
+    consistently with your `selectorA` bit order. Here I pass them **in the same order**
+    they’re read; if your `selectorA` expects MSB-first, keep as-is; if it expects LSB-first,
+    just `reverse` the list before calling `selectorA`. -/
+def oneHotFromPathInputs (start bits : Nat) : Builder (List Wire) := do
+  let mut xs : List Wire := []
+  -- collect [start, start+1, ..., start+bits-1]
+  for i in [start : start + bits] do
+    xs := xs ++ [← allocInput i]
+  -- If your `selectorA` expects MSB→LSB and `xs` is MSB→LSB already, keep it.
+  -- If it expects the opposite, do: `selectorA xs.reverse`
+  selectorA xs
+
+/-- Decode K_s input bits at [start .. start+K_s) into a one-hot of size 2^K_s. -/
+def decodeOneHotFromInputs (spec : SourcePathSpec) : Builder (List Wire) := do
+  let mut bitsW : List Wire := []
+  for i in [spec.start : spec.start + spec.bits] do
+    bitsW := (← allocInput i) :: bitsW
+  -- your builder-side binary decoder → one-hot of length 2^K
+  decodeIndex bitsW.reverse
+
+/-- χ_X mask as a vector over your basis; implement from your existing encoder. -/
+def dischargeMaskFromBasis
+  [DecidableEq Formula]
+  (basis : List Formula) (X : Formula)
+  : Builder (List Wire) := do
+  let mut ws : List Wire := []
+  for f in basis do
+    ws := ws ++ [← allocConst (decide (f = X))]
+  pure ws
+
+
+
+/-- Target index selector for an edge kind. -/
+def tgtOf : EdgeKind → Nat
+  | .rep   t     => t
+  | .intro t _   => t
+  | .elim  t _ _ => t
+
+instance : Inhabited SourcePathSpec :=
+  ⟨{ start := 0, bits := 0 }⟩
+
+/-- Compile one level where selectors choose **outgoing** edges per source. -/
+def compileLevelOutgoing
+  (encN      : Nat)
+  (basis     : List Formula)
+  (prevDeps  : List (List Wire))
+  (currForms : List Formula)
+  (outgoing  : List OutgoingOptions)   -- per source
+  (layout    : LevelPathLayout)        -- per source
+  : Builder (List (List Wire) × Wire) := do
+
+  -- arrays = clean indexing
+  let prevArr   := prevDeps.toArray
+  let outsArr   := outgoing.toArray
+  let layoutArr := layout.toArray
+
+  let tgtCount  := currForms.length
+  let srcCount  := outsArr.size
+  let layCount  := layoutArr.size
+  let loopCount := Nat.min srcCount layCount
+
+  -- accumulators
+  let zeroVec ← allocConstVec (n := encN) false
+  let mut perTarget : Array (List Wire) := Array.mkArray tgtCount zeroVec
+  let mut globalErr : Wire := (← allocConst false)
+
+  -- size mismatch (layout vs outgoing) → error bit
+  let mismatchErr ← allocConst (layCount ≠ srcCount)
+  globalErr ← allocOr globalErr mismatchErr
+
+  -- for each source (bounded by the min of both arrays' sizes)
+  for s in [0:loopCount] do
+    let opts := outsArr[s]!
+    let spec : SourcePathSpec := layoutArr[s]!
+    let sel  ← oneHotFromPathInputs spec.start spec.bits
+    let m    := opts.length
+
+    -- any selection beyond m (0=inactive, 1..m=valid) → error
+    let extraErr ←
+      sel.drop (m+1) |>.foldlM (fun acc w => allocOr acc w) (← allocConst false)
+    globalErr ← allocOr globalErr extraErr
+
+    -- for each outgoing option of this source
+    for (j0, opt) in opts.enum do
+      let j    := j0 + 1
+      let pick := sel[j]!   -- Wire (Nat), has Inhabited so `!` is fine
+
+      -- build contribution for this edge
+      let contrib : List Wire ←
+        match opt with
+        | EdgeKind.rep _tgt =>
+            vmaskBy (n := encN) pick (prevArr[s]!)
+        | EdgeKind.intro _tgt X =>
+            let χ  ← dischargeMaskFromBasis basis X          -- length = encN (basis.length should = encN)
+            let nχ ← vmap      (n := encN) allocNot χ
+            let masked ← vzipWith (n := encN) allocAnd (prevArr[s]!) nχ
+            vmaskBy (n := encN) pick masked
+        | EdgeKind.elim _tgt mIdx _X =>
+            let maj := prevArr[s]!
+            let min := prevArr[mIdx]!
+            let orV ← vzipWith (n := encN) allocOr maj min
+            vmaskBy (n := encN) pick orV
+
+      -- accumulate into the target bucket
+      let t      := tgtOf opt
+      let prevV  : List Wire := perTarget[t]!
+      let newV   ← vzipWith (n := encN) allocOr prevV contrib
+      perTarget  := perTarget.set! t newV
+
+  -- finalize outputs and return
+  let outs := (List.range tgtCount).map (fun i => perTarget[i]!)
+  pure (outs, globalErr)
+
+
+
+
+structure BuiltOutgoing where
+  encN      : Nat
+  basis     : List Formula            -- NEW: basis used by dependency vectors
+  levels    : List (List Vertex)      -- grouped by LEVEL, sorted
+  formulas  : List (List Formula)     -- per level, same order as levels
+  initDeps  : List (List Bool)        -- vectors for level 0 nodes
+  outgoings : List (List OutgoingOptions)  -- for each (prev level), per-source options
+  layout    : PathLayout                   -- for each (prev level), per-source path spec
+deriving Repr
+
+/-- Build the basis and the initial dependency vectors for level 0.
+    Basis = unique hypotheses' formulas (you can swap in a richer basis later). -/
+def buildEncodingAndInit (G : DLDS) (L0 : List Vertex) :
+  List Formula × Nat × List (List Bool) :=
+Id.run do
+  -- basis from hypotheses
+  let basis : List Formula :=
+    (G.V.filter (·.HYPOTHESIS)).map (·.FORMULA) |>.eraseDups
+  let n := basis.length
+
+  -- helper: one-hot of length n (Bool-valued)
+  let oneHot (i : Nat) : List Bool :=
+    (List.range n).map (fun j => decide (j = i))
+
+  -- index in basis (if present)
+  let idxOf? (f : Formula) : Option Nat := basis.indexOf? f
+
+  -- initial vectors for level-0 nodes
+  let init : List (List Bool) :=
+    L0.map (fun v =>
+      match idxOf? v.FORMULA with
+      | some i => oneHot i
+      | none   => List.replicate n false)
+
+  pure (basis, n, init)
+
+
+structure LevelPack where
+  level : Nat
+  nodes : List Vertex
+  deriving Repr
+
+open Std
+
+def groupByLevel (G : DLDS) : List LevelPack :=
+  Id.run do
+    let mut m : Std.HashMap Nat (List Vertex) := {}
+    for v in G.V do
+      let prev := m.getD v.LEVEL []
+      m := m.insert v.LEVEL (v :: prev)
+    let sorted : Array (Nat × List Vertex) :=
+      (m.toList).toArray.qsort (fun a b => a.fst < b.fst)
+    let packs : List LevelPack :=
+      sorted.toList.map (fun (k, vs) => { level := k, nodes := vs.reverse })
+    pure packs
+
+/-- Build the outgoing model and path layout for the entire DLDS. -/
+def buildOutgoing (G : DLDS) : Except String BuiltOutgoing := do
+  let packs := groupByLevel G
+  if packs.isEmpty then
+    throw "DLDS has no vertices"
+
+  let levels   := packs.map (·.nodes)
+  let formulas := levels.map (·.map (·.FORMULA))
+
+  -- basis + size + level-0 initial dependency vectors
+  let (basis, encN, initDeps) := buildEncodingAndInit G levels.head!
+
+  -- per transition (prev → curr): outgoing options and path layout
+  let mut outgoings : List (List OutgoingOptions) := []
+  let mut layout    : PathLayout := []
+  let mut cursor    : Nat := 0
+
+  for k in [0 : levels.length - 1] do
+    let prevF := formulas.get! k
+    let currF := formulas.get! (k+1)
+    let outs  := enumerateOutgoingForLevel prevF currF
+    let (ll, cursor') := buildLevelPathLayout cursor outs
+    outgoings := outgoings.concat outs
+    layout    := layout.concat ll
+    cursor    := cursor'
+
+  -- assemble bundle
+  pure {
+    encN     := encN
+    basis    := basis
+    levels   := levels
+    formulas := formulas
+    initDeps := initDeps
+    outgoings:= outgoings
+    layout   := layout
+  }
+
+
+/-- Write `val` into `K` bits (little-endian) starting at `start`. -/
+def writeBitsLE (arr : Array Bool) (start K val : Nat) : Array Bool :=
+  Id.run do
+    let mut a := arr
+    for j in [0:K] do
+      let bit := ((val >>> j) &&& 1) = 1
+      a := a.set! (start + j) bit
+    a
+
+/-- Flatten path indices (per prev-level, per source) to input bits using the layout. -/
+def packPathBits (layout : PathLayout) (path : List (List Nat)) : Array Bool :=
+  Id.run do
+    -- total number of bits across all level specs
+    let totalBits :=
+      layout.foldl (fun acc lvl =>
+        acc + lvl.foldl (fun a spec => a + spec.bits) 0) 0
+    let mut arr : Array Bool := Array.mkArray totalBits false
+
+    -- work with arrays for clean indexing + defaults
+    let layoutArr := layout.toArray
+    let pathArr   := path.toArray
+
+    for lv in [0:layoutArr.size] do
+      let lvlSpecs : LevelPathLayout := layoutArr[lv]!
+      let specsArr := lvlSpecs.toArray
+      let rowArr   := (pathArr.getD lv []).toArray
+      for s in [0:specsArr.size] do
+        let spec : SourcePathSpec := specsArr[s]!
+        let val  : Nat            := rowArr.getD s 0
+        arr := writeBitsLE arr spec.start spec.bits val
+
+    pure arr
+
+/-- Compile all levels and aggregate the global error. -/
+def compileWholeGridOutgoing (B : BuiltOutgoing)
+  : Builder (List (List (List Wire)) × Wire) := do
+  let formsArr   := B.formulas.toArray
+  let outsArr    := B.outgoings.toArray
+  let layoutArr  := B.layout.toArray
+  let transCount := outsArr.size
+
+  -- level 0 as wires (convert each Bool to a const wire)
+  let lvl0 ← B.initDeps.mapM (fun row => row.mapM allocConst)
+
+  let mut allLevels : List (List (List Wire)) := [lvl0]
+  let mut prev := lvl0
+  let mut gErr : Wire := (← allocConst false)
+
+  -- per transition: prev level k → curr level k+1
+  for k in [0:transCount] do
+    let currForms := formsArr[k+1]!
+    let outs      := outsArr[k]!
+    let specs     := layoutArr[k]!
+    let (next, e) ← compileLevelOutgoing B.encN B.basis prev currForms outs specs
+    gErr ← allocOr gErr e
+    allLevels := allLevels ++ [next]
+    prev := next
+
+  pure (allLevels, gErr)
+
+
+def simulateWithPath
+  (B : BuiltOutgoing) (goalLevel goalIdx : Nat) (path : List (List Nat)) : IO Bool := do
+  let inputs := packPathBits B.layout path
+
+  -- Build everything in ONE builder run: grid -> pick goal -> zero-check -> final wire
+  let (finalWire, circ) := CircuitOp.runBuilder do
+    let (levelsW, gErr) ← compileWholeGridOutgoing B
+    -- index with arrays (no List get!/Inhabited headaches)
+    let levelsA    := levelsW.toArray
+    let levelVecs  := levelsA[goalLevel]!       -- List (List Wire)
+    let levelA     := levelVecs.toArray
+    let goalV      := levelA[goalIdx]!          -- List Wire
+    let zero       ← vecAllFalse goalV          -- Builder Wire
+    let final      ← allocOr gErr zero
+    pure final
+
+  let outs := CircuitOp.simulate circ inputs    -- Array Bool (or similar)
+  pure (outs.get! finalWire)
