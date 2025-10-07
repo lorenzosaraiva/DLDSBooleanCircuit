@@ -342,7 +342,7 @@ def mkElimRule {n : ℕ} (rid : Nat) (bit1 bit2 : Bool) : Rule n :=
 def mkRepetitionRule {n : ℕ} (rid : Nat) (bit : Bool) : Rule n :=
 {
   ruleId    := rid,
-  activation := ActivationBits.intro bit,
+  activation := ActivationBits.repetition bit,
   type       := RuleData.repetition,
   combine    := fun deps =>
     match deps with
@@ -442,6 +442,8 @@ def ruleCombineA {m} [Monad m] [BitVecAlg m] {n}
       BitVecAlg.vzipWith (fun a b => BitVecAlg.band a b) d notEn
   | RuleData.elim, [d1, d2] =>
       BitVecAlg.vzipWith (fun a b => BitVecAlg.band a b) d1 d2
+  | RuleData.repetition, [d] =>
+      pure d                          -- ← keep it simple
   | _, _ =>
       BitVecAlg.vconst (n := n) false
 
@@ -552,9 +554,11 @@ def isRuleActiveA {m} [Monad m] [BitVecAlg m]
   (ws  : List (BitVecAlg.Bit (m := m))) :
   m (BitVecAlg.Bit (m := m)) :=
   match act, ws with
-  | ActivationBits.intro _,  [b]        => BitVecAlg.buf b
-  | ActivationBits.elim _ _, [b1, b2]   => BitVecAlg.band b1 b2
-  | _,                    _             => BitVecAlg.const false
+  | ActivationBits.intro _,      [b]      => BitVecAlg.buf b
+  | ActivationBits.elim _ _,     [b1, b2] => BitVecAlg.band b1 b2
+  | ActivationBits.repetition _, [b]      => BitVecAlg.buf b
+  | _,                            _        => BitVecAlg.const false
+
 
 /-- For each rule, compute its single activation bit from its activation *inputs*. -/
 def actsFromRuleActWiresA {m} [Monad m] [BitVecAlg m] {n}
@@ -2352,19 +2356,6 @@ def allocConstVec (n : Nat) (val : Bool) : Builder (List Wire) := do
       go (k-1) (w :: acc)
   go n []
 
-/-- OR-reduce a list of wires. Returns const false if empty. -/
-def orList (ws : List Wire) : Builder Wire := do
-  match ws with
-  | []      => allocConst false
-  | [a]     => allocBuf a
-  | a :: tl =>
-    let rec go (cur : Wire) (rest : List Wire) := do
-      match rest with
-      | []     => pure cur
-      | b::rs  =>
-        let cur' ← allocOr cur b
-        go cur' rs
-    go a tl
 
 def simulate (c : Circuit) (initial : Array Bool) : Array Bool :=
   Id.run do
@@ -2399,17 +2390,6 @@ def constVecOf {n : Nat} (v : List.Vector Bool n) : Builder (List Wire) := do
       go tl (w :: acc)
   go v.toList []
 
-/-- Reduce all bits from a list of vectors with OR (used to detect selection). -/
-def anyOfVecs (vs : List (List Wire)) : Builder Wire := do
-  let flat := vs.foldl (· ++ ·) []
-  orList flat
-
-/-- Rule activation from activation *wires* (intro uses its bit; elim ANDs both). -/
-def isRuleActiveW : ActivationBits → (List Wire) → Builder Wire
-  | ActivationBits.intro _,    [b]      => allocBuf b
-  | ActivationBits.elim _ _,   [b1, b2] => allocAnd b1 b2
-  | _,                         _        => allocConst false   -- defensive (ill-formed)
-
 -- Interpret the tagless algebra in the gate-level builder
 instance : BitVecAlg CircuitOp.Builder where
   Bit := CircuitOp.Wire
@@ -2425,7 +2405,19 @@ instance : BitVecAlg CircuitOp.Builder where
   vconst    := fun {n} b => CircuitOp.allocConstVec n b
   vmap      := fun f v => v.mapM f
   vzipWith  := fun f v1 v2 => (List.zip v1 v2).mapM (fun (a,b) => f a b)
-  vreduceOr := fun v => CircuitOp.orList v
+
+  -- ↓ implement reduce-or directly with gates (no tagless helper)
+  vreduceOr := fun v => do
+    match v with
+    | []      => CircuitOp.allocConst false
+    | a :: tl =>
+      let rec go (cur : CircuitOp.Wire) (rest : List CircuitOp.Wire) := do
+        match rest with
+        | []     => pure cur
+        | b::rs  =>
+          let cur' ← CircuitOp.allocOr cur b
+          go cur' rs
+      go a tl
 
   -- Lists of wires already serve as Vecs here
   vfromList := fun bs _h => pure bs
@@ -2436,12 +2428,6 @@ instance : BitVecAlg CircuitOp.Builder where
 
   -- Mask a vector by a bit: out[i] = bit ∧ v[i]
   vmaskBy := fun bit v => v.mapM (fun a => CircuitOp.allocAnd bit a)
-
-def compileNodeLogic {n}
-  (rules : List (Rule n)) (ruleActs : List (List Wire)) (inputs : List (List Wire))
-  : Builder ((List Wire) × Wire) := do
-  let acts ← actsFromRuleActWiresA (m := Builder) (n := n) rules ruleActs
-  nodeLogicWithErrorGivenActsA (m := Builder) (n := n) rules acts inputs
 
 /-- Activation arity (metadata), ignoring the booleans inside. -/
 def actArity : ActivationBits → Nat
@@ -2457,64 +2443,6 @@ def nodeActArities {n : Nat} (c : CircuitNode n) : List Nat :=
 def actWiresWellFormed (expected : List Nat) (given : List (List Wire)) : Bool :=
   (List.zip expected given).all (fun (k, ws) => ws.length = k)
 
-/-- Compile one node; returns `(outVec, errBit)`.
-    `deps` is the list of dependency vectors (wires) from the previous layer. -/
-def compileNode {n : Nat}
-  (node         : CircuitNode n)
-  (ruleActWires : List (List Wire))
-  (deps         : List (List Wire))
-  : Builder ((List Wire) × Wire) := do
-  let ok := actWiresWellFormed (nodeActArities node) ruleActWires
-  if !ok then
-    let nLen := match deps with | v::_ => v.length | _ => 0
-    let z   ← allocConstVec nLen false
-    let one ← allocConst true
-    pure (z, one)
-  else
-    compileNodeLogic node.rules ruleActWires deps
-
-def compileLayer {n : Nat}
-  (prevDeps    : List (List Wire))          -- outputs of previous layer as vectors of wires
-  (layer       : GridLayer n)
-  (actsPerNode : List (List (List Wire)))   -- length = layer.nodes.length
-  : Builder (List (List Wire) × Wire) := do
-  -- pair up nodes with their activation bundles
-  let pairs := List.zip layer.nodes actsPerNode
-  -- compile each node
-  let compiled ← pairs.mapM (fun (nd, acts) => compileNode nd acts prevDeps)
-  let outs := compiled.map Prod.fst
-  let errs := compiled.map Prod.snd
-  -- OR all error bits
-  let layerErr ← orList errs
-  pure (outs, layerErr)
-
-/-- Like `evalGridSelector`:
-    returns (initialDeps :: layer1 :: layer2 :: ...),
-    plus a global OR of layer error bits. -/
-def compileGridEval {n : Nat}
-  (layers   : List (GridLayer n))
-  (initDeps : List (List Wire))
-  (actsGrid : List (List (List (List Wire))))
-  : Builder (List (List (List Wire)) × Wire) := do
-  let rec go (prev : List (List Wire))
-             (ls : List (GridLayer n))
-             (ags : List (List (List (List Wire))))
-             (acc : List (List (List Wire)))
-             (errAcc : Wire)
-    : Builder (List (List (List Wire)) × Wire) := do
-    match ls, ags with
-    | [], _ => pure ((acc.reverse), errAcc)  -- acc has: last layer first; we reversed at the end
-    | l :: more, actsL :: moreActs => do
-      let (outs, errL) ← compileLayer prev l actsL
-      let errAcc' ← allocOr errAcc errL
-      go outs more moreActs (outs :: acc) errAcc'
-    | _ :: _, [] =>
-      let err ← allocConst true
-      pure ((acc.reverse), err)
-  -- seed `acc` with the **initial** vectors to match `evalGridSelector`
-  let zero_ ← allocConst false
-  let (rest, e) ← go initDeps layers actsGrid [] zero_
-  pure (initDeps :: rest, e)
 
 def List.replicateM {m : Type u → Type v} [Monad m] {α : Type u} (n : Nat) (x : m α) : m (List α) :=
   match n with
@@ -2527,123 +2455,14 @@ def List.replicateM {m : Type u → Type v} [Monad m] {α : Type u} (n : Nat) (x
 def constDepsOf {n} (vs : List (List.Vector Bool n)) : Builder (List (List Wire)) :=
   vs.mapM constVecOf
 
-/-- Build activation wires for a whole layer, from previous dependency vectors,
-    using `IncomingMapsLayer` wiring (one (src,edge) list per rule). -/
-def compileActsForLayer
-  (prevDeps : List (List Wire))
-  (incoming : IncomingMapsLayer)
-  : Builder (List (List (List Wire))) := do
-  -- compute selectors for each prev node as wires
-  let sels ← prevDeps.mapM (fun xs => selectorA (m := Builder) xs)  -- length = 2^xs.length each
-  -- for each node/rule, fetch the requested selector wires
-  incoming.mapM (fun incMap => do
-    incMap.mapM (fun pairs => do
-      pairs.mapM (fun (src, idx) => do
-        let defFalse ← allocConst false
-        let sel := (sels[src]?).getD []
-        pure <| (sel[idx]?).getD defFalse)))
-
-
-def compileGridEvalAutoActs {n}
-  (layers : List (GridLayer n))
-  (initDeps : List (List Wire))
-  : Builder (List (List (List Wire)) × Wire) := do
-  let rec go (prev : List (List Wire)) (ls : List (GridLayer n)) (acc : List (List (List Wire))) (eacc : Wire)
-    : Builder (List (List (List Wire)) × Wire) := do
-    match ls with
-    | [] => pure (initDeps :: acc.reverse, eacc)
-    | L :: more => do
-      let acts ← compileActsForLayer prev L.incoming
-      let (outs, eL) ← compileLayer prev L acts
-      let eacc' ← allocOr eacc eL
-      go outs more (outs :: acc) eacc'
-  let z ← allocConst false
-  go initDeps layers [] z
-
-def compileWholeGridAutoActs {n}
-  (layers : List (GridLayer n))
-  (initial_vectors : List (List.Vector Bool n))
-  : Builder (List (List (List Wire)) × Wire) := do
-  let initDeps ← constDepsOf initial_vectors
-  compileGridEvalAutoActs layers initDeps
-
-def simulateWholeGrid {n}
-  (layers : List (GridLayer n))
-  (initial_vectors : List (List.Vector Bool n))
-  : (Array Bool × Circuit) :=
-  let (_, circ) := runBuilder (compileWholeGridAutoActs layers initial_vectors)
-  -- `outs` is structure; if you want a single “final error” bit out of the builder,
-  -- you can wire it to a final wire and read it here. For now, `circ` has all gate outputs.
-  (simulate circ #[], circ)
-
 /-- Read a list of wires from a simulated value array. -/
 def readVec (vals : Array Bool) (ws : List Wire) : List Bool :=
   ws.map (fun w => vals[w]!)
 
-/-- Simulate the *structured* outputs: for every layer and node, give the Bool vector,
-    and also the global OR-of-errors. Returns (values, had_error, circuit). -/
-def simulateWholeGridAutoActsValues {n}
-  (layers : List (GridLayer n))
-  (initial_vectors : List (List.Vector Bool n))
-  : (List (List (List Bool)) × Bool × Circuit) :=
-  let ((outs, errWire), circ) := runBuilder (compileWholeGridAutoActs layers initial_vectors)
-  let vals := simulate circ #[]                          -- no primary inputs; circuit is self-contained
-  let outsB : List (List (List Bool)) :=
-    outs.map (fun layer => layer.map (fun vec => readVec vals vec))
-  let hadErr : Bool := vals[errWire]!
-  (outsB, hadErr, circ)
-
 /-- AND-of-NOTs = "all false" on a vector. -/
 def vecAllFalse (xs : List Wire) : Builder Wire := do
-  let any ← orList xs
-  allocNot any
-
-/-- Compile one wire that matches the semantic `final_circuit_output`:
-    had_error ∨ (goal vector is all false). -/
-def compileFinalOutputWire {n}
-  (layers : List (GridLayer n))
-  (initial_vectors : List (List.Vector Bool n))
-  (goal_layer : Fin layers.length)
-  (goal_idx   : Fin (layers.get goal_layer).nodes.length)
-  : Builder Wire := do
-  let (outs, err) ← compileWholeGridAutoActs layers initial_vectors
-  -- outs = initial :: layer1 :: ... :: layer_L
-  let layerOuts : List (List Wire) := outs.getD (goal_layer.val + 1) []
-  let goalVec   : List Wire        := layerOuts.getD goal_idx.val []
-  let allZero ← vecAllFalse goalVec
-  allocOr err allZero
-
-/-- Convenience: run `compileFinalOutputWire` and return the Boolean plus the circuit. -/
-def simulateFinalOutput {n}
-  (layers : List (GridLayer n))
-  (initial_vectors : List (List.Vector Bool n))
-  (goal_layer : Fin layers.length)
-  (goal_idx   : Fin (layers.get goal_layer).nodes.length)
-  : (Bool × Circuit) :=
-  let (w, c) := runBuilder (compileFinalOutputWire layers initial_vectors goal_layer goal_idx)
-  let vals := simulate c #[]
-  (vals[w]!, c)
-
-/-- Compare the compiled result at (goal_layer,goal_idx) with the semantic evaluator. -/
-def checkAgainstSemanticsAt {n}
-  (layers : List (GridLayer n))
-  (initial_vectors : List (List.Vector Bool n))
-  (goal_layer : Fin layers.length)
-  (goal_idx   : Fin (layers.get goal_layer).nodes.length)
-  : Bool := Id.run do
-  -- compiled
-  let (outsB, _, _) := simulateWholeGridAutoActsValues layers initial_vectors
-  let compiledGoal : List Bool :=
-    (outsB.getD (goal_layer.val + 1) []).getD goal_idx.val []
-  -- semantic
-  let sem := evalGridSelector layers initial_vectors
-  let out_idx : Fin sem.length :=
-    Fin.cast (Eq.symm (evalGridSelector_length layers initial_vectors)) goal_layer.succ
-  let layer_len_eq := evalGridSelector_layer_length layers initial_vectors goal_layer
-  let real_goal_idx : Fin (sem.get out_idx).length := Fin.cast layer_len_eq.symm goal_idx
-  let semGoal := ((sem.get out_idx).get real_goal_idx).toList
-  -- compare bitwise
-  decide (compiledGoal = semGoal)
+  let any ← BitVecAlg.vreduceOr (m := Builder) (n := xs.length) xs
+  BitVecAlg.bnot (m := Builder) any
 
 def n := 4
 def enc : List.Vector Bool n := ⟨[false,false,true,false], by decide⟩
@@ -2684,30 +2503,6 @@ def init : List (List.Vector Bool n) :=
 def semLayersToBools {n} (xs : List (List (List.Vector Bool n))) :
     List (List (List Bool)) :=
   xs.map (fun layer => layer.map (·.toList))
-
-
-
-/-- Build circuit + keep the wire handles for (layer outputs, error). -/
-def buildCircuitWithHandles {n}
-  (layers : List (GridLayer n))
-  (initial_vectors : List (List.Vector Bool n))
-  : (Circuit × List (List (List Wire)) × Wire) :=
-  let ((outs, err), circ) := runBuilder (compileWholeGridAutoActs layers initial_vectors)
-  (circ, outs, err)
-
-/-- Just the gate list. -/
-def gatesFor {n}
-  (layers : List (GridLayer n))
-  (initial_vectors : List (List.Vector Bool n)) : List Gate :=
-  (buildCircuitWithHandles layers initial_vectors).fst.gates
-
-/-- Pretty quick peek: returns `(gates, (layerOutputs, errorWire))`. -/
-def gatesAndHandlesFor {n}
-  (layers : List (GridLayer n))
-  (initial_vectors : List (List.Vector Bool n))
-  : (List Gate × (List (List (List Wire)) × Wire)) :=
-  let (c, outs, e) := buildCircuitWithHandles layers initial_vectors
-  (c.gates, (outs, e))
 
 -- #eval (CircuitOp.gatesFor [layer] init).length       -- how many gates?
 -- #eval (CircuitOp.gatesAndHandlesFor [layer] init)     -- full details (prints via `Repr`)
@@ -3104,36 +2899,8 @@ def runSemanticFromDLDS (d : DLDS) :
   let sem := evalGridSelector layers init
   pure (sem.map (fun lay => lay.map (·.toList)))
 
-/-- Run compiled pipeline from DLDS. -/
-def runCompiledFromDLDS (d : DLDS) :
-  Except String (List (List (List Bool)) × Bool) := do
-  let (layers, init) ← gridFromDLDS d
-  let (outs, hadErr, _circ) := CircuitOp.simulateWholeGridAutoActsValues layers init
-  pure (outs, hadErr)
-
 
 end CircuitOp
-
-
-/-- Gate-level node logic driven by the generic tagless function.
-    `ruleActs` supplies, per rule: `[b]` for intro, `[b1,b2]` for elim. -/
-def compileNodeLogic_tagless {n}
-  (rules    : List (Rule n))
-  (ruleActs : List (List CircuitOp.Wire))
-  (inputs   : List (List CircuitOp.Wire))
-  : CircuitOp.Builder (List CircuitOp.Wire × CircuitOp.Wire) := do
-  -- Collapse each rule’s activation bundle to one "is-active" bit
-  let acts ← (List.zip rules ruleActs).mapM (fun (r, as) =>
-    CircuitOp.isRuleActiveW r.activation as)
-
-  -- Use the generic semantics, specialized to Builder via the instance above
-  nodeLogicWithErrorGivenActsA
-    (m := CircuitOp.Builder) (n := n)
-    rules acts inputs
-
-def selectorWires (xs : List CircuitOp.Wire) :
-    CircuitOp.Builder (List CircuitOp.Wire) :=
-  selectorA (m := CircuitOp.Builder) xs
 
 -- multiple XOR (pure)
 #eval multipleXorA (m := Pure.M) [true,false,false,false]     -- expect true
@@ -3154,29 +2921,6 @@ def selectorWires (xs : List CircuitOp.Wire) :
       []
   vals.get! (w : Nat)
 
-def compileNodeLogic {n}
-  (rules    : List (Rule n))
-  (ruleActs : List (List CircuitOp.Wire))
-  (inputs   : List (List CircuitOp.Wire))
-  : CircuitOp.Builder ((List CircuitOp.Wire) × CircuitOp.Wire) := do
-  -- collapse per-rule act wires to a single “active” wire
-  let acts ← (List.zip rules ruleActs).mapM (fun (r, ws) =>
-    CircuitOp.isRuleActiveW r.activation ws)
-  nodeLogicWithErrorGivenActsA (m := CircuitOp.Builder) rules acts inputs
-
-
-#eval CircuitOp.simulateWholeGridAutoActsValues [CircuitOp.layer] CircuitOp.init
-
--- Fully qualified single-call
-#eval CircuitOp.checkAgainstSemanticsAt [CircuitOp.layer] CircuitOp.init ⟨0, by decide⟩ ⟨0, by decide⟩
--- expect: true
-
--- Final “proof OK” bit compiled vs semantic:
-#eval
-  let (b, _) := CircuitOp.simulateFinalOutput [CircuitOp.layer] CircuitOp.init ⟨0, by decide⟩ ⟨0, by decide⟩
-  let s := final_circuit_output [CircuitOp.layer] CircuitOp.init ⟨0, by decide⟩ ⟨0, by decide⟩
-  (b, s)
-
 
 -- a 1-layer, 1-node DLDS with atom “p”, marked as a hypothesis
 -- make sure the previous `namespace CircuitOp` is closed:
@@ -3196,17 +2940,6 @@ def D0 : CircuitOp.DLDS :=
 { V := [V0],
   E := [] }
 
-#eval
-  match CircuitOp.gridFromDLDS D0 with
-  | .error msg => s!"error: {msg}"
-  | .ok (layers, init) =>
-      let (outsB, hadErr, _circ) := CircuitOp.simulateWholeGridAutoActsValues layers init
-      -- be explicit so Lean knows the `toList` target
-      let initB : List (List Bool) :=
-        init.map (fun (v : List.Vector Bool (CircuitOp.buildUniverse D0).length) => v.toList)
-      -- use `repr` for nested lists
-      s!"layers={layers.length}, init={repr initB}, outs={repr outsB}, hadErr={hadErr}"
-
 def n := 4
 def enc : List.Vector Bool n := ⟨[false,false,true,false], by decide⟩
 def rI : Rule n := mkIntroRule 0 enc true
@@ -3220,25 +2953,6 @@ def init : List (List.Vector Bool n) :=
   [ ⟨[true,false,true,false], by decide⟩
   , ⟨[false,false,false,false], by decide⟩
   ]
-
-#eval CircuitOp.checkAgainstSemanticsAt [layer] init ⟨0, by decide⟩ ⟨0, by decide⟩
-
-/-- Use the tagless selector in Builder (returns wires). -/
-def CircuitOp.selectorW (xs : List Wire) : Builder (List Wire) :=
-  selectorA (m := Builder) xs
-
-@[simp] lemma CircuitOp.compileNodeLogic_def
-  {n}
-  (rules  : List (Rule n))
-  (actsW  : List (List Wire))
-  (inputs : List (List Wire)) :
-  CircuitOp.compileNodeLogic (n := n) rules actsW inputs
-    =
-  (do
-    let acts ← actsFromRuleActWiresA (m := CircuitOp.Builder) (n := n) rules actsW
-    nodeLogicWithErrorGivenActsA (m := CircuitOp.Builder) (n := n) rules acts inputs
-  ) := rfl
-
 
 /-- Tagless, wiring-based activation extraction:
     For each rule `i`, look up its incoming `(src, edge)` pairs,
@@ -3502,7 +3216,7 @@ def compileLevelOutgoing
 
   -- accumulators
   let zeroVec ← allocConstVec (n := encN) false
-  let mut perTarget : Array (List Wire) := Array.mkArray tgtCount zeroVec
+  let mut perTarget : Array (List Wire) := Array.replicate tgtCount zeroVec
   let mut globalErr : Wire := (← allocConst false)
 
   -- size mismatch (layout vs outgoing) → error bit
@@ -3553,8 +3267,6 @@ def compileLevelOutgoing
   pure (outs, globalErr)
 
 
-
-
 structure BuiltOutgoing where
   encN      : Nat
   basis     : List Formula            -- NEW: basis used by dependency vectors
@@ -3570,25 +3282,15 @@ deriving Repr
 def buildEncodingAndInit (G : DLDS) (L0 : List Vertex) :
   List Formula × Nat × List (List Bool) :=
 Id.run do
-  -- basis from hypotheses
-  let basis : List Formula :=
-    (G.V.filter (·.HYPOTHESIS)).map (·.FORMULA) |>.eraseDups
+  let basis : List Formula := (G.V.map (·.FORMULA)).eraseDups
   let n := basis.length
-
-  -- helper: one-hot of length n (Bool-valued)
-  let oneHot (i : Nat) : List Bool :=
-    (List.range n).map (fun j => decide (j = i))
-
-  -- index in basis (if present)
-  let idxOf? (f : Formula) : Option Nat := basis.indexOf? f
-
-  -- initial vectors for level-0 nodes
+  let oneHot (i : Nat) : List Bool := (List.range n).map (fun j => decide (j = i))
+  let idxOf? (f : Formula) : Option Nat := basis.idxOf? f
   let init : List (List Bool) :=
     L0.map (fun v =>
       match idxOf? v.FORMULA with
       | some i => oneHot i
       | none   => List.replicate n false)
-
   pure (basis, n, init)
 
 
@@ -3629,8 +3331,8 @@ def buildOutgoing (G : DLDS) : Except String BuiltOutgoing := do
   let mut cursor    : Nat := 0
 
   for k in [0 : levels.length - 1] do
-    let prevF := formulas.get! k
-    let currF := formulas.get! (k+1)
+    let prevF := formulas[k]!
+    let currF := formulas[k+1]!
     let outs  := enumerateOutgoingForLevel prevF currF
     let (ll, cursor') := buildLevelPathLayout cursor outs
     outgoings := outgoings.concat outs
@@ -3665,7 +3367,7 @@ def packPathBits (layout : PathLayout) (path : List (List Nat)) : Array Bool :=
     let totalBits :=
       layout.foldl (fun acc lvl =>
         acc + lvl.foldl (fun a spec => a + spec.bits) 0) 0
-    let mut arr : Array Bool := Array.mkArray totalBits false
+    let mut arr : Array Bool := Array.replicate totalBits false
 
     -- work with arrays for clean indexing + defaults
     let layoutArr := layout.toArray
@@ -3727,4 +3429,1853 @@ def simulateWithPath
     pure final
 
   let outs := CircuitOp.simulate circ inputs    -- Array Bool (or similar)
-  pure (outs.get! finalWire)
+  pure (outs[finalWire]!)
+
+
+/-- Build circuit + keep the wire handles for (layer outputs, error) using outgoing path. -/
+def buildCircuitWithHandlesOutgoing
+  (B : BuiltOutgoing)
+  : (CircuitOp.Circuit × List (List (List CircuitOp.Wire)) × CircuitOp.Wire) :=
+  let ((outs, err), circ) := CircuitOp.runBuilder (compileWholeGridOutgoing B)
+  (circ, outs, err)
+
+/-- Run compiled pipeline from DLDS given a concrete path (per prev-level, per source). -/
+def runCompiledFromDLDSWithPath
+  (d : CircuitOp.DLDS)
+  (path : List (List Nat))
+  : Except String (List (List (List Bool)) × Bool) := do
+  let B ← buildOutgoing d
+  let ((outsW, errW), circ) := runBuilder (compileWholeGridOutgoing B)
+  let inputs := packPathBits B.layout path
+  let vals := simulate circ inputs
+  let outsB : List (List (List Bool)) :=
+    outsW.map (fun layer => layer.map (fun vec => readVec vals vec))
+  let hadErr := vals[errW]!
+  pure (outsB, hadErr)
+
+
+def specLevelOutgoing
+  (encN      : Nat)
+  (basis     : List CircuitOp.Formula)
+  (prevDeps  : List (List Bool))
+  (currForms : List CircuitOp.Formula)
+  (outgoing  : List (List EdgeKind))
+  (choices   : List Nat)
+  : (List (List Bool) × Bool) :=
+Id.run do
+  -- helpers
+  let zeroVec : List Bool := List.replicate encN false
+  let orVec  (a b : List Bool) : List Bool := List.zipWith (· || ·) a b
+  let andVec (a b : List Bool) : List Bool := List.zipWith (· && ·) a b
+  let notVec (v : List Bool) : List Bool := v.map (· = false)
+  let chi (X : CircuitOp.Formula) : List Bool := basis.map (fun f => decide (f = X))
+
+  let tgtCount := currForms.length
+  let mut perTarget : Array (List Bool) := Array.replicate tgtCount zeroVec
+
+  let mismatchErr : Bool := outgoing.length ≠ choices.length
+  let srcCount    : Nat  := Nat.min outgoing.length choices.length
+
+  let mut err : Bool := mismatchErr
+
+  -- arrays for clean indexing
+  let outsA   := outgoing.toArray        -- : Array (List EdgeKind)
+  let prevA   := prevDeps.toArray        -- : Array (List Bool)
+  let choiceA := choices.toArray         -- : Array Nat
+
+  for s in [0:srcCount] do
+    let opts : List EdgeKind := outsA[s]!
+    let m    : Nat           := opts.length
+    let j    : Nat           := choiceA[s]!  -- 0=inactive, 1..m valid
+
+    if j = 0 then
+      pure ()
+    else if j > m then
+      err := true
+    else
+      -- pick the (j-1)-th option safely
+      match opts[j - 1]? with
+      | none   => err := true
+      | some opt =>
+        let maj : List Bool := prevA.getD s zeroVec
+
+        -- contribution for the chosen edge
+        let contrib : List Bool :=
+          match opt with
+          | EdgeKind.rep _tgt         => maj
+          | EdgeKind.intro _tgt X     => andVec maj (notVec (chi X))
+          | EdgeKind.elim _tgt mIdx _ => orVec maj (prevA.getD mIdx zeroVec)
+
+        -- target bucket
+        let tgt : Nat :=
+          match opt with
+          | EdgeKind.rep t       => t
+          | EdgeKind.intro t _   => t
+          | EdgeKind.elim t _ _  => t
+
+        if h : tgt < tgtCount then
+          -- Fin index avoids deprecated get!/proof noise
+          let old := perTarget[tgt]!
+          perTarget := perTarget.set! tgt (orVec old contrib)
+        else
+          err := true
+
+  (perTarget.toList, err)
+
+/-- pure: OR two Bool vectors of the same length (zip ||). -/
+def orVec (a b : List Bool) : List Bool := List.zipWith (· || ·) a b
+
+/-- pure spec for a whole grid using outgoing-path choices. -/
+def specWholeGridOutgoing
+  (B     : BuiltOutgoing)
+  (path  : List (List Nat))     -- per transition k, per source choice j
+  : (List (List (List Bool)) × Bool) :=
+Id.run do
+  let formsA   := B.formulas.toArray
+  let outsA    := B.outgoings.toArray
+  let transCnt := outsA.size
+
+  -- level 0 directly from B.initDeps
+  let mut allLevels : List (List (List Bool)) := [B.initDeps]
+  let mut prev      : List (List Bool)        := B.initDeps
+  let mut gErr      : Bool                    := false
+
+  let pathA := path.toArray
+
+  for k in [0:transCnt] do
+    let currForms := formsA[k+1]!
+    let outgoing  := outsA[k]!
+    let choices   := (pathA.getD k []).toArray.toList
+    let (next, e) := specLevelOutgoing
+                      B.encN B.basis prev currForms outgoing choices
+    gErr      := gErr || e
+    allLevels := allLevels ++ [next]
+    prev      := next
+
+  (allLevels, gErr)
+
+/-- compare a and b level-by-level, node-by-node, vector-wise. -/
+def eqLevels (a b : List (List (List Bool))) : Bool :=
+  decide (a = b)
+
+/-- single-run check: spec vs compiled for the same BuiltOutgoing and path. -/
+def checkSpecVsCompiledOnce
+  (B     : BuiltOutgoing)
+  (path  : List (List Nat))
+  : Bool :=
+Id.run do
+  -- spec
+  let (outsS, errS) := specWholeGridOutgoing B path
+
+  -- compiled
+  let ((outsW, errW), circ) := runBuilder (compileWholeGridOutgoing B)
+  let inputs := packPathBits B.layout path
+  let vals   := simulate circ inputs
+  let outsC  : List (List (List Bool)) :=
+      outsW.map (fun layer => layer.map (fun vec => readVec vals vec))
+  let errC   : Bool := vals[errW]!
+
+  eqLevels outsS outsC && (errS = errC)
+
+
+#eval
+  match buildOutgoing D0 with
+  | .error e => false
+  | .ok B =>
+      let path : List (List Nat) := []
+      checkSpecVsCompiledOnce B path
+
+/-- pure: "all false" on a Bool vector. -/
+def allFalse (xs : List Bool) : Bool := xs.all (· = false)
+
+def specFinalOutput
+  (B : BuiltOutgoing)
+  (goalLevel goalIdx : Nat)
+  (path : List (List Nat))
+  : Bool :=
+Id.run do
+  let (levels, err) := specWholeGridOutgoing B path
+  let levelsA := levels.toArray
+  let some level := levelsA[goalLevel]?
+    | true   -- out-of-bounds -> conservatively flag as error/true
+  let levelA := level.toArray
+  let v      := levelA.getD goalIdx []  -- default empty
+  err || allFalse v
+
+/-- check final-output wire vs spec bit, starting from DLDS. -/
+def checkFinalBitFromDLDS
+  (d : DLDS) (goalLevel goalIdx : Nat) (path : List (List Nat))
+  : Except String Bool := do
+  let B ← buildOutgoing d
+  -- compiled wire
+  let (wire, circ) := runBuilder do
+    let (levelsW, gErr) ← compileWholeGridOutgoing B
+    let lvlA  := (levelsW.toArray)[goalLevel]!
+    let goalV := (lvlA.toArray).getD goalIdx []
+    let zero  ← vecAllFalse goalV
+    allocOr gErr zero
+  let vals  := simulate circ (packPathBits B.layout path)
+  let comp  := vals[wire]!
+  let spec  := specFinalOutput B goalLevel goalIdx path
+  pure (comp = spec)
+
+/-- For each transition k, return the number of sources at prev level k. -/
+def prevRowSizes (B : BuiltOutgoing) : List Nat :=
+  (List.range B.outgoings.length).map (fun k => (B.formulas[k]!).length)
+
+/-- For each transition k and source s, how many valid choices (0..m)? (m varies by s). -/
+def pathDomain (B : BuiltOutgoing) : List (List Nat) :=
+  B.outgoings.map (fun row => row.map (fun opts => opts.length))
+
+/-- A "do nothing" path: all sources inactive (0). -/
+def defaultInactivePath (B : BuiltOutgoing) : List (List Nat) :=
+  B.outgoings.map (fun row => List.replicate row.length 0)
+
+/-- clamp each path choice to the valid domain 0..m for that source -/
+def clampPathToOutgoing (outgoing : List (List EdgeKind)) (row : List Nat) : List Nat :=
+  let m := outgoing.length
+  let outA := outgoing.toArray
+  (List.range m).map (fun s =>
+    let opts := outA[s]!
+    let maxj := opts.length
+    let j := row.getD s 0
+    if j > maxj then maxj else j)
+
+/-- clamp a whole path to the model B -/
+def clampPath (B : BuiltOutgoing) (path : List (List Nat)) : List (List Nat) :=
+  let outsA := B.outgoings.toArray
+  let rows  := path.length.min outsA.size
+  (List.range rows).map (fun k =>
+    clampPathToOutgoing (outsA[k]!) (path.getD k []))
+
+
+/-- Validate key invariants of `BuiltOutgoing`. Returns `ok ()` or an explanatory error. -/
+def validateBuiltOutgoing (B : BuiltOutgoing) : Except String PUnit := do
+  -- every transition has a prev and next formula row
+  if B.formulas.length < 1 then
+    throw "validate: formulas must contain at least level 0"
+  if B.outgoings.length ≠ (B.formulas.length - 1) then
+    throw s!"validate: outgoings length {B.outgoings.length} ≠ formulas-1 {B.formulas.length-1}"
+  if B.layout.length    ≠ (B.formulas.length - 1) then
+    throw s!"validate: layout length {B.layout.length} ≠ formulas-1 {B.formulas.length-1}"
+
+  -- per transition: layout rows count must equal prev-level size
+  for k in [0 : B.outgoings.length] do
+    let prevSz := (B.formulas[k]!).length
+    let lrows  := (B.layout[k]!).length
+    if lrows ≠ prevSz then
+      throw s!"validate: layout rows at trans {k} = {lrows} ≠ prev size {prevSz}"
+    let outs   := (B.outgoings[k]!).toArray
+    -- for each source, options' targets must be < next-level size
+    let nextSz := (B.formulas[k+1]!).length
+    for s in [0:prevSz] do
+      for opt in (outs[s]!) do
+        let tgt : Nat := match opt with
+          | .rep t       => t
+          | .intro t _   => t
+          | .elim t _ _  => t
+        if ¬ (tgt < nextSz) then
+          throw s!"validate: at trans {k}, source {s} has target {tgt} ≥ next size {nextSz}"
+
+  -- encN must match basis length
+  if B.encN ≠ B.basis.length then
+    throw s!"validate: encN {B.encN} ≠ basis.length {B.basis.length}"
+
+  pure ()
+
+
+/-- Pretty string for a formula. -/
+def ppFormula : Formula → String
+  | .atom s     => s
+  | .impl a b   =>
+    let pa := match a with | .atom _ => ppFormula a | _ => "(" ++ ppFormula a ++ ")"
+    let pb := match b with | .atom _ => ppFormula b | _ => "(" ++ ppFormula b ++ ")"
+    pa ++ " ⊃ " ++ pb
+
+/-- Pretty string for one EdgeKind (source-local view). -/
+def ppEdgeKind : EdgeKind → String
+  | .rep t          => s!"rep → t={t}"
+  | .intro t X      => s!"intro → t={t}, discharge={ppFormula X}"
+  | .elim t m X     => s!"elim → t={t}, minor={m}, ante={ppFormula X}"
+
+/-- Dump one transition's outgoing options as a table (sources × options). -/
+def ppOutgoingRow (prevForms currForms : List Formula) (row : List OutgoingOptions) : String :=
+  let header := s!"prev: [{String.intercalate ", " (prevForms.map ppFormula)}]  ⟶  next: [{String.intercalate ", " (currForms.map ppFormula)}]"
+  let lines :=
+    (row.enum.map fun (s, opts) =>
+      let left  := s!"s={s} ({ppFormula (prevForms.getD s (.atom "?"))})"
+      let right := String.intercalate " | " (opts.enum.map (fun (j, ek) => s!"j={j+1}: {ppEdgeKind ek}"))
+      left ++ " : " ++ right)
+  String.intercalate "\n" (header :: lines)
+
+/-- Dump all transitions. -/
+def ppAllOutgoings (B : BuiltOutgoing) : String :=
+  let F := B.formulas.toArray
+  let O := B.outgoings.toArray
+  let acc :=
+    (List.range O.size).map (fun k =>
+      s!"\n-- Transition {k} --\n" ++
+      ppOutgoingRow (F[k]!) (F[k+1]!) (O[k]!))
+  String.intercalate "\n" acc
+
+/-- Check spec vs compiled for a DLDS and a path (after clamping). -/
+def checkSpecVsCompiledFromDLDS
+  (d    : DLDS)
+  (path : List (List Nat))
+  : Except String Bool := do
+  let B ← buildOutgoing d
+  validateBuiltOutgoing B
+  let p := clampPath B path
+  pure (checkSpecVsCompiledOnce B p)
+
+/-- Always-0 path check. -/
+def checkZeroPath (d : DLDS) : Except String Bool := do
+  let B ← buildOutgoing d
+  validateBuiltOutgoing B
+  let p := defaultInactivePath B
+  pure (checkSpecVsCompiledOnce B p)
+
+
+/-- Number of nodes per level. -/
+def levelSizes (B : BuiltOutgoing) : List Nat :=
+  B.formulas.map (·.length)
+
+/-- Total input bits demanded by the path layout. -/
+def totalPathBits (B : BuiltOutgoing) : Nat :=
+  B.layout.foldl (fun acc lvl =>
+    acc + lvl.foldl (fun a s => a + s.bits) 0) 0
+
+/-- Find (level, index-in-level) for a node id inside a BuiltOutgoing. -/
+def indexOfNodeId? (B : BuiltOutgoing) (nodeId : Nat) : Option (Nat × Nat) :=
+  let L := B.levels.toArray
+  let rec loop (k : Nat) : Option (Nat × Nat) :=
+    if h : k < L.size then
+      let row := L[k]!
+      match (row.enum.find? (fun (i,v) => v.node = nodeId)) with
+      | some (i, _) => some (k, i)
+      | none        => loop (k+1)
+    else none
+  loop 0
+
+structure Executable where
+  circuit   : CircuitOp.Circuit
+  outsW     : List (List (List CircuitOp.Wire))   -- per level, per node, dep-vector wires
+  errW      : CircuitOp.Wire
+  layout    : PathLayout
+  encN      : Nat
+  basis     : List CircuitOp.Formula
+  levels    : List (List CircuitOp.Vertex)
+  outgoings : List (List OutgoingOptions)
+deriving Repr
+
+/-- Build an Executable from a DLDS: full-universe basis, enumerated rule space. -/
+def buildExecutableFromDLDS (d : CircuitOp.DLDS) : Except String Executable := do
+  let B ← buildOutgoing d
+  validateBuiltOutgoing B
+  let ((outsW, errW), circ) := CircuitOp.runBuilder (compileWholeGridOutgoing B)
+  pure {
+    circuit   := circ
+    outsW     := outsW
+    errW      := errW
+    layout    := B.layout
+    encN      := B.encN
+    basis     := B.basis
+    levels    := B.levels
+    outgoings := B.outgoings
+  }
+
+/-- Using the Executable’s baked `levels`, find (level, idx) for a node id. -/
+def execIndexOfNodeId? (E : Executable) (nodeId : Nat) : Option (Nat × Nat) :=
+  let L := E.levels.toArray
+  let rec go (k : Nat) : Option (Nat × Nat) :=
+    if h : k < L.size then
+      let row := L[k]!
+      match (row.enum.find? (fun (i,v) => v.node = nodeId)) with
+      | some (i, _) => some (k, i)
+      | none        => go (k+1)
+    else none
+  go 0
+
+/-- Read one node’s dependency vector as Bool list from a simulated value array. -/
+def readNodeDeps (E : Executable) (vals : Array Bool) (level idx : Nat) : List Bool :=
+  let levelW := (E.outsW.toArray)[level]!
+  let nodeW  := (levelW.toArray).getD idx []
+  CircuitOp.readVec vals nodeW
+
+
+/-- Simulate an Executable with a concrete path → full value array. -/
+def execSimulate (E : Executable) (path : List (List Nat)) : Array Bool :=
+  let inputs := packPathBits E.layout path
+  CircuitOp.simulate E.circuit inputs
+
+/-- Spec-final bit computed on the host: err OR "goal vector is all false". -/
+def execFinalAt (E : Executable) (vals : Array Bool) (level idx : Nat) : Bool :=
+  let err := vals[E.errW]!
+  let v   := readNodeDeps E vals level idx
+  err || (v.all (· = false))
+
+/-- Run by (level, idx). -/
+def runOnceAt (E : Executable) (path : List (List Nat)) (level idx : Nat) : Bool :=
+  let vals := execSimulate E path
+  execFinalAt E vals level idx
+
+/-- Run by original DLDS node id. -/
+def runOnceAtNode (E : Executable) (path : List (List Nat)) (nodeId : Nat) : Option Bool :=
+  match execIndexOfNodeId? E nodeId with
+  | none => none
+  | some (lev, i) =>
+      let vals := execSimulate E path
+      some (execFinalAt E vals lev i)
+
+
+/-- How many sources on each transition. -/
+def execPrevRowSizes (E : Executable) : List Nat :=
+  (List.range E.outgoings.length).map (fun k => (E.levels[k]!).length)
+
+/-- For each transition k and source s: max valid choice m (so domain is 0..m). -/
+def execPathDomain (E : Executable) : List (List Nat) :=
+  E.outgoings.map (fun row => row.map (fun opts => opts.length))
+
+/-- All-zeros path. -/
+def execDefaultInactivePath (E : Executable) : List (List Nat) :=
+  E.outgoings.map (fun row => List.replicate row.length 0)
+
+/-- Clamp a provided path to the domain described by `E`. -/
+def execClampPath (E : Executable) (path : List (List Nat)) : List (List Nat) :=
+  let outsA := E.outgoings.toArray
+  let rows  := path.length.min outsA.size
+  (List.range rows).map (fun k =>
+    let row    := outsA[k]!
+    let maxPer := row.map (·.length)
+    let inp    := path.getD k []
+    let m := maxPer.length
+    let inpA := inp.toArray
+    (List.range m).map (fun s =>
+      let maxj := maxPer.getD s 0
+      let j    := inpA.getD s 0
+      if j > maxj then maxj else j))
+
+/-- Build once from DLDS, clamp the path, run at a node id. -/
+def runDLDSAtNode
+  (d : CircuitOp.DLDS) (nodeId : Nat) (path : List (List Nat))
+  : Except String (Option Bool) := do
+  let E ← buildExecutableFromDLDS d
+  let p := execClampPath E path
+  pure (runOnceAtNode E p nodeId)
+
+#eval
+  match buildExecutableFromDLDS D0 with
+  | .error e => s!"ERR: {e}"
+  | .ok E =>
+      let domain := execPathDomain E
+      let zeroP  := execDefaultInactivePath E
+      let nodeId := match E.levels with
+                    | []      => 0
+                    | row::_  => match row with | [] => 0 | v::_ => v.node
+      let r? := runOnceAtNode E zeroP nodeId
+      s!"domain={domain}, zero-path={zeroP}, result={r?}"
+
+/-- Atoms and compound we’ll use. -/
+def A     : Formula := .atom "A"
+def B     : Formula := .atom "B"
+def AimpB : Formula := .impl A B
+def ABimpAB: Formula := .impl AimpB AimpB
+
+/-- Vertices: put A and (A ⊃ B) at level 0; derive B at level 1; carry (A ⊃ B) at level 2. -/
+def n0 : Vertex := { node := 0, LEVEL := 0, FORMULA := A,     HYPOTHESIS := true,  COLLAPSED := false, PAST := [] }
+def n1 : Vertex := { node := 1, LEVEL := 0, FORMULA := AimpB, HYPOTHESIS := true,  COLLAPSED := false, PAST := [] }
+def n2 : Vertex := { node := 2, LEVEL := 1, FORMULA := B,     HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+def n3 : Vertex := { node := 3, LEVEL := 2, FORMULA := AimpB, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+def n4 : Vertex := { node := 4, LEVEL := 3, FORMULA := ABimpAB, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+
+/-- Edges: 0→2 (A contributes as minor), 1→2 (A ⊃ B major), 2→3 (intro to A ⊃ B discharging A). -/
+def e0 : Deduction := { START := n0, END := n2, COLOUR := 0, DEPENDENCY := [A] }
+def e1 : Deduction := { START := n1, END := n2, COLOUR := 0, DEPENDENCY := [AimpB] }
+def e2 : Deduction := { START := n2, END := n3, COLOUR := 0, DEPENDENCY := [A, AimpB] }
+def e3 : Deduction := { START := n3, END := n4, COLOUR := 0, DEPENDENCY := [AimpB] }
+
+/-- The DLDS. -/
+def d0 : DLDS := { V := [n0, n1, n2, n3, n4], E := [e0, e1, e2, e3], A := [] }
+
+#eval
+  match buildOutgoing d0 with
+  | .error e => s!"ERR: {e}"
+  | .ok B =>
+      let _ := validateBuiltOutgoing B   -- will throw in #eval if something’s inconsistent
+      let sizes   := levelSizes B
+      let summary := ppAllOutgoings B
+      let domain  := pathDomain B        -- for each transition k and source s: valid m (domain 0..m)
+      s!"levelSizes={sizes}\npathDomain={domain}\n{summary}"
+
+
+
+#eval
+  match checkZeroPath d0 with
+  | .error e => s!"ERR: {e}"
+  | .ok ok?  => s!"zeroPath spec==compiled ? {ok?}"
+
+#eval
+  let path : List (List Nat) := [[0,1], [1]]  -- trans0: A:0, A⊃B:1 ; trans1: B:1
+  match checkSpecVsCompiledFromDLDS d0 path with
+  | .error e => s!"ERR: {e}"
+  | .ok ok?  => s!"path {path}, spec==compiled ? {ok?}"
+
+
+#eval
+  match buildExecutableFromDLDS d0 with
+  | .error e => s!"ERR: {e}"
+  | .ok E =>
+      let domain := execPathDomain E
+      let zeroP  := execDefaultInactivePath E
+      s!"domain={domain}, zeroPath={zeroP}, encN={E.encN}, basis={E.basis.map ppFormula}"
+
+#eval
+  match buildExecutableFromDLDS d0 with
+  | .error e => s!"ERR: {e}"
+  | .ok E =>
+      let path := execClampPath E [[0,1],[1]]
+      let run (nid : Nat) :=
+        match runOnceAtNode E path nid with
+        | none   => s!"node {nid}: not found"
+        | some b => s!"node {nid}: final={b}"
+      String.intercalate "\n" (List.map run [0,1,2,3])
+
+/-- For a single transition k, the per-edge activation bits: prev_size × next_size. -/
+abbrev LevelEdgeBits := Array (Array Bool)
+/-- Whole path = one LevelEdgeBits per transition. -/
+abbrev EdgePathBits  := Array LevelEdgeBits
+
+/-- For a single transition k, the input bit index assigned to edge (s,t). -/
+abbrev LevelEdgeLayout := Array (Array Nat)
+
+/-- Whole layout = one LevelEdgeLayout per transition. -/
+abbrev EdgePathLayout := List LevelEdgeLayout
+
+/-- Build a rectangular Array (rows = prevSz, cols = nextSz) by a filler. -/
+private def buildRect {α} (prevSz nextSz : Nat) (f : Nat → Nat → α) : Array (Array α) :=
+  Id.run do
+    let mut rows : Array (Array α) := Array.mkEmpty prevSz
+    for s in [0:prevSz] do
+      let mut row : Array α := Array.mkEmpty nextSz
+      for t in [0:nextSz] do
+        row := row.push (f s t)
+      rows := rows.push row
+    pure rows
+
+/-- Assign **one input bit per edge** in row-major order, starting at `cursor`.
+    Returns the level layout and the next cursor. -/
+def buildLevelEdgeLayout (cursor prevSz nextSz : Nat)
+  : (LevelEdgeLayout × Nat) :=
+  let lay : LevelEdgeLayout :=
+    buildRect prevSz nextSz (fun s t => cursor + s * nextSz + t)
+  let next := cursor + prevSz * nextSz
+  (lay, next)
+
+/-- Pack one transition’s per-edge activation bits into a flat input Array using the layout. -/
+def packLevelEdgeBits (lay : LevelEdgeLayout) (bits : LevelEdgeBits) (total : Nat) : Array Bool :=
+  Id.run do
+    let mut a : Array Bool := Array.replicate total false
+    let prevSz := lay.size
+    for s in [0:prevSz] do
+      let rowLay := lay[s]!
+      let rowOn  := (bits.getD s #[] : Array Bool)
+      let nextSz := rowLay.size
+      for t in [0:nextSz] do
+        let idx := rowLay[t]!
+        let b   := rowOn.getD t false
+        a := a.set! idx b
+    pure a
+
+/-- Maximum input index used inside one level's layout. Returns 0 if empty. -/
+def maxIndexInLevel (lay : LevelEdgeLayout) : Nat :=
+  Id.run do
+    let mut mx : Nat := 0
+    let mut any := false
+    for s in [0:lay.size] do
+      let row := lay[s]!
+      for t in [0:row.size] do
+        let idx := row[t]!
+        if !any || idx > mx then
+          mx := idx
+          any := true
+    if any then mx else 0
+
+/-- Total number of input bits implied by the whole layout (max index + 1, or 0). -/
+def totalBitsFromLayout (layout : EdgePathLayout) : Nat :=
+  Id.run do
+    let mut mx : Nat := 0
+    let mut any := false
+    for lay in layout do
+      let m := maxIndexInLevel lay
+      if !any || m > mx then
+        mx := m
+        any := true
+    if any then mx + 1 else 0
+
+/-- Pack a whole path (list of LevelEdgeBits) using the whole layout. -/
+def packEdgePathBits (layout : EdgePathLayout) (path : EdgePathBits) : Array Bool :=
+  Id.run do
+    let total := totalBitsFromLayout layout
+    let mut acc : Array Bool := Array.replicate total false
+    let layA  := layout.toArray
+    let pathA := path
+    for k in [0:layA.size] do
+      let lay  := layA[k]!
+      let bits : LevelEdgeBits := pathA.getD k (#[] : Array (Array Bool))
+      let levelPacked := packLevelEdgeBits lay bits total
+      -- layouts are disjoint; OR merge to be defensive
+      for i in [0:total] do
+        acc := acc.set! i (acc[i]! || levelPacked[i]!)
+    pure acc
+
+
+/-- Semantic role of an edge (source s, target t). -/
+inductive EdgeRole
+  | rep                            -- Fs = Ft
+  | intro (X : Formula)            -- Ft = X ⊃ Y and Fs = Y
+  | elimMajor (X : Formula)        -- Fs = X ⊃ Y and Ft = Y
+  | elimMinor (X : Formula)        -- Fs = X       and Ft = Y
+  | invalid
+  deriving Repr, DecidableEq
+
+
+/-- Small helpers for Bool vectors. -/
+def andVec (a b : List Bool) : List Bool := List.zipWith (· && ·) a b
+def notVec (v : List Bool)   : List Bool := v.map (· = false)
+
+/-- χ_X : mask (length = basis.length), 1 where basis = X. -/
+def chiMask (basis : List Formula) (X : Formula) : List Bool :=
+  basis.map (fun f => decide (f = X))
+
+/-- Zero vector of length n. -/
+def zeroVec (n : Nat) : List Bool := List.replicate n false
+
+
+/-- One-hot for `φ` w.r.t. `basis`. -/
+def oneHotFor (basis : List Formula) (φ : Formula) : List Bool :=
+  let n := basis.length
+  match basis.idxOf? φ with
+  | none   => List.replicate n false
+  | some i => (List.range n).map (fun j => decide (j = i))
+
+/-- Pretty a Bool vector as 0/1 string. -/
+def ppBits (v : List Bool) : String :=
+  String.join (v.map (fun b => if b then "1" else "0"))
+
+/-- Pretty a list of Bool vectors alongside the target formulas. -/
+def ppTargetVectors (targets : List Formula) (vs : List (List Bool)) : String :=
+  let lines :=
+    (List.zip targets vs).map (fun (f, v) =>
+      s!"{ppFormula f}  :=  {ppBits v}")
+  String.intercalate "\n" lines
+
+/-- Make an `src×tgt` Array(Array Bool) with `true` at the given (s,t) pairs. -/
+def mkEdgeOn (src tgt : Nat) (ones : List (Nat × Nat)) : Array (Array Bool) :=
+  Id.run do
+    let mut a := Array.replicate src (Array.replicate tgt false)
+    for (s,t) in ones do
+      if h₁ : s < src then
+        if h₂ : t < tgt then
+          let row := a[s]!
+          a := a.set! s (row.set! t true)
+        else
+          pure ()
+      else
+        pure ()
+    pure a
+
+
+
+def edge (s e : Vertex) (col : Nat) (deps : List Formula) : Deduction :=
+  { START := s, END := e, COLOUR := col, DEPENDENCY := deps }
+
+/-- Pull out: levels, per-level formulas, full-universe basis, and init vectors for level 0. -/
+def extractLevelData (d : DLDS) :
+  List (List Vertex) × List (List Formula) × List Formula × Nat × List (List Bool) :=
+Id.run do
+  let packs := groupByLevel d
+  let levels : List (List Vertex) := packs.map (·.nodes)
+  let forms  : List (List Formula) := levels.map (·.map (·.FORMULA))
+  -- full-universe basis:
+  let basis : List Formula := (d.V.map (·.FORMULA)).eraseDups
+  let encN := basis.length
+  -- initial dependency vectors for level 0: mark hypotheses
+  let L0 := levels.headD []
+  let init : List (List Bool) :=
+    L0.map (fun v => oneHotFor basis (if v.HYPOTHESIS then v.FORMULA else .atom "__⊥"))
+  (levels, forms, basis, encN, init)
+
+
+/-- Build full-universe basis, levels (their count), and initial level-0 dependency vectors per formula. -/
+def buildEdgesUniverse (d : DLDS)
+  : (List Formula) × Nat × Nat × List (List Bool) × List (List Formula) := Id.run do
+  -- universe basis
+  let basis : List Formula := (d.V.map (·.FORMULA)).eraseDups
+  let N := basis.length
+
+  -- levels: use the DLDS LEVELs to determine how many transitions, but
+  -- each level's "grid row" is the *full universe* (N nodes).
+  let packs := groupByLevel d
+  let L     := packs.length
+  let levelsForms : List (List Formula) := List.replicate L basis
+
+  -- level-0 initial dep vectors: one per universe formula; 1-hot if that formula occurs
+  -- at level 0 as a hypothesis, else all-false.
+  let L0_nodes := (packs.headD { level := 0, nodes := [] }).nodes
+  let isHyp (φ : Formula) : Bool := (L0_nodes.any (fun v => v.FORMULA = φ ∧ v.HYPOTHESIS))
+  let oneHotFor (φ : Formula) : List Bool :=
+    let idx? := basis.idxOf? φ
+    (List.range N).map (fun j => decide (some j = idx?))
+  let init0 : List (List Bool) :=
+    basis.map (fun φ => if isHyp φ then oneHotFor φ else List.replicate N false)
+
+  (basis, N, L, init0, levelsForms)
+
+/-- For pretty-printing a roles table. -/
+def ppRoles (prev curr : List Formula) (roles : Array (Array EdgeRole)) : String :=
+  let header := s!"prev=[{String.intercalate ", " (prev.map ppFormula)}]  →  next=[{String.intercalate ", " (curr.map ppFormula)}]"
+  let lines :=
+    roles.toList.enum.map (fun (s,row) =>
+      let left  := s!"s={s} ({ppFormula (prev.getD s (.atom "?"))})"
+      let cells := row.toList.enum.map (fun (t,r) =>
+        s!"t={t}:{match r with
+                  | .rep => "rep"
+                  | .intro X => s!"intro({ppFormula X})"
+                  | .elimMajor X => s!"elimMaj({ppFormula X})"  -- (not used by our role gen)
+                  | .elimMinor X => s!"elimMin({ppFormula X})"
+                  | .invalid => "INVALID"}")
+      left ++ " : " ++ String.intercalate " | " cells)
+  String.intercalate "\n" (header :: lines)
+
+structure BuiltEdges where
+  basis     : List Formula         -- full universe
+  N         : Nat                  -- basis size
+  L         : Nat                  -- number of levels
+  init0     : List (List Bool)     -- N vectors at level 0 (each length N)
+  roles     : Array (Array EdgeRole)   -- common NxN roles between identical rows (basis→basis)
+  starts    : Array Nat            -- length L-1; start offset of each transition
+  totalBits : Nat
+deriving Repr
+
+/-- Pack a "path" described as, for each transition k, a list of (s,t) edges turned ON. -/
+def packEdgePath (B : BuiltEdges) (path : List (List (Nat × Nat))) : Array Bool :=
+  Id.run do
+    let mut arr := Array.replicate B.totalBits false
+    let pathA   := path.toArray
+    let starts  := B.starts
+    let block   := B.N * B.N
+    for k in [0:starts.size] do
+      let start := starts[k]!
+      let row   := pathA.getD k [] |>.toArray
+      for (s,t) in row do
+        if hs : s < B.N then
+          if ht : t < B.N then
+            let idx := start + s * B.N + t
+            if hidx : idx < arr.size then
+              arr := arr.set! idx true
+            else
+              pure ()
+          else pure ()
+        else pure ()
+    pure arr
+
+/-- SPEC: combine prev deps with NxN bit matrix and roles; returns (target vectors, invalid-edge error). -/
+def specLevelEdges
+  (encN      : Nat)
+  (basis     : List Formula)
+  (prevDeps  : List (List Bool))
+  (currForms : List Formula)
+  (edgeOn    : Array (Array Bool))
+  (roles     : Array (Array EdgeRole))
+  : (List (List Bool) × Bool) :=
+Id.run do
+  -- helpers (pure)
+  let zeroVec (n : Nat) : List Bool := List.replicate n false
+  let orVec  (a b : List Bool) : List Bool := List.zipWith (· || ·) a b
+  let andVec (a b : List Bool) : List Bool := List.zipWith (· && ·) a b
+  let notVec (v : List Bool) : List Bool := v.map (· = false)
+  let chiMask (basis : List Formula) (X : Formula) : List Bool :=
+    basis.map (fun f => decide (f = X))
+
+  let prevA    := prevDeps.toArray
+  let tgtCount := currForms.length
+  let srcCount := prevA.size
+
+  let mut perTarget : Array (List Bool) := Array.replicate tgtCount (zeroVec encN)
+  let mut errInvalid : Bool := false
+
+  for t in [0:tgtCount] do
+    let mut repC    : List Bool := zeroVec encN
+    let mut introC  : List Bool := zeroVec encN
+    let mut elimC   : List Bool := zeroVec encN
+
+    /- collect majors/minors keyed by antecedent X (only those whose bit is ON) -/
+    let mut majors : List (Formula × Nat) := []   -- (X, sMaj)
+    let mut minors : List (Formula × Nat) := []   -- (X, sMin)
+
+    for s in [0:srcCount] do
+      let r   := (roles.getD s #[] : Array EdgeRole).getD t EdgeRole.invalid
+      let on  := (edgeOn.getD s #[] : Array Bool).getD t false
+      match r with
+      | .rep =>
+          if on then
+            repC := orVec repC (prevA.getD s (zeroVec encN))
+      | .intro X =>
+          if on then
+            let maj := prevA.getD s (zeroVec encN)
+            let nχ  := notVec (chiMask basis X)
+            introC := orVec introC (andVec maj nχ)
+      | .elimMinor X =>
+          if on then minors := (X, s) :: minors
+      | .elimMajor X =>
+          if on then majors := (X, s) :: majors
+      | .invalid =>
+          if on then errInvalid := true
+
+    /- pair majors and minors on the same X: OR over (maj ∨ min) for all pairs -/
+    for (X, sMaj) in majors do
+      for (_, sMin) in minors.filter (fun p => p.fst = X) do
+        let maj := prevA.getD sMaj (zeroVec encN)
+        let min := prevA.getD sMin (zeroVec encN)
+        elimC := orVec elimC (orVec maj min)
+
+    let outT := orVec (orVec repC introC) elimC
+    perTarget := perTarget.set! t outT
+
+  (perTarget.toList, errInvalid)
+
+/-- Roles for (Fs, Ft) pair. -/
+def roleOfPair : Formula → Formula → EdgeRole
+  | Fs, Ft =>
+    if Fs = Ft then
+      .rep
+    else
+      match Ft with
+      | .impl X Y =>
+          if Fs = Y then
+            .intro X
+          else
+            match Fs with
+            | .impl X' Y' =>
+                if Y' = Y then .elimMajor X' else .invalid
+            | _ => .invalid
+      | _ =>
+        match Fs with
+        | .impl X' Y' =>
+            if Y' = Ft then .elimMajor X' else .invalid
+        | _ =>
+          -- non-impl target, non-equal source => invalid
+          .invalid
+
+/-- Build roles matrix for one level transition: S×T. -/
+def edgeRolesForLevel (prevForms currForms : List Formula) : Array (Array EdgeRole) :=
+  let prevA := prevForms.toArray
+  let nextA := currForms.toArray
+  let S := prevA.size
+  let T := nextA.size
+  let row (s : Nat) : Array EdgeRole :=
+    Array.mk <|
+      (List.range T).map (fun t =>
+        let Fs := prevA.getD s (.atom "__?")
+        let Ft := nextA.getD t (.atom "__?")
+        if Fs = Ft then
+          EdgeRole.rep
+        else
+          match Ft with
+          | .impl X Y =>
+              if Fs = Y then
+                EdgeRole.intro X
+              else
+                match Fs with
+                | .impl X' Y' =>
+                    -- MAJOR when Fs = X'⊃Y' and Ft = Y'
+                    if Y' = Y then EdgeRole.elimMajor X' else EdgeRole.invalid
+                | _ => EdgeRole.invalid
+          | _ =>
+            match Fs with
+            | .impl X' Y' =>
+                -- MAJOR when Ft = Y' and Fs = X'⊃Y' (non-impl target case)
+                if Y' = Ft then EdgeRole.elimMajor X' else EdgeRole.invalid
+            | _ =>
+              EdgeRole.invalid)
+  Array.mk <| (List.range S).map row
+
+/-- Universe & level info for the edges pipeline, with a safe check for empty DLDS. -/
+def edgesUniverseFromDLDS
+  (d : DLDS)
+  : Except String (List Formula × Nat × List (List Formula) × List (List Bool)) := do
+  let basis := buildUniverse d
+  let packs := groupByLevel d
+  match packs with
+  | [] =>
+      throw "edgesUniverseFromDLDS: DLDS has no vertices (no levels found)."
+  | p0 :: _ =>
+      -- one row of formulas per level (in order)
+      let levelsForms : List (List Formula) :=
+        packs.map (fun p => p.nodes.map (·.FORMULA))
+      -- size & initial vectors from level 0 (you already made this use the full-universe basis)
+      let (_, encN, init0) := buildEncodingAndInit d p0.nodes
+      pure (basis, encN, levelsForms, init0)
+
+/-- SPEC: whole-grid execution with NxN edges per transition. -/
+def specWholeGridEdges
+  (encN   : Nat)
+  (basis  : List Formula)
+  (levels : List (List Formula))
+  (init   : List (List Bool))
+  (path   : EdgePathBits)     -- one S×T matrix per transition
+  : (List (List (List Bool)) × Bool) :=
+Id.run do
+  let formsA   := levels.toArray
+  let transCnt := (levels.length - 1).max 0
+
+  let mut allLevels : List (List (List Bool)) := [init]
+  let mut prev      : List (List Bool)        := init
+  let mut gErr      : Bool                    := false
+
+  for k in [0:transCnt] do
+    let prevForms := formsA[k]!
+    let nextForms := formsA[k+1]!
+    let roles     := edgeRolesForLevel prevForms nextForms
+    let edgeBits  : LevelEdgeBits := path.getD k (#[] : Array (Array Bool))
+    let (next, e) := specLevelEdges encN basis prev nextForms edgeBits roles
+    gErr      := gErr || e
+    allLevels := allLevels ++ [next]
+    prev      := next
+
+  (allLevels, gErr)
+
+def specFinalFromEdges
+  (encN   : Nat) (basis : List Formula) (levels : List (List Formula))
+  (init   : List (List Bool)) (path : EdgePathBits)
+  (goalLevel goalIdx : Nat)
+  : Bool :=
+Id.run do
+  let (outs, err) := specWholeGridEdges encN basis levels init path
+  let outsA := outs.toArray
+  let some row := outsA[goalLevel]? | true
+  let v := (row.toArray).getD goalIdx (List.replicate encN false)
+  err || allFalse v
+
+
+
+/-- gate-level helpers -/
+def vecOrW  (a b : List Wire) : Builder (List Wire) :=
+  BitVecAlg.vzipWith (m := Builder) (n := a.length) CircuitOp.allocOr a b
+
+def vecAndW (a b : List Wire) : Builder (List Wire) :=
+  BitVecAlg.vzipWith (m := Builder) (n := a.length) CircuitOp.allocAnd a b
+
+def vecOrWn  (n : Nat) (a b : List Wire) : Builder (List Wire) :=
+  BitVecAlg.vzipWith (m := Builder) (n := n) CircuitOp.allocOr a b
+
+def vecAndWn (n : Nat) (a b : List Wire) : Builder (List Wire) :=
+  BitVecAlg.vzipWith (m := Builder) (n := n) CircuitOp.allocAnd a b
+
+def vecNotWn (n : Nat) (a : List Wire) : Builder (List Wire) :=
+  BitVecAlg.vmap (m := Builder) (n := n) CircuitOp.allocNot a
+
+def vecNotW (a : List Wire) : Builder (List Wire) :=
+  BitVecAlg.vmap (m := Builder) (n := a.length) CircuitOp.allocNot a
+/-- χ_X mask as wires -/
+def chiMaskW (basis : List Formula) (X : Formula) : CircuitOp.Builder (List CircuitOp.Wire) :=
+  basis.mapM (fun f => CircuitOp.allocConst (decide (f = X)))
+/-- Compile one NxN level using packed input layout start + s*N + t. -/
+
+def compileLevelEdges
+  (B         : BuiltEdges)
+  (prevDeps  : List (List CircuitOp.Wire))
+  (currForms : List Formula)
+  (start     : Nat)
+  : CircuitOp.Builder (List (List CircuitOp.Wire) × CircuitOp.Wire) := do
+
+  let prevA := prevDeps.toArray
+  let tgtCount := currForms.length
+  let srcCount := prevA.size
+
+  -- roles are common NxN on the universe rows
+  let roles := B.roles
+
+  let zeroV ← CircuitOp.allocConstVec B.N false
+  let mut perTarget : Array (List CircuitOp.Wire) := Array.replicate tgtCount zeroV
+  let mut errInv : CircuitOp.Wire := (← CircuitOp.allocConst false)
+
+  -- collect per-target buckets
+  for t in [0:tgtCount] do
+    let mut repC    : List CircuitOp.Wire := zeroV
+    let mut introC  : List CircuitOp.Wire := zeroV
+    let mut elimC   : List CircuitOp.Wire := zeroV
+
+    -- collect minors & majors keyed by X
+    let mut majors : List (Formula × Nat) := []
+    let mut minors : List (Formula × Nat) := []
+
+    for s in [0:srcCount] do
+      let bitIdx := start + s * B.N + t
+      let on ← CircuitOp.allocInput bitIdx
+      let r  := (roles.getD s #[] : Array EdgeRole).getD t EdgeRole.invalid
+      match r with
+      | .rep => do
+          let maj := prevA.getD s zeroV
+          let masked ← BitVecAlg.vmaskBy (m := CircuitOp.Builder) (n := B.N) on maj
+          repC ← vecOrWn B.N repC masked
+      | .intro X => do
+          let χ  ← chiMaskW B.basis X
+          let nχ ← vecNotWn B.N χ
+          let maj := prevA.getD s zeroV
+          let maj2 ← vecAndWn B.N maj nχ
+          let masked ← BitVecAlg.vmaskBy (m := CircuitOp.Builder) (n := B.N) on maj2
+          introC ← vecOrWn B.N introC masked
+      | .elimMinor X => do
+          minors := (X, s) :: minors
+          pure ()
+      | .elimMajor X => do
+          majors := (X, s) :: majors
+          pure ()
+      | .invalid => do
+          -- if invalid edge is ON, raise error; else ignore
+          let e ← CircuitOp.allocBuf on
+          errInv ← CircuitOp.allocOr errInv e
+
+    -- auto-major discovery (rows are basis)
+    for s in [0:srcCount] do
+      match (B.basis.getD s (.atom "__?")) with
+      | .impl X' Y' =>
+          if Y' = currForms.getD t (.atom "__?") then
+            majors := (X', s) :: majors
+            pure ()
+          else
+            pure ()
+      | _ => pure ()
+
+    -- combine elim pairs for each X: OR over (maj ∨ min), mask by (on_major AND on_minor)
+    for (X, sMaj) in majors do
+      for (_, sMin) in minors.filter (fun p => p.fst = X) do
+        let bitMaj ← CircuitOp.allocInput (start + sMaj * B.N + t)
+        let bitMin ← CircuitOp.allocInput (start + sMin * B.N + t)
+        let both   ← CircuitOp.allocAnd bitMaj bitMin
+        let maj    := prevA.getD sMaj zeroV
+        let min    := prevA.getD sMin zeroV
+        let uni    ← vecOrWn B.N maj min
+        let masked ← BitVecAlg.vmaskBy (m := CircuitOp.Builder) (n := B.N) both uni
+        elimC ← vecOrWn B.N elimC masked
+
+    let outT ← vecOrWn B.N (← vecOrWn B.N repC introC) elimC
+    perTarget := perTarget.set! t outT
+
+  pure (perTarget.toList, errInv)
+
+
+
+/-- Whole grid compile (L levels → L-1 transitions). -/
+def compileWholeGridEdges (B : BuiltEdges)
+  : CircuitOp.Builder (List (List (List CircuitOp.Wire)) × CircuitOp.Wire) := do
+  let T := if B.L = 0 then 0 else B.L - 1
+  -- level 0 wires
+  let lvl0 ← B.init0.mapM (fun row => row.mapM CircuitOp.allocConst)
+  let mut levels : List (List (List CircuitOp.Wire)) := [lvl0]
+  let mut prev := lvl0
+  let mut gErr : CircuitOp.Wire := (← CircuitOp.allocConst false)
+  for k in [0:T] do
+    let start := B.starts[k]!
+    let (next, e) ← compileLevelEdges B prev B.basis start
+    gErr ← CircuitOp.allocOr gErr e
+    levels := levels ++ [next]
+    prev := next
+  pure (levels, gErr)
+
+
+/-- "all false" in wires -/
+def vecAllFalse (xs : List CircuitOp.Wire) : CircuitOp.Builder CircuitOp.Wire := do
+  let any ← BitVecAlg.vreduceOr (m := CircuitOp.Builder) (n := xs.length) xs
+  BitVecAlg.bnot (m := CircuitOp.Builder) any
+
+/-- Build the Edges model from a DLDS. -/
+def buildEdges (d : DLDS) : BuiltEdges :=
+  Id.run do
+    let (basis, N, L, init0, levelsForms) := buildEdgesUniverse d
+    -- Roles are classified on the basis×basis grid (same for every transition).
+    let roles := edgeRolesForLevel basis basis
+    -- Bit layout: blocks of N*N per transition.
+    let T := (if L = 0 then 0 else L - 1)
+    let block := N * N
+    let starts := Array.mk <| (List.range T).map (fun k => k * block)
+    let totalBits := T * block
+    { basis, N, L, init0, roles, starts, totalBits }
+
+/-- Final result = error ∨ allZero(goalVec). -/
+def simulateEdgesFromDLDS
+  (d : DLDS)
+  (path : List (List (Nat × Nat)))   -- for each transition k, which edges (s,t) are ON
+  (goalLevel goalIdx : Nat)
+  : Except String Bool := do
+  let B := buildEdges d
+  -- compile circuit once
+  let (fwire, circ) := CircuitOp.runBuilder do
+    let (levelsW, gErr) ← compileWholeGridEdges B
+    let levelsA := levelsW.toArray
+    let some level := levelsA[goalLevel]?
+      | pure (← CircuitOp.allocConst true)   -- oob → force "true"
+    let goalV := (level.toArray).getD goalIdx []
+    let zero ← CircuitOp.vecAllFalse goalV
+    CircuitOp.allocOr gErr zero
+  -- pack edge-on bits and simulate
+  let inputs := packEdgePath B path
+  let vals := CircuitOp.simulate circ inputs
+  pure (vals[fwire]!)
+
+
+#eval
+  let B := buildEdges d0
+  s!"basis={B.basis.map ppFormula}, N={B.N}, L={B.L}, totalBits={B.totalBits}, starts={B.starts.toList}"
+
+/-- Helper: find a formula index in B.basis, default 0 if missing. -/
+def idx! (B : BuiltEdges) (f : Formula) : Nat :=
+  match B.basis.idxOf? f with
+  | some i => i
+  | none   => 0  -- shouldn't happen in our examples
+
+/-- The test path for d0, picked using the basis indices. -/
+def pathEdges_d0 (BE : BuiltEdges) : List (List (Nat × Nat)) :=
+  let sA     := idx! BE A
+  let sAimpB := idx! BE AimpB
+  let sB     := idx! BE B
+  let tA     := sA
+  let tAimpB := sAimpB
+  let tB     := sB
+  -- trans 0: (A⊃B → B) and (A → B)
+  let trans0 : List (Nat × Nat) := [(sAimpB, tB), (sA, tB)]
+  -- trans 1: (B → A⊃B)
+  let trans1 : List (Nat × Nat) := [(sB, tAimpB)]
+  [trans0, trans1]
+
+#eval
+  let BE := buildEdges d0
+  let path := pathEdges_d0 BE
+  let goalLevel := 2
+  let goalIdx   := idx! BE AimpB
+  match simulateEdgesFromDLDS d0 path goalLevel goalIdx with
+  | .error e => s!"ERR: {e}"
+  | .ok b    => s!"final bit = {b}"  -- expect "false"
+
+
+/-- Transpose N subpaths (one per column/leaf) into per-transition rows
+    expected by the `BuiltOutgoing` pipeline.
+
+    Input shape (your LaTeX):  subpaths : List (List Nat)
+      - outer length N (columns / unique formulas in the basis)
+      - each inner length ideally L-1 (steps), but we tolerate ragged
+        by padding missing entries with 0.
+
+    Output shape (ours):       List (List Nat)
+      - outer length L-1 (transitions)
+      - each inner length N    (sources at that transition)
+-/
+def transposeSubpaths
+  (N Lminus1 : Nat)
+  (subpaths : List (List Nat)) :
+  List (List Nat) :=
+  let colsA := subpaths.toArray
+  -- For each transition k, build the row [ subpaths[c][k] default 0 | c ← 0..N-1 ].
+  (List.range Lminus1).map (fun k =>
+    (List.range N).map (fun c =>
+      (colsA.getD c []).toArray.getD k 0))
+
+/-- Best-effort "root" selection: pick a vertex at the *maximum* LEVEL.
+    If multiple, choose the smallest node id for determinism. -/
+def pickRoot (d : DLDS) : Option Vertex :=
+  let mx := d.V.foldl (fun acc v => Nat.max acc v.LEVEL) 0
+  let candidates := d.V.filter (fun v => v.LEVEL = mx)
+  match candidates with
+  | []      => none
+  | v :: vs => some (List.foldl (fun best w => if w.node < best.node then w else best) v vs)
+
+/-- Given a BuiltOutgoing and a DLDS, compute the fixed goal = (level 0, index of l(root)). -/
+def goalForRoot (B : BuiltOutgoing) (d : DLDS) : Except String (Nat × Nat) := do
+  let some r := pickRoot d | throw "goalForRoot: DLDS has no root candidate."
+  let some j := B.basis.idxOf? r.FORMULA
+    | throw s!"goalForRoot: root formula {ppFormula r.FORMULA} not in basis."
+  pure (0, j)
+
+/-- Decode a Bool dependency vector back to the formulas it marks. -/
+def depsAsFormulas (basis : List CircuitOp.Formula) (v : List Bool) : List CircuitOp.Formula :=
+  (List.zip basis v).foldr (fun (f,b) acc => if b then f :: acc else acc) []
+
+/-- Uniform layout: for each transition k, allocate N specs (one per subpath c). -/
+def buildUniformPathLayout (N Lminus1 : Nat) (cursor0 : Nat := 0)
+  : (PathLayout × Nat) := Id.run do
+  let K := bitsForChoices (N+1)
+  let mut cursor := cursor0
+  let mut layout : PathLayout := []
+  for _k in [0:Lminus1] do
+    let row : LevelPathLayout :=
+      (List.range N).map (fun _ => { bits := K, start := cursor })
+    cursor := cursor + N * K
+    layout := layout ++ [row]
+  (layout, cursor)
+
+
+/-- One level compile under continuous subpaths (free target picks). -/
+def compileLevelContinuous
+  (basis : List Formula) (N : Nat)
+  (prevForms nextForms : List Formula)
+  (prevDeps : List (List Wire))
+  (pos : Array (List Wire))         -- N entries, each a one-hot length N
+  (inactive : Array Wire)           -- N entries
+  (specs : LevelPathLayout)         -- N entries: K bits per subpath
+  : Builder ( -- outputs at next level
+              List (List Wire)            -- per real target tReal, dep vector
+              × Wire                       -- structural error for this step
+              × Array (List Wire)          -- pos' for next step
+              × Array Wire                 -- inactive' for next step
+            ) := do
+  let S := prevForms.length
+  let T := nextForms.length
+  let K := match specs.head? with | none => 0 | some s => s.bits
+
+  /- 1) decode j_c and derive on_c_s_t -/
+  let mut on_s_t : Array (Array Wire) := Array.replicate N (Array.replicate N (← allocConst false))
+  let mut posNext : Array (List Wire) := Array.mkArray N (List.replicate N (← allocConst false))
+  let mut inactNext : Array Wire := Array.mkArray N (← allocConst false)
+
+  let mut stepErr : Wire := (← allocConst false)
+
+  for c in [0:N] do
+    let sp := (specs.toArray).getD c { bits := 0, start := 0 }
+    -- gather bits and decode j (0..N). You can reuse your decoder to a one-hot over N+1
+    let selBits ← (List.range sp.bits).mapM (fun i => allocInput (sp.start + i))
+    let oneHotNplus1 ← decodeIndex selBits.reverse  -- length = 2^K ≥ N+1; safe
+    -- j = 0..N; produce eq wires eq_j_k
+    -- safer: build eq wires only for [0..N], ignore extras but OR extras into stepErr
+    let mut eqJ : Array Wire := Array.mkEmpty (N+1)
+    for jVal in [0:N+1] do
+      let w := oneHotNplus1.getD jVal (← allocConst false)
+      eqJ := eqJ.push w
+    -- any selection beyond N? -> error
+    let extras := (List.range (oneHotNplus1.length)).drop (N+1)
+    for idx in extras do
+      stepErr ← allocOr stepErr (oneHotNplus1.getD idx (← allocConst false))
+
+    -- compute on_c_s_t = pos[c][s] ∧ eqJ[t+1], for all s,t
+    for s in [0:N] do
+      let atS := (pos.getD c (List.replicate N (← allocConst false))).getD s (← allocConst false)
+      for t in [0:N] do
+        let pick_t := eqJ.getD (t+1) (← allocConst false)
+        let onct  ← allocAnd atS pick_t
+        let row := on_s_t.get! s
+        let merged ← allocOr (row.get! t) onct
+        on_s_t := on_s_t.set! s (row.set! t merged)
+
+    -- advance position and inactive
+    let inPrev := inactive.getD c (← allocConst false)
+    let becameInactive ← allocOr inPrev (eqJ.get! 0)         -- j=0 OR was already inactive
+    inactNext := inactNext.set! c becameInactive
+
+    -- pos'[c] = if inactive' then 0s else onehot(t)
+    let mut nextP : List Wire := []
+    for t in [0:N] do
+      let pt := eqJ.getD (t+1) (← allocConst false)
+      let keep ← allocAnd pt (← allocNot becameInactive)
+      nextP := nextP ++ [keep]
+    posNext := posNext.set! c nextP
+
+  /- 2) produce outputs for *real* targets tReal ∈ [0..T-1] -/
+  let prevA := prevDeps.toArray
+  let mut outs : Array (List Wire) := Array.replicate T (List.replicate N (← allocConst false))
+
+  for tReal in [0:T] do
+    let Ft := nextForms.getD tReal (.atom "__?")
+    let mut repC    : List Wire := List.replicate N (← allocConst false)
+    let mut introC  : List Wire := List.replicate N (← allocConst false)
+    let mut elimC   : List Wire := List.replicate N (← allocConst false)
+
+    -- collect majors/minors keyed by X with on_s_tReal
+    let mut majors : List (Formula × Nat × Wire) := []
+    let mut minors : List (Formula × Nat × Wire) := []
+
+    for s in [0:N] do
+      let Fs := basis.getD s (.atom "__?")
+      let on := ((on_s_t.get! s).get! (basis.idxOf? Ft |>.getD 0))  -- will fix mapping below
+      -- role wrt *this* real target formula
+      let role := roleOfPair Fs Ft
+      -- map (s (basis row)) to whether s exists in prevForms
+      let sReal? := prevForms.idxOf? Fs
+      let sPresent := decide (sReal?.isSome)
+      let on_s_tReal := (on)  -- already edge-select
+      -- structural errors:
+      if not sPresent then
+        stepErr ← allocOr stepErr on_s_tReal
+      match role with
+      | .rep =>
+          if sPresent then
+            let maj := prevA.getD (sReal?.getD 0) (List.replicate N (← allocConst false))
+            let masked ← BitVecAlg.vmaskBy (m := Builder) (n := N) on_s_tReal maj
+            repC ← BitVecAlg.vzipWith (m := Builder) (n := N) allocOr repC masked
+          else pure ()
+      | .intro X =>
+          if sPresent then
+            let chi ← dischargeMaskFromBasis basis X
+            let nχ  ← BitVecAlg.vmap (m := Builder) (n := N) allocNot chi
+            let maj := prevA.getD (sReal?.getD 0) (List.replicate N (← allocConst false))
+            let maj2 ← BitVecAlg.vzipWith (m := Builder) (n := N) allocAnd maj nχ
+            let masked ← BitVecAlg.vmaskBy (m := Builder) (n := N) on_s_tReal maj2
+            introC ← BitVecAlg.vzipWith (m := Builder) (n := N) allocOr introC masked
+          else pure ()
+      | .elimMajor X =>
+          majors := (X, sReal?.getD 0, on_s_tReal) :: majors
+      | .elimMinor X =>
+          minors := (X, sReal?.getD 0, on_s_tReal) :: minors
+      | .invalid =>
+          stepErr ← allocOr stepErr on_s_tReal
+
+    -- pair elim majors/minors with same X and AND their on-bits
+    for (X, sMaj, onMaj) in majors do
+      for (_, sMin, onMin) in minors.filter (fun p => p.fst = X) do
+        let both ← allocAnd onMaj onMin
+        let maj := prevA.getD sMaj (List.replicate N (← allocConst false))
+        let min := prevA.getD sMin (List.replicate N (← allocConst false))
+        let uni ← BitVecAlg.vzipWith (m := Builder) (n := N) allocOr maj min
+        let masked ← BitVecAlg.vmaskBy (m := Builder) (n := N) both uni
+        elimC ← BitVecAlg.vzipWith (m := Builder) (n := N) allocOr elimC masked
+
+    let outT ← BitVecAlg.vzipWith (m := Builder) (n := N) allocOr (← BitVecAlg.vzipWith (m := Builder) (n := N) allocOr repC introC) elimC
+    outs := outs.set! tReal outT
+
+  pure (outs.toList, stepErr, posNext, inactNext)
+
+/-- onehot(i) over size N (as wires). -/
+def oneHotConstW (N i : Nat) : Builder (List Wire) := do
+  let mut out := []
+  for j in [0:N] do
+    out := out ++ [← allocConst (j = i)]
+  pure out
+
+/-- onehot(t) chosen by equals(j, t+1), reusing your decodeIndex/selector as needed. -/
+def eqConstW (w : Wire) (const : Bool) : Builder Wire := do
+  -- simplest: xor with const then not
+  let wc ← allocConst const
+  let x  ← allocXor w wc
+  allocNot x
+
+
+  /-- Whole grid for continuous subpaths. -/
+def compileWholeGridContinuous
+  (basis : List Formula) (levels : List (List Formula))
+  (initDeps : List (List Bool))  -- level 0 vectors, length = size(prev level)
+  (layout : PathLayout)          -- built by buildUniformPathLayout
+  : Builder (List (List (List Wire)) × Wire
+             × Array (List Wire) × Array Wire) := do
+  let N := basis.length
+  -- level 0
+  let lvl0 ← initDeps.mapM (fun v => v.mapM allocConst)
+  let mut outs : List (List (List Wire)) := [lvl0]
+  let mut prev := lvl0
+  let mut gErr : Wire := (← allocConst false)
+
+  -- positions: pos₀[c] = onehot(c); inactive₀[c] = false
+  let mut pos : Array (List Wire) := Array.mkEmpty N
+  for c in [0:N] do
+    pos := pos.push (← oneHotConstW N c)
+  let mut inactive : Array Wire := Array.replicate N (← allocConst false)
+
+  let formsA := levels.toArray
+  let layA   := layout.toArray
+  let T := (levels.length - 1).max 0
+  for k in [0:T] do
+    let prevForms := formsA[k]!
+    let nextForms := formsA[k+1]!
+    let specs     := layA[k]!
+    let (next, e, pos', ina') ← compileLevelContinuous basis N prevForms nextForms prev pos inactive specs
+    outs := outs ++ [next]
+    prev := next
+    pos := pos'
+    inactive := ina'
+    gErr ← allocOr gErr e
+
+  pure (outs, gErr, pos, inactive)
+
+
+def acceptBitFromSubpaths
+  (d : DLDS) (subpaths : List (List Nat)) : Except String Bool := do
+  let B ← buildOutgoing d             -- you already compute basis, levels, init vectors
+  validateBuiltOutgoing B
+  let N        := B.basis.length
+  let Lminus1  := B.formulas.length - 1
+  let choices  := transposeSubpaths N Lminus1 subpaths
+  let (layout, _) := buildUniformPathLayout N Lminus1
+
+  let (goalLevel, goalIdx) ← goalForRoot B d
+
+  let (wire, circ) := runBuilder do
+    let (levelsW, gErr, _pos, _ina) ← compileWholeGridContinuous B.basis B.formulas B.initDeps layout
+    let level0A := (levelsW.toArray)[goalLevel]!
+    let goalV   := (level0A.toArray).getD goalIdx []
+    let zero    ← CircuitOp.vecAllFalse goalV
+    allocOr gErr zero
+
+  let vals := simulate circ (packPathBits layout choices)
+  pure (vals[wire]!)
+/-- (Optional) Spec version of the same acceptance bit, for sanity checks. -/
+def specAcceptBitFromSubpaths
+  (d : DLDS)
+  (subpaths : List (List Nat)) : Except String Bool := do
+  let B ← buildOutgoing d
+  validateBuiltOutgoing B
+  let N       := B.basis.length
+  let Lminus1 := (B.formulas.length - 1)
+  let choices := transposeSubpaths N Lminus1 subpaths
+  let (goalLevel, goalIdx) ← goalForRoot B d
+  pure (specFinalOutput B goalLevel goalIdx choices)
+
+/-- COMPILED: acceptance bit and final dependency set from N subpaths. -/
+def evalSubpathsWithDeps
+  (d : DLDS) (subpaths : List (List Nat))
+  : Except String (Bool × List Bool × List Formula) := do
+  let B ← buildOutgoing d
+  validateBuiltOutgoing B
+  let N        := B.basis.length
+  let Lminus1  := B.formulas.length - 1
+  let choices  := transposeSubpaths N Lminus1 subpaths
+  let (layout, _) := buildUniformPathLayout N Lminus1
+  let (gLev, gIdx) ← goalForRoot B d
+
+  let ((finalW, goalW), circ) := runBuilder do
+    let (levelsW, gErr, _pos, _ina) ← compileWholeGridContinuous B.basis B.formulas B.initDeps layout
+    let levelA := (levelsW.toArray)[gLev]!
+    let goalV  := (levelA.toArray).getD gIdx []
+    let zero   ← CircuitOp.vecAllFalse goalV
+    let acc    ← allocOr gErr zero
+    pure (acc, goalV)
+
+  let inputs := packPathBits layout choices
+  let vals   := simulate circ inputs
+  let vec    := readVec vals goalW
+  let acc    := vals[finalW]!
+  let set    := depsAsFormulas B.basis vec
+  pure (acc, vec, set)
+
+
+/-- SPEC (pure): same outputs computed by the reference semantics. -/
+def specSubpathsWithDeps
+  (d : DLDS)
+  (subpaths : List (List Nat))
+  : Except String (Bool × List Bool × List CircuitOp.Formula) := do
+  let B ← buildOutgoing d
+  validateBuiltOutgoing B
+  let N        := B.basis.length
+  let Lminus1  := B.formulas.length - 1
+  let choices  := transposeSubpaths N Lminus1 subpaths
+  let (gLev, gIdx) ← goalForRoot B d
+
+  let (levels, err) := specWholeGridOutgoing B choices
+  let some row  := (levels.toArray)[gLev]? | throw "spec: goal level out of bounds"
+  let goalVec   := (row.toArray).getD gIdx (List.replicate B.encN false)
+  let acc       := err || goalVec.all (· = false)
+  let depSet    := depsAsFormulas B.basis goalVec
+  pure (acc, goalVec, depSet)
+
+/-- Pretty print a list of formulas as `[A, B, ...]`. -/
+def ppFormulaList (xs : List CircuitOp.Formula) : String :=
+  "[" ++ String.intercalate ", " (xs.map ppFormula) ++ "]"
+
+#eval
+  match evalSubpathsWithDeps d0
+          -- three columns (A, A⊃B, B), two steps each:
+          [[0,0], [1,0], [1,0]] with
+  | .error e => s!"ERR: {e}"
+  | .ok (acc, vec, set) =>
+      s!"acc={acc}, final_vec={vec}, final_set={ppFormulaList set}"
+#eval
+  let P := [[0,0], [1,0], [1,0]]
+  match (evalSubpathsWithDeps d0 P, specSubpathsWithDeps d0 P) with
+  | (.ok (acc1,v1,_), .ok (acc2,v2,_)) => (acc1 = acc2) && (v1 = v2)
+  | _ => false
+
+
+/-- Pretty one formula name. -/
+def short (f : CircuitOp.Formula) : String := ppFormula f
+
+/-- One transition: show the choice for every source, and a row raster (● at chosen t). -/
+def debugTransition
+  (prevForms currForms : List CircuitOp.Formula)
+  (outgoingRow : List (List EdgeKind))   -- options for each source
+  (choicesRow  : List Nat)               -- user's choices for each source (0=inactive)
+  : String :=
+Id.run do
+  let S := prevForms.length
+  let T := currForms.length
+  let outsA := outgoingRow.toArray
+  let chA   := choicesRow.toArray
+  let tgtSym (t : Nat) :=
+    if t < T then s!"{t}:{short (currForms.getD t (.atom "?"))}"
+    else s!"{t}:<?>"
+  let mut lines : List String := []
+  for s in [0:S] do
+    let Fs := prevForms.getD s (.atom "?")
+    let opts := outsA.getD s []
+    let j    := chA.getD s 0
+    if j = 0 then
+      lines := lines.concat s!"s={s} [{short Fs}]  inactive (0)"
+    else
+      let m := opts.length
+      if j > m then
+        lines := lines.concat s!"s={s} [{short Fs}]  CHOICE {j} > {m}  (INVALID)"
+      else
+        match opts[j-1]? with
+        | none =>
+            lines := lines.concat s!"s={s} [{short Fs}]  CHOICE {j} → <missing>"
+        | some ek =>
+            let t := tgtOf ek
+            let row := (List.range T).map (fun t' => if t' = t then "●" else "·")
+                         |> String.intercalate " "
+            lines := lines.concat
+              s!"s={s} [{short Fs}]  j={j} → t={t} [{tgtSym t}]  {ppEdgeKind ek}\n    {row}"
+  String.intercalate "\n" (
+    s!"prev=[{String.intercalate ", " (prevForms.map short)}]"
+    :: s!"next=[{String.intercalate ", " (currForms.map short)}]" :: lines)
+
+/-- Full debug for subpaths: per transition + final bit and dep set. -/
+def debugEvalSubpaths (d : DLDS) (subpaths : List (List Nat)) : IO Unit := do
+  match buildOutgoing d with
+  | .error e => IO.println s!"ERR building: {e}"
+  | .ok B =>
+      match validateBuiltOutgoing B with
+      | .error e => IO.println s!"ERR validate: {e}"
+      | .ok _ =>
+        let N := B.basis.length
+        let Lm1 := B.formulas.length - 1
+        let choices := transposeSubpaths N Lm1 subpaths
+        -- per transition report
+        let formsA := B.formulas.toArray
+        let outsA  := B.outgoings.toArray
+        for k in [0:outsA.size] do
+          let prevF := formsA[k]!
+          let nextF := formsA[k+1]!
+          let row   := outsA[k]!
+          let chRow := (choices.toArray).getD k []
+          IO.println s!"\n-- Transition {k} --"
+          IO.println (debugTransition prevF nextF row chRow)
+        -- Run once and show final
+        match evalSubpathsWithDeps d subpaths with
+        | .error e => IO.println s!"\nRUN ERR: {e}"
+        | .ok (acc, vec, set) =>
+            IO.println s!"\nacc={acc}"
+            IO.println s!"final_vec={vec}"
+            IO.println s!"final_set={ppFormulaList set}"
+
+#eval debugEvalSubpaths d0 [[0,0], [1,0], [1,0]]
+
+
+/-- Safe basis access with default. -/
+def basisAt (basis : List CircuitOp.Formula) (i : Nat) : CircuitOp.Formula :=
+  basis.getD i (.atom "?")
+
+/-- Index of φ in a list (option). -/
+def idxOf? [DecidableEq α] (xs : List α) (x : α) : Option Nat :=
+  xs.enum.findSome? (fun (i,y) => if y = x then some i else none)
+
+/-- Pretty one header line like:  A  A⊃B  B -/
+def headerLine (basis : List CircuitOp.Formula) : String :=
+  String.intercalate "  " (basis.map short)
+
+/-- Pretty a row of “X [n]” aligned to the basis. -/
+def destinyRow (labels : List CircuitOp.Formula) (dest : List (Option Nat)) : String :=
+  let cells := (List.zip labels dest).map (fun (f, d?) =>
+    match d? with
+    | none   => s!"{short f} [0]"
+    | some j => s!"{short f} [{j}]")
+  String.intercalate "  " cells
+
+/-- Build, for a transition k, a basis-sized vector of destinations:
+    for each basis column c, `none` if inactive/absent, or `some tBasis`. -/
+def destsForTransition
+  (B : BuiltOutgoing) (k : Nat) (choicesRow : List Nat)
+  : List (Option Nat) := Id.run do
+  let basis    := B.basis
+  let prevRow  := (B.formulas.toArray)[k]!
+  let nextRow  := (B.formulas.toArray)[k+1]!
+  let outsRow  := (B.outgoings.toArray)[k]!
+  let chArr    := choicesRow.toArray
+
+  let mut out : List (Option Nat) := []
+  for c in [0:basis.length] do
+    let f := basisAt basis c
+    match idxOf? prevRow f with
+    | none =>
+        out := out ++ [none]            -- that basis formula isn't a node at this level
+    | some s =>
+        let j := chArr.getD s 0         -- 0 = inactive
+        if j = 0 then
+          out := out ++ [none]
+        else
+          let opts := (outsRow.toArray)[s]!
+          if h : j ≤ opts.length then
+            let ek := (opts.toArray).getD (j-1) (EdgeKind.rep 0)
+            let tLocal :=
+              match ek with
+              | .rep t        => t
+              | .intro t _    => t
+              | .elim t _ _   => t
+            let tF    := (nextRow.toArray).getD tLocal (.atom "?")
+            let tBase := basis.idxOf? tF |>.getD 0
+            out := out ++ [some tBase]
+          else
+            out := out ++ [none]
+  out
+
+/-- NxN bullets for a transition (rows = basis sources, cols = basis targets). -/
+def bulletsForTransition
+  (B : BuiltOutgoing) (k : Nat) (choicesRow : List Nat)
+  : List String := Id.run do
+  let basis   := B.basis
+  let dests   := destsForTransition B k choicesRow
+  let N       := basis.length
+  let colsHdr := "    " ++ String.intercalate " " ((List.range N).map (fun j => toString j))
+  let mut rows : List String := [colsHdr]
+  for s in [0:N] do
+    let rowLabel := s!"{s}:{short (basisAt basis s)} | "
+    let d? := (dests.toArray)[s]!
+    let line :=
+      match d? with
+      | none   => rowLabel ++ String.intercalate " " (List.replicate N "·")
+      | some t =>
+          rowLabel ++
+          (List.range N |>.map (fun j => if j = t then "●" else "·") |>
+           String.intercalate " ")
+    rows := rows ++ [line]
+  rows
+
+
+
+/-- Current position of each subpath c; `none` = inactive. -/
+abbrev ContPos := Array (Option Nat)
+
+/-- Initial positions: subpath c starts at basis column c. -/
+def contInit (N : Nat) : ContPos :=
+  Array.mk <| (List.range N).map some
+
+/-- For step k, collect the choice j for each subpath c from the *original* subpaths layout (N×(L-1)). -/
+def stepChoicesForK (N : Nat) (k : Nat) (subpaths : List (List Nat)) : Array Nat :=
+  let cols := subpaths.toArray
+  Array.mk <| (List.range N).map (fun c => (cols.getD c []).toArray.getD k 0)
+
+/-- Advance one step: given current positions and the choices for this step,
+    (a) produce all active edges (s,t) and
+    (b) the next positions. Multiple subpaths can create multiple (s,t). -/
+def contAdvance (pos : ContPos) (choicesK : Array Nat)
+  : (List (Nat × Nat) × ContPos) :=
+Id.run do
+  let N := pos.size
+  let mut edges : List (Nat × Nat) := []
+  let mut next  : ContPos := pos
+  for c in [0:N] do
+    let j := choicesK.getD c 0
+    match pos.getD c none with
+    | none    => pure ()
+    | some s  =>
+      if j = 0 then
+        next := next.set! c none
+      else
+        let t := j - 1
+        edges := (s, t) :: edges
+        next  := next.set! c (some t)
+  (edges.reverse, next)
+
+
+/-- Make an N×N matrix with ● at the listed (s,t) pairs. -/
+def rasterFromEdges (N : Nat) (edges : List (Nat × Nat)) : List String :=
+  let hdr := "    " ++
+    String.intercalate " " ((List.range N).map (fun x => toString x))
+  let grid : Array (Array Bool) :=
+    Id.run do
+      let mut a := Array.replicate N (Array.replicate N false)
+      for (s,t) in edges do
+        if h₁ : s < N ∧ t < N then
+          let row := a[s]!
+          a := a.set! s (row.set! t true)
+      pure a
+  let rows :=
+    (List.range N).map (fun s =>
+      let cells := (grid[s]!).toList.map (fun b => if b then "●" else "·") |> String.intercalate " "
+      s!"{s} | {cells}")
+  hdr :: rows
+
+/-- For the *destiny line*: for each basis column (source) list **all** targets chosen this step.
+    `[]` means no outgoing from that source this step (prints as `[0]` per your spec). -/
+def destinyFromEdges (N : Nat) (edges : List (Nat × Nat)) : List (List Nat) :=
+  Id.run do
+    let mut buckets : Array (List Nat) := Array.replicate N []
+    for (s,t) in edges do
+      if h : s < N then
+        buckets := buckets.set! s (buckets[s]! ++ [t])
+    buckets.toList
+
+/-- Pretty "A [0]  A⊃B [2,2]  B [3]" style line. -/
+def destinyRowMulti (labels : List CircuitOp.Formula) (dest : List (List Nat)) : String :=
+  let cells :=
+    (List.zip labels dest).map (fun (f, ts) =>
+      match ts with
+      | []      => s!"{ppFormula f} []"            -- was “[0]”
+      | _::_    => s!"{ppFormula f} [{String.intercalate ", " (ts.map toString)}]")
+  String.intercalate "  " cells
+
+/-- Show dependency vector as a bitstring (e.g. "0101"). -/
+def ppDepSet (vec : List Bool) : String :=
+  vec.map (fun b => if b then '1' else '0')
+      |>.asString
+
+/-- FULL debug using *continuous* subpaths (no rule filtering).
+    We only need the basis (for pretty labels) and the number of levels to know how many steps to show. -/
+def debugGridAndSubgraph
+  (d : DLDS) (subpaths : List (List Nat)) : Except String String := do
+  -- basis = the same one used everywhere (your buildOutgoing basis is fine just to *print* names)
+  let B ← buildOutgoing d
+  validateBuiltOutgoing B
+  let basis := B.basis
+  let N     := basis.length
+  let L     := B.formulas.length
+  let Lm1   := (L - 1)
+
+  let header := "Basis: " ++ String.intercalate "  " (basis.map ppFormula)
+  let mut blocks : List String := [header]
+
+  -- run the continuous path semantics just for printing (no rule/structure checks here)
+  let mut pos := contInit N
+  -- before the loop:
+  -- seed prevDeps with your actual level-0 vectors
+  let prevDeps0 := B.initDeps
+  let mut prevDeps := prevDeps0
+
+  for k in [0:Lm1] do
+    let choicesK := stepChoicesForK N k subpaths
+    let (edgesK, pos') := contAdvance pos choicesK
+    pos := pos'
+
+    /- Pretty grid for this step -/
+    let bullets := rasterFromEdges N edgesK
+    let dests   := destinyFromEdges N edgesK
+    let rowLine := destinyRowMulti basis dests
+    let title   := s!"\n-- Transition {k} (level {k} → {k+1}) --"
+    blocks := blocks ++ [title]
+    blocks := blocks ++ bullets
+
+    /- RECOMPUTE dependency vectors for next level -/
+    let prevForms := (B.formulas.toArray)[k]!
+    let nextForms := (B.formulas.toArray)[k+1]!
+    -- edgesK are basis indices already; build S×T bit matrix
+    let edgeOn : LevelEdgeBits := mkEdgeOn N N edgesK
+    let roles  := edgeRolesForLevel prevForms nextForms
+    let (nextDeps, _err) := specLevelEdges B.encN B.basis prevDeps nextForms edgeOn roles
+
+    /- Print per-source dep set for THIS step (sources live at prev level) -/
+    -- helper: safe dep vector for a basis column `c` at prev level
+    let depAt (c : Nat) : List Bool :=
+      match idxOf? prevForms (basisAt basis c) with
+      | none   => List.replicate B.encN false
+      | some s => (prevDeps.toArray).getD s (List.replicate B.encN false)
+
+    let srcLines :=
+      (List.range N).map (fun c =>
+        let φs  := basisAt basis c
+        let v   := depAt c
+        let outs := dests.getD c []
+        s!"{ppFormula φs} : {ppDepSet v}  →  out={[String.intercalate ", " (outs.map toString)]}")
+    blocks := blocks ++ srcLines
+    blocks := blocks ++ [rowLine]
+
+    -- ADVANCE for next iteration
+    prevDeps := nextDeps
+
+
+  -- mark the goal column on the last line (same as before)
+  let (_, goalIdxBasis) ← goalForRoot B d
+  let last :=
+    String.intercalate " "
+      ((List.range N).map (fun j =>
+        if j = goalIdxBasis
+        then s!"{ppFormula (basis.getD j (.atom "?"))} [X]"
+        else s!"{ppFormula (basis.getD j (.atom "?"))} [ ]"))
+  blocks := blocks ++ ["\n-- Last level (goal mark) --", last]
+
+  pure (String.intercalate "\n" blocks)
+
+
+#eval   IO.println <|
+  match debugGridAndSubgraph d0 [[0,0,0], [1,2,3], [1,2,3], [0,0,0]] with
+  | .error e => s!"ERR: {e}"
+  | .ok s    => s
+
+
+
+
+private def targetsFrom (edges : List (Nat × Nat)) (s : Nat) : List Nat :=
+  edges.filterMap (fun (s',t) => if s'=s then some t else none)
+
+/-- Debug: at each transition k, for every basis source s:
+      φ_s : deps_before  →  out=[t,...]
+    Then advances deps using your NxN-edges semantics.
+ -/
+def debugDepsAndEdges
+  (d : DLDS) (subpaths : List (List Nat)) : Except String String := do
+  -- Use the same basis/universe model as your “continuous” view
+  let BE := buildEdges d
+  let basis := BE.basis
+  let N     := BE.N
+  let L     := BE.L
+  let Lm1   := if L = 0 then 0 else L - 1
+
+  -- per-step walk state
+  let mut pos  := contInit N
+  let mut deps : List (List Bool) := BE.init0   -- dependency vectors at current level
+
+  let roles := edgeRolesForLevel basis basis     -- common NxN roles
+  let header := "Basis: " ++ String.intercalate "  " (basis.map ppFormula)
+  let mut blocks : List String := [header]
+
+  for k in [0:Lm1] do
+    -- which edges are taken at this step, per your subpaths
+    let choicesK := stepChoicesForK N k subpaths
+    let (edgesK, pos') := contAdvance pos choicesK
+    pos := pos'
+
+    -- pretty: per source show deps BEFORE this step and its outgoing targets
+    let mut lines : List String := []
+    for s in [0:N] do
+      let φs   := basis.getD s (.atom "?")
+      let v    := (deps.toArray).getD s (List.replicate N false)
+      let outs := targetsFrom edgesK s
+      lines := lines ++ [
+        s!"{ppFormula φs} : {ppDepSet v}  →  out={
+          if outs.isEmpty then "[]"
+          else "[" ++ String.intercalate ", " (outs.map toString) ++ "]"
+        }"
+]
+    -- also keep your raster (●/·) for context
+    let raster := rasterFromEdges N edgesK
+
+    blocks := blocks ++
+      [s!"\n-- Transition {k} (level {k} → {k+1}) --"] ++
+      raster ++
+      lines
+
+    -- advance dependency vectors by one step using the NxN semantics
+    let edgeOn : LevelEdgeBits := mkEdgeOn N N edgesK
+    let (deps', _err) := specLevelEdges N basis deps basis edgeOn roles
+    deps := deps'
+
+  -- mark goal column at the end (same as before)
+  let (_, goalIdx) ← goalForRoot (← buildOutgoing d) d
+  let last :=
+    String.intercalate " "
+      ((List.range N).map (fun j =>
+        if j = goalIdx then s!"{ppFormula (basis.getD j (.atom "?"))} [X]"
+        else s!"{ppFormula (basis.getD j (.atom "?"))} [ ]"))
+  blocks := blocks ++ ["\n-- Last level (goal mark) --", last]
+
+  pure (String.intercalate "\n" blocks)
+
+  #eval
+  IO.println <|
+    match debugDepsAndEdges d0 [[0,0,0], [1,2,3], [1,2,3], [0,0,0]] with
+    | .error e => s!"ERR: {e}"
+    | .ok s    => s
