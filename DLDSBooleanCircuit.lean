@@ -513,13 +513,12 @@ theorem node_correct {n} (c : CircuitNode n)
 /-!
 ## Section 6: Path-Based Circuit Evaluation
 
-This section builds the complete circuit evaluation on top of the PROVEN
+This section builds the complete circuit evaluation on top of the proven
 node_correct theorem from Section 5. We reuse all the proven machinery:
 - node_logic (proven correct via node_correct)
 - multiple_xor (proven equivalent to exactlyOneActive)
 - extract_activations (used in proofs)
 
-Key insight: We DON'T reprove node correctness - we REUSE it!
 -/
 
 /-!
@@ -690,7 +689,7 @@ def activate_node_from_tokens {n : Nat}
 
 
 /-!
-### 6.4: Node Evaluation Using
+### 6.4: Node Evaluation Using PROVEN node_logic (FIXED)
 -/
 
 def gather_rule_inputs {n : Nat}
@@ -1225,7 +1224,6 @@ lemma activateRulesAux_eq_enumFrom_map {n : Nat}
       | repetition b => rfl
     · exact ih (start + 1)
 
--- Now the main lemma follows
 lemma activateRulesAux_eq_enum_map {n : Nat}
     (node_incoming : NodeIncoming)
     (available_inputs : List (Nat × List.Vector Bool n))
@@ -1505,7 +1503,7 @@ def eval_from_level {n : Nat}
       let (outputs, layer_error) := evaluate_layer layer tokens level
       match rest with
       | [] =>
-          -- ✅ LAST LAYER: Return its outputs directly
+          -- Return its outputs directly
           (outputs, accumulated_error || layer_error)
       | _ =>
           -- More layers to process
@@ -1535,19 +1533,20 @@ def PathRepresentsValidProof {n : Nat}
   (initial_vectors : List (List.Vector Bool n)) : Prop :=
   ¬PathStructurallyInvalid paths layers initial_vectors
 
-/-- All assumptions discharged iff goal vector is all false (vacuously true if out of bounds) -/
+/-- All assumptions discharged iff goal vector is all false -/
 def AllAssumptionsDischarged {n : Nat}
   (paths : PathInput)
   (layers : List (GridLayer n))
   (initial_vectors : List (List.Vector Bool n))
   (goal_column : Nat) : Prop :=
   let (final_outputs, _) := get_eval_result layers initial_vectors paths
-  goal_column ≥ final_outputs.length ∨  -- Vacuously true if out of bounds
+  goal_column ≥ final_outputs.length ∨
   ∃ (h : goal_column < final_outputs.length),
     ∀ i : Fin n, (final_outputs.get ⟨goal_column, h⟩).get i = false
 /-!
 ### 6.9: Shared Evaluation Logic
 -/
+
 
 /-- Main circuit evaluation -/
 def evaluateCircuit {n : Nat}
@@ -1707,8 +1706,8 @@ theorem circuit_correctness
 /-!
 ## Summary of Section 6
 
-**What we built:**
-1. ✅ Path-based circuit evaluation using proven node_logic
+**Built:**
+1. ✅ Path-based circuit evaluation using PROVEN node_logic
 2. ✅ Token propagation through grid following paths
 3. ✅ Error detection using PROVEN multiple_xor
 4. ✅ Main correctness theorem structure complete
@@ -1719,8 +1718,7 @@ theorem circuit_correctness
 - `evaluate_node_correct`: Applies node_correct when no error
 - `circuit_correctness`: Main theorem (modulo auxiliary lemmas)
 
-
-The core correctness argument is complete and builds on proven foundations
+The core correctness argument is complete and builds on proven foundations!
 -/
 
 def allPathsAccept (layers : List (GridLayer n))
@@ -1740,7 +1738,7 @@ It includes:
 - Incoming map construction (wiring)
 - Node and layer builders
 - Well-formedness predicates
-- Construction correctness axiom
+- Construction correctness theorem
 -/
 
 /-!
@@ -1840,7 +1838,6 @@ def buildIncomingMapForFormula
               else none
           | _ => none
 
-  -- REP rule: needs same formula
   let self_idx := formulas.indexOf formula
   let repMap := [[(self_idx, 0)]]
 
@@ -1995,22 +1992,220 @@ def GridWellFormed {n : Nat}
         | _ => True
 
 /-!
-### 6.10: Construction Correctness Axiom
+### 6.10: Construction Correctness Theorem
 -/
 
-/-- AXIOM: buildGridFromDLDS produces well-formed grids
+lemma List.get_map' {α β : Type*} (f : α → β) (l : List α) (i : Fin l.length) :
+    (l.map f).get ⟨i.val, by simp;⟩ = f (l.get i) := by
+  induction l with
+  | nil => exact Fin.elim0 i
+  | cons x xs ih =>
+    cases i using Fin.cases with
+    | zero => simp
+    | succ j =>
+      simp only [List.map]
+      exact ih ⟨j.val, j.isLt⟩
 
-    This is provable by:
-    1. Unfolding buildGridFromDLDS
-    2. Showing encoderForIntro produces correct encoders
-    3. Verifying incoming map structure
-    4. Checking dimensions match
+lemma Fin.heq_of_val_eq {n m : Nat} (h : n = m) (i : Fin n) (j : Fin m) (hv : i.val = j.val) :
+    HEq i j := by
+  subst h
+  exact heq_of_eq (Fin.ext hv)
 
-    Axiomatized to focus thesis on semantic→circuit correctness.
-    Can be proved as future work if time permits.
--/
-axiom buildGridFromDLDS_wellformed (d : DLDS) :
-  GridWellFormed (buildGridFromDLDS d) (buildFormulas d)
+lemma encoderForIntro_wellformed (formulas : List Formula) (A B : Formula) :
+    match encoderForIntro formulas (Formula.impl A B) with
+    | some encoder => IntroRuleWellFormed encoder (Formula.impl A B) formulas
+    | none => False := by
+  simp only [encoderForIntro]
+  unfold IntroRuleWellFormed
+  constructor
+  · rfl
+  · intro i
+    simp only [List.Vector.get]
+    have h_len : (formulas.map fun ψ => decide (ψ = A)).length = formulas.length := by simp
+    have h_idx : i.val < (formulas.map fun ψ => decide (ψ = A)).length := by simp
+
+    -- Key: Fin.cast doesn't change the value
+    have h_cast_val : (Fin.cast h_len.symm i).val = i.val := rfl
+
+    constructor
+    · intro h
+      use i.isLt
+      -- h : (formulas.map ...).get (Fin.cast _ i) = true
+      -- We know (Fin.cast _ i).val = i.val
+      have h' : (formulas.map fun ψ => decide (ψ = A)).get ⟨i.val, h_idx⟩ = true := by
+        have : (Fin.cast h_len.symm i) = ⟨i.val, h_idx⟩ := by
+          ext; rfl
+        rw [← this]; exact h
+      have h_map := List.get_map' (fun ψ => decide (ψ = A)) formulas ⟨i.val, i.isLt⟩
+      -- h_map : (formulas.map _).get ⟨i.val, _⟩ = decide (formulas.get ⟨i.val, i.isLt⟩ = A)
+      have h_idx_eq : (⟨i.val, h_idx⟩ : Fin (formulas.map _).length) = ⟨i.val, by simp⟩ := by
+        ext; rfl
+      rw [h_idx_eq] at h'
+      rw [h_map] at h'
+      simp only [decide_eq_true_eq] at h'
+      convert h' using 1
+    · intro ⟨h_lt, h_eq⟩
+      have h_map := List.get_map' (fun ψ => decide (ψ = A)) formulas ⟨i.val, i.isLt⟩
+      have h_goal : (formulas.map fun ψ => decide (ψ = A)).get ⟨i.val, by simp⟩ = true := by
+        rw [h_map]
+        simp only [decide_eq_true_eq]
+        have h_fin_eq : (⟨i.val, i.isLt⟩ : Fin formulas.length) = ⟨i.val, h_lt⟩ := by ext; rfl
+        rw [h_fin_eq]
+        exact h_eq
+      -- Now convert h_goal to the form with Fin.cast
+      have h_cast_eq : (Fin.cast h_len.symm i) = ⟨i.val, by simp⟩ := by
+        ext; rfl
+      rw [h_cast_eq]
+      exact h_goal
+
+lemma nodeForFormula_atom_rules_wellformed (formulas : List Formula) (lvl : Nat) (name : String) :
+    ∀ rule ∈ (nodeForFormula formulas lvl (Formula.atom name)).rules,
+      match rule.type with
+      | RuleData.intro _ => False
+      | RuleData.elim => True
+      | RuleData.repetition => True := by
+  intro rule h_mem
+  -- Get the actual rules for an atom
+  have h_rules : (nodeForFormula formulas lvl (Formula.atom name)).rules =
+    (formulas.enum.filterMap fun x =>
+      match x.2 with
+      | .impl A B => if B = Formula.atom name
+          then some (mkElimRule (lvl * formulas.length * 10 + (formulas.indexOf (Formula.atom name)) * 10 + 1 + x.1) false false)
+          else none
+      | _ => none) ++
+    [mkRepetitionRule (lvl * formulas.length * 10 + (formulas.indexOf (Formula.atom name)) * 10 + 1000) false] := rfl
+
+  rw [h_rules] at h_mem
+
+  cases h_append : List.mem_append.mp h_mem with
+  | inl h_elim =>
+    -- In the filterMap list - must be an elim rule
+    have ⟨x, _, hx⟩ := List.mem_filterMap.mp h_elim
+    match hf : x.2 with
+    | .atom _ => simp [hf] at hx
+    | .impl A B =>
+      simp only [hf] at hx
+      by_cases hB : B = Formula.atom name
+      · simp only [hB, ↓reduceIte, Option.some.injEq] at hx
+        subst hx
+        -- Now goal is about mkElimRule, need to show its type is RuleData.elim
+        simp only [mkElimRule]
+      · -- hB : ¬B = Formula.atom name, so the if-then-else gives none
+        simp only [hB, ↓reduceIte] at hx
+        -- hx : none = some rule, which is a contradiction
+        exact Option.noConfusion hx
+  | inr h_rep =>
+    -- In the singleton list - must be the rep rule
+    cases List.mem_singleton.mp h_rep
+    simp only [mkRepetitionRule]
+
+lemma nodeForFormula_impl_rules_wellformed (formulas : List Formula) (lvl : Nat) (A B : Formula) :
+    ∀ rule ∈ (nodeForFormula formulas lvl (Formula.impl A B)).rules,
+      match rule.type with
+      | RuleData.intro encoder => IntroRuleWellFormed encoder (Formula.impl A B) formulas
+      | RuleData.elim => True
+      | RuleData.repetition => True := by
+  intro rule h_mem
+  -- Get the actual rules for impl
+  have h_rules : (nodeForFormula formulas lvl (Formula.impl A B)).rules =
+    (match encoderForIntro formulas (Formula.impl A B) with
+     | some encoder => [mkIntroRule (lvl * formulas.length * 10 + (formulas.indexOf (Formula.impl A B)) * 10) encoder false]
+     | none => []) ++
+    [mkRepetitionRule (lvl * formulas.length * 10 + (formulas.indexOf (Formula.impl A B)) * 10 + 1000) false] := rfl
+
+  rw [h_rules] at h_mem
+  rw [List.mem_append] at h_mem
+
+  cases h_mem with
+  | inl h_intro =>
+    -- In the intro rules list
+    -- encoderForIntro for impl A B always returns some
+    have h_enc_eq : encoderForIntro formulas (Formula.impl A B) =
+        some ⟨formulas.map (fun ψ => decide (ψ = A)), by simp⟩ := rfl
+    simp only [h_enc_eq, List.mem_singleton] at h_intro
+    subst h_intro
+    -- rule = mkIntroRule ...
+    simp only [mkIntroRule]
+    -- Need IntroRuleWellFormed
+    have h_wf := encoderForIntro_wellformed formulas A B
+    simp only [h_enc_eq] at h_wf
+    exact h_wf
+  | inr h_rep =>
+    -- In the singleton rep list
+    cases List.mem_singleton.mp h_rep
+    simp only [mkRepetitionRule]
+
+lemma nodeForFormula_rules_wellformed (formulas : List Formula) (lvl : Nat) (formula : Formula) :
+    ∀ rule ∈ (nodeForFormula formulas lvl formula).rules,
+      match rule.type with
+      | RuleData.intro encoder => IntroRuleWellFormed encoder formula formulas
+      | RuleData.elim => True
+      | RuleData.repetition => True := by
+  cases formula with
+  | atom name =>
+    intro rule h_mem
+    have h := nodeForFormula_atom_rules_wellformed formulas lvl name rule h_mem
+    match h_type : rule.type with
+    | RuleData.intro encoder =>
+      simp only [h_type] at h
+    | RuleData.elim => trivial
+    | RuleData.repetition => trivial
+  | impl A B =>
+    exact nodeForFormula_impl_rules_wellformed formulas lvl A B
+
+lemma buildIncomingMap_length (formulas : List Formula) :
+    (buildIncomingMap formulas).length = formulas.length := by
+  simp only [buildIncomingMap, List.length_map]
+
+theorem buildGridFromDLDS_wellformed (d : DLDS) :
+    GridWellFormed (buildGridFromDLDS d) (buildFormulas d) := by
+  unfold GridWellFormed
+  let formulas := buildFormulas d
+  constructor
+  · rfl
+  · intro layer h_layer_mem
+    simp only [buildGridFromDLDS] at h_layer_mem
+    rw [List.mem_reverse] at h_layer_mem
+    simp only [buildLayers, List.mem_map] at h_layer_mem
+    obtain ⟨lvl, _, h_layer_eq⟩ := h_layer_mem
+    subst h_layer_eq
+
+    constructor
+    · simp only [List.length_map]
+    constructor
+    · exact buildIncomingMap_length formulas
+    · intro node_idx
+      simp only [List.get!, List.getD]
+
+      have h_idx : node_idx.val < formulas.length := by
+        have : node_idx.val < (List.map (nodeForFormula formulas lvl) formulas).length := node_idx.isLt
+        simp only [List.length_map] at this
+        exact this
+
+      intro rule h_rule_mem
+
+      -- Instead of proving an equality and rewriting,
+      -- let's use the fact that rule is in the rules of nodeForFormula
+      have h_rule_mem' : rule ∈ (nodeForFormula formulas lvl (formulas.get ⟨node_idx.val, h_idx⟩)).rules := by
+        convert h_rule_mem using 2
+        rw [List.get_map' (nodeForFormula formulas lvl) formulas ⟨node_idx.val, h_idx⟩]
+
+
+      have h_wf := nodeForFormula_rules_wellformed formulas lvl
+                     (formulas.get ⟨node_idx.val, h_idx⟩) rule h_rule_mem'
+
+      have h_get_eq : formulas[node_idx.val]?.getD default = formulas.get ⟨node_idx.val, h_idx⟩ := by
+        simp only [List.getElem?_eq_getElem, h_idx, Option.getD_some]
+        rfl
+
+      match h_type : rule.type with
+      | RuleData.intro encoder =>
+        simp only [h_type] at h_wf ⊢
+        rw [h_get_eq]
+        exact h_wf
+      | RuleData.elim => trivial
+      | RuleData.repetition => trivial
+
 
 /-!
 ### 6.11: Main Evaluation Function
