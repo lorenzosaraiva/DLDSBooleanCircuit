@@ -9,30 +9,6 @@ import Mathlib.Data.Fin.Basic
 
 set_option linter.unusedVariables false
 
--- Helper functions for missing List operations
-namespace List
-
-def enum {α : Type*} (xs : List α) : List (Nat × α) :=
-  let rec aux : List α → Nat → List (Nat × α)
-    | [], _ => []
-    | x :: xs, n => (n, x) :: aux xs (n + 1)
-  aux xs 0
-
-def indexOf {α : Type*} [DecidableEq α] (xs : List α) (a : α) : Nat :=
-  let rec aux : List α → Nat → Nat
-    | [], _ => 0
-    | x :: xs, n => if x = a then n else aux xs (n + 1)
-  aux xs 0
-
-def get! {α : Type*} [Inhabited α] (xs : List α) (i : Nat) : α :=
-  xs.getD i default
-
-end List
-
-namespace Array
-def get! {α : Type*} [Inhabited α] (arr : Array α) (i : Nat) : α :=
-  arr.getD i default
-end Array
 
 /-!
 # DLDS Boolean Circuit Formalization (CORE)
@@ -560,7 +536,7 @@ abbrev PathInput := List (List Nat)
 def initialize_tokens {n : Nat}
   (initial_vectors : List (List.Vector Bool n))
   (top_level : Nat) : List (Token n) :=
-  initial_vectors.enum.map fun (col, vec) =>
+  initial_vectors.zipIdx.map fun (vec, col) =>
     {
       origin_column := col
       source_column := col
@@ -640,8 +616,8 @@ def set_rule_activation {n : Nat}
 
     | ActivationBits.elim _ _ =>
         if required_cols.length = 2 then
-          let has_first := available_cols.contains (required_cols.get! 0)
-          let has_second := available_cols.contains (required_cols.get! 1)
+          let has_first := available_cols.contains (required_cols[0]!)
+          let has_second := available_cols.contains (required_cols[1]!)
           ActivationBits.elim has_first has_second
         else
           ActivationBits.elim false false
@@ -651,17 +627,17 @@ def set_rule_activation {n : Nat}
 
   { rule with activation := new_activation }
 
-private def activateRulesAux {n : Nat}
+def activateRulesAux {n : Nat}
   (node_incoming : NodeIncoming)
   (available_inputs : List (Nat × List.Vector Bool n)) :
   Nat → List (Rule n) → List (Rule n)
   | _, [] => []
   | idx, r :: rs =>
-      let rule_inc := node_incoming.get! idx
+      let rule_inc := node_incoming[idx]!
       let r' := set_rule_activation r rule_inc available_inputs
       r' :: activateRulesAux node_incoming available_inputs (idx + 1) rs
 
-private lemma activateRulesAux_ids {n : Nat}
+lemma activateRulesAux_ids {n : Nat}
   (node_incoming : NodeIncoming)
   (available_inputs : List (Nat × List.Vector Bool n)) :
   ∀ idx (rs : List (Rule n)),
@@ -737,8 +713,8 @@ def node_logic_with_routing {n : Nat}
   -- dbg_trace s!"    [node_logic] conflict={has_conflict}"
 
   -- Gather per-rule inputs based on IncomingMap
-  let per_rule_inputs := rules.enum.map fun (rule_idx, _rule) =>
-    let rule_inc := node_incoming.get! rule_idx
+  let per_rule_inputs := rules.zipIdx.map fun (_rule, rule_idx) =>
+    let rule_inc := node_incoming[rule_idx]!
     gather_rule_inputs rule_inc available_inputs
 
   -- Apply with routing
@@ -760,8 +736,8 @@ def evaluate_node {n : Nat}
     let available_inputs := tokens_at_node.map fun t => (t.source_column, t.dep_vector)
     let available_sources := available_inputs.map Prod.fst
 
-    let instantiated_rules := node.rules.enum.map fun (rule_idx, rule) =>
-      let rule_incoming := node_incoming.get! rule_idx
+    let instantiated_rules := node.rules.zipIdx.map fun (rule, rule_idx) =>
+      let rule_incoming := node_incoming[rule_idx]!
       let required_sources := rule_incoming.map Prod.fst
       let has_all_inputs := required_sources.all (fun src => available_sources.contains src)
 
@@ -769,8 +745,8 @@ def evaluate_node {n : Nat}
         | ActivationBits.intro _, _ => ActivationBits.intro has_all_inputs
         | ActivationBits.elim _ _, 2 =>
             ActivationBits.elim
-              (available_sources.contains (required_sources.get! 0))
-              (available_sources.contains (required_sources.get! 1))
+              (available_sources.contains (required_sources[0]!))
+              (available_sources.contains (required_sources[1]!))
         | ActivationBits.elim _ _, _ => ActivationBits.elim false false
         | ActivationBits.repetition _, _ => ActivationBits.repetition has_all_inputs
 
@@ -919,35 +895,18 @@ lemma list_map_get {α β : Type*} (f : α → β) (l : List α) (i : Nat)
       have hi'_xs : i' < xs.length := Nat.lt_of_succ_lt_succ hi
       have hi'_map : i' < (xs.map f).length := by simp; exact hi'_xs
       exact ih i' hi'_xs hi'_map
--- Add this helper lemma
-lemma list_enum_aux_length {α : Type*} (l : List α) (n : Nat) :
-    (List.enum.aux l n).length = l.length := by
-  induction l generalizing n with
-  | nil => rfl
-  | cons x xs ih => simp [List.enum.aux, ih]
 
-lemma list_enum_length {α : Type*} (l : List α) : l.enum.length = l.length := by
-  simp [List.enum, list_enum_aux_length]
-
-lemma list_enum_aux_get_fst {α : Type*} (l : List α) (n : Nat) (i : Nat)
-    (hi : i < (List.enum.aux l n).length) :
-    ((List.enum.aux l n).get ⟨i, hi⟩).1 = n + i := by
+lemma list_zipIdx_get_fst {α : Type*} (l : List α) (n : Nat) (i : Nat)
+    (hi : i < (l.zipIdx n).length)
+    (hi' : i < l.length := by simp [List.length_zipIdx] at hi; exact hi) :
+    ((l.zipIdx n).get ⟨i, hi⟩).1 = l.get ⟨i, hi'⟩ := by
   induction l generalizing n i with
-  | nil =>
-    simp [List.enum.aux] at hi
+  | nil => simp at hi'
   | cons x xs ih =>
     cases i with
-    | zero => simp [List.enum.aux]
-    | succ i' =>
-      simp only [List.enum.aux, List.get_cons_succ]
-      rw [ih]
-      omega
+    | zero => simp [List.zipIdx]
+    | succ i' => simp only [List.zipIdx_cons, List.get_cons_succ]; apply ih
 
-lemma list_enum_get_fst {α : Type*} (l : List α) (i : Nat) (hi : i < l.enum.length) :
-    (l.enum.get ⟨i, hi⟩).1 = i := by
-  simp only [List.enum]
-  rw [list_enum_aux_get_fst]
-  omega
 
 lemma list_range_get (n : Nat) (i : Nat) (hi : i < (List.range n).length) :
     (List.range n).get ⟨i, hi⟩ = i := by
@@ -965,7 +924,7 @@ lemma node_logic_with_routing_correct
     r ∈ rules ∧
     rules.get ⟨i, hi⟩ = r ∧
     node_logic_with_routing rules node_incoming available_inputs =
-      (let rule_inc := node_incoming.get! i
+      (let rule_inc := node_incoming[i]!
        let inputs := gather_rule_inputs rule_inc available_inputs
        r.combine inputs, false) :=
 by
@@ -996,7 +955,7 @@ by
   -- 4. Per-rule inputs, aligned with rules
   let per_rule_inputs :=
     (List.range rules.length).map (fun idx =>
-      let rule_inc := node_incoming.get! idx
+      let rule_inc := node_incoming[idx]!
       gather_rule_inputs rule_inc available_inputs)
 
   have h_len_per :
@@ -1109,31 +1068,40 @@ by
     simp only [h_mask_j, Bool.false_eq_true, ↓reduceIte]
 
   have h_per_rule_i₀ : per_rule_inputs.get ⟨i₀, hi₀_per⟩ =
-      gather_rule_inputs (node_incoming.get! i₀) available_inputs := by
+      gather_rule_inputs (node_incoming[i₀]!) available_inputs := by
     simp [per_rule_inputs]
 
   refine ⟨r₀, i₀, hi₀_lt, hr₀_mem, hi₀_get', ?_⟩
   unfold node_logic_with_routing
   simp [extract_activations, and_bool_list]
-  have h_enum_per : (rules.enum.map fun (rule_idx, _) =>
-    gather_rule_inputs (node_incoming.get! rule_idx) available_inputs) = per_rule_inputs := by
+  have h_enum_per : (rules.zipIdx.map fun (_, rule_idx) =>
+    gather_rule_inputs (node_incoming[rule_idx]?.getD default) available_inputs) = per_rule_inputs := by
     simp only [per_rule_inputs]
     apply List.ext_get
-    · simp only [List.length_map, list_enum_length, List.length_range]
+    · simp only [List.length_map, List.length_zipIdx, List.length_range]
     · intro i hi₁ hi₂
-      have hi_enum : i < rules.enum.length := by
+      have hi_zipIdx : i < rules.zipIdx.length := by
         rw [List.length_map] at hi₁
         exact hi₁
       have hi_rules : i < rules.length := by
-        rw [list_enum_length] at hi_enum
-        exact hi_enum
-      -- LHS
-      rw [list_map_get _ _ _ hi_enum (by rw [List.length_map]; exact hi_enum)]
-      -- RHS
+        rw [List.length_zipIdx] at hi_zipIdx
+        exact hi_zipIdx
+      rw [list_map_get _ _ _ hi_zipIdx (by rw [List.length_map]; exact hi_zipIdx)]
       rw [list_map_get _ _ _ (by simp; exact hi_rules) hi₂]
-      -- Now need: (rules.enum.get ...).1 = (List.range rules.length).get ...
-      rw [list_enum_get_fst rules i hi_enum]
-      rw [list_range_get rules.length i (by simp; exact hi_rules)]
+      congr 1
+      -- Need to show node_incoming[idx]?.getD default = node_incoming[idx]!
+      -- when idx < node_incoming.length
+      have h1 : (rules.zipIdx.get ⟨i, hi_zipIdx⟩).2 = 0 + i := by
+        rw [← List.getElem_eq_get]
+        simp [List.getElem_zipIdx]
+      have h2 : (List.range rules.length).get ⟨i, by simp; exact hi_rules⟩ = i := by
+        rw [← List.getElem_eq_get]
+        simp [List.getElem_range]
+      simp only [h1, h2, Nat.zero_add]
+      -- Now need: node_incoming[i]?.getD default = node_incoming[i]!
+      have hi_incoming : i < node_incoming.length := by rw [hlen]; exact hi_rules
+      rw [List.getElem?_eq_getElem hi_incoming, Option.getD_some]
+      simp only [List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem hi_incoming, Option.getD_some]
 
   constructor
   · -- First part: list_or (...) = r₀.combine (...)
@@ -1164,44 +1132,43 @@ by
       simp only [outs]
       congr 1
       simp only [masks, hmasks_eq, acts, extract_activations]
-
     rw [h_goal_eq_outs, h_list_or_eq, h_outs_i₀, h_per_rule_i₀]
-
-  · -- Second part: XOR false implies all inactive (this is trivial)
+    congr 2
+    have hi₀_incoming : i₀ < node_incoming.length := by rw [hlen]; exact hi₀_lt
+    rw [List.getElem!_eq_getElem?_getD (α := _), List.getElem?_eq_getElem hi₀_incoming]
+  · -- Second part: XOR false implies all inactive (vacuously true)
     intro h_xor_false
     simp only [acts, extract_activations] at h_xor
     rw [h_xor] at h_xor_false
     simp at h_xor_false
-
 /-!
 ### 6.5: Theorems with Routing
 -/
-
-lemma activateRulesAux_eq_enumFrom_map {n : Nat}
+lemma activateRulesAux_eq_zipIdx_map {n : Nat}
     (node_incoming : NodeIncoming)
     (available_inputs : List (Nat × List.Vector Bool n))
     (rules : List (Rule n))
     (start : Nat) :
     activateRulesAux node_incoming available_inputs start rules =
-    (List.enum.aux rules start).map fun x =>
-      let rule_incoming := node_incoming.get! x.1
+    (rules.zipIdx start).map fun x =>
+      let rule_incoming := node_incoming[x.2]!
       let available_sources := available_inputs.map Prod.fst
       let required_sources := rule_incoming.map Prod.fst
       let has_all_inputs := required_sources.all fun src => available_sources.contains src
-      let new_activation := match x.2.activation, required_sources.length with
+      let new_activation := match x.1.activation, required_sources.length with
         | ActivationBits.intro _, _ => ActivationBits.intro has_all_inputs
         | ActivationBits.elim _ _, 2 =>
             ActivationBits.elim
-              (available_sources.contains (required_sources.get! 0))
-              (available_sources.contains (required_sources.get! 1))
+              (available_sources.contains (required_sources[0]!))
+              (available_sources.contains (required_sources[1]!))
         | ActivationBits.elim _ _, _ => ActivationBits.elim false false
         | ActivationBits.repetition _, _ => ActivationBits.repetition has_all_inputs
-      { x.2 with activation := new_activation } := by
+      { x.1 with activation := new_activation } := by
   induction rules generalizing start with
   | nil =>
-    simp [activateRulesAux, List.enum.aux]
+    simp [activateRulesAux, List.zipIdx]
   | cons r rs ih =>
-    simp only [activateRulesAux, List.enum.aux, List.map_cons]
+    simp only [activateRulesAux, List.zipIdx_cons, List.map_cons]
     congr 1
     · -- Head equality
       unfold set_rule_activation
@@ -1216,7 +1183,7 @@ lemma activateRulesAux_eq_enumFrom_map {n : Nat}
         ·
           rename_i h1
           -- Force the match to evaluate for non-2 cases
-          match hlen : (List.map Prod.fst (List.get! node_incoming start)).length with
+          match hlen : (node_incoming[start]!.map Prod.fst).length with
           | 0 => rfl
           | 1 => rfl
           | 2 => exact absurd hlen h1
@@ -1224,27 +1191,26 @@ lemma activateRulesAux_eq_enumFrom_map {n : Nat}
       | repetition b => rfl
     · exact ih (start + 1)
 
-lemma activateRulesAux_eq_enum_map {n : Nat}
+lemma activateRulesAux_eq_zipIdx_map_zero {n : Nat}
     (node_incoming : NodeIncoming)
     (available_inputs : List (Nat × List.Vector Bool n))
     (rules : List (Rule n)) :
     activateRulesAux node_incoming available_inputs 0 rules =
-    rules.enum.map fun x =>
-      let rule_incoming := node_incoming.get! x.1
+    rules.zipIdx.map fun x =>
+      let rule_incoming := node_incoming[x.2]!
       let available_sources := available_inputs.map Prod.fst
       let required_sources := rule_incoming.map Prod.fst
       let has_all_inputs := required_sources.all fun src => available_sources.contains src
-      let new_activation := match x.2.activation, required_sources.length with
+      let new_activation := match x.1.activation, required_sources.length with
         | ActivationBits.intro _, _ => ActivationBits.intro has_all_inputs
         | ActivationBits.elim _ _, 2 =>
             ActivationBits.elim
-              (available_sources.contains (required_sources.get! 0))
-              (available_sources.contains (required_sources.get! 1))
+              (available_sources.contains (required_sources[0]!))
+              (available_sources.contains (required_sources[1]!))
         | ActivationBits.elim _ _, _ => ActivationBits.elim false false
         | ActivationBits.repetition _, _ => ActivationBits.repetition has_all_inputs
-      { x.2 with activation := new_activation } := by
-  simp only [List.enum]
-  exact activateRulesAux_eq_enumFrom_map node_incoming available_inputs rules 0
+      { x.1 with activation := new_activation } := by
+  exact activateRulesAux_eq_zipIdx_map node_incoming available_inputs rules 0
 
 theorem evaluate_node_uses_proven_node_logic
   {n : Nat}
@@ -1271,7 +1237,7 @@ theorem evaluate_node_uses_proven_node_logic
     rw [Prod.eta]
     congr 1
     simp only [activate_node_from_tokens]
-    rw [activateRulesAux_eq_enum_map]
+    rw [activateRulesAux_eq_zipIdx_map_zero]
   · -- Prove ¬tokens.isEmpty = true
     intro h_isEmpty
     cases tokens with
@@ -1345,25 +1311,9 @@ theorem evaluate_node_error_iff_not_unique
         exact ⟨r, hr_mem, hr_act⟩
       · rfl
 
-lemma indexOf_aux_succ {α : Type*} [DecidableEq α] (a : α) (l : List α) (n : Nat)
-    (h_mem : a ∈ l) :
-    List.indexOf.aux a l (n + 1) = List.indexOf.aux a l n + 1 := by
-  induction l generalizing n with
-  | nil => simp at h_mem
-  | cons x xs ih =>
-    unfold List.indexOf.aux
-    by_cases h : x = a
-    · simp only [if_pos h]
-    · simp only [if_neg h]
-      have h_mem' : a ∈ xs := by
-        cases h_mem with
-        | head => exact absurd rfl h
-        | tail _ h' => exact h'
-      exact ih (n + 1) h_mem'
-
 lemma indexOf_eq_of_get {α : Type*} [DecidableEq α] {l : List α} {a : α} {i : Nat} (hi : i < l.length)
     (h_nodup : l.Nodup) (h_get : l.get ⟨i, hi⟩ = a) :
-    l.indexOf a = i := by
+    l.idxOf a = i := by
   induction l generalizing i with
   | nil => simp at hi
   | cons x xs ih =>
@@ -1371,9 +1321,7 @@ lemma indexOf_eq_of_get {α : Type*} [DecidableEq α] {l : List α} {a : α} {i 
     | zero =>
       simp only [List.get] at h_get
       subst h_get
-      simp only [List.indexOf]
-      unfold List.indexOf.aux
-      simp
+      simp [List.idxOf, List.findIdx_cons]
     | succ i' =>
       simp only [List.get] at h_get
       have h_ne : x ≠ a := by
@@ -1385,13 +1333,12 @@ lemma indexOf_eq_of_get {α : Type*} [DecidableEq α] {l : List α} {a : α} {i 
       have hi' : i' < xs.length := by simp at hi; exact hi
       have h_nodup' : xs.Nodup := (List.nodup_cons.mp h_nodup).2
       have ih_result := ih hi' h_nodup' h_get
-      have h_mem : a ∈ xs := by rw [← h_get]; exact List.get_mem xs ⟨i', hi'⟩
-      simp only [List.indexOf] at ih_result ⊢
-      unfold List.indexOf.aux
-      simp only [if_neg h_ne]
-      rw [indexOf_aux_succ a xs 0 h_mem, ih_result]
+      simp only [List.idxOf, List.findIdx_cons]
+      have h_ne_beq : (x == a) = false := by simp [beq_iff_eq, h_ne]
+      simp only [h_ne_beq, cond_false]
+      simp only [List.idxOf] at ih_result
+      rw [ih_result]
 
-/-- FIXED: When no error, we can apply correctness -/
 theorem evaluate_node_correct
   {n : Nat}
   (node : CircuitNode n)
@@ -1405,8 +1352,8 @@ theorem evaluate_node_correct
   let available_inputs := tokens.map fun t => (t.source_column, t.dep_vector)
   let activated_node := activate_node_from_tokens node node_incoming available_inputs
   ∃ r ∈ activated_node.rules,
-    let rule_idx := activated_node.rules.indexOf r
-    let rule_inc := node_incoming.get! rule_idx
+    let rule_idx := activated_node.rules.idxOf r  -- Changed from indexOf to idxOf
+    let rule_inc := node_incoming[rule_idx]!
     let inputs := gather_rule_inputs rule_inc available_inputs
     (evaluate_node node node_incoming tokens).fst = r.combine inputs := by
 
@@ -1424,7 +1371,6 @@ theorem evaluate_node_correct
 
   have h_activated_len : activated_node.rules.length = node.rules.length := by
     simp only [activated_node, activate_node_from_tokens]
-    -- activateRulesAux preserves length
     have h : ∀ idx, (activateRulesAux node_incoming available_inputs idx node.rules).length = node.rules.length := by
       intro idx
       induction node.rules generalizing idx with
@@ -1448,18 +1394,20 @@ theorem evaluate_node_correct
 
   -- Extract from tuple equality
   have h_fst : (node_logic_with_routing activated_node.rules node_incoming available_inputs).fst =
-               r.combine (gather_rule_inputs (node_incoming.get! i) available_inputs) := by
+               r.combine (gather_rule_inputs (node_incoming[i]!) available_inputs) := by
     rw [hr_eq]
 
   use r, hr_mem
   simp only [available_inputs, activated_node]
   rw [h_fst]
 
-  -- Show indexOf r = i
+  -- Show idxOf r = i
   congr 1
-  have h_indexOf : activated_node.rules.indexOf r = i := by
+  congr 1
+  have h_indexOf : activated_node.rules.idxOf r = i := by
     exact indexOf_eq_of_get hi h_nodup hr_get
-  rw [h_indexOf]  -- Need lemma: indexOf r = i when rules.get ⟨i, hi⟩ = r and Nodup
+  simp only [activated_node, available_inputs] at h_indexOf ⊢
+  rw [h_indexOf]
 /-!
 ### 6.6: Layer Evaluation
 -/
@@ -1471,9 +1419,9 @@ def evaluate_layer {n : Nat}
   (current_level : Nat)
   : (List (List.Vector Bool n)) × Bool :=
 
-  let results := layer.nodes.enum.map fun (col_idx, node) =>
+  let results := layer.nodes.zipIdx.map fun (node, col_idx) =>
     let tokens_here := tokens.filter (·.current_column = col_idx)
-    let node_incoming := layer.incoming.get! col_idx
+    let node_incoming := layer.incoming[col_idx]!
     evaluate_node node node_incoming tokens_here
 
   let outputs := results.map Prod.fst
@@ -1821,7 +1769,7 @@ def buildIncomingMapForFormula
   -- INTRO rules: A⊃B needs input from B
   let introMap := match formula with
     | .impl _ B =>
-        let b_idx := formulas.indexOf B
+        let b_idx := formulas.idxOf B
         [[(b_idx, 0)]]
     | _ => []
 
@@ -1829,16 +1777,16 @@ def buildIncomingMapForFormula
   let elimMaps := match formula with
     | .impl _ _ => []
     | φ =>
-        formulas.enum.filterMap fun (idx, f) =>
+        formulas.zipIdx.filterMap fun (f, idx) =>
           match f with
           | .impl A B =>
               if B = φ then
-                let a_idx := formulas.indexOf A
+                let a_idx := formulas.idxOf A
                 some [(idx, 0), (a_idx, 0)]
               else none
           | _ => none
 
-  let self_idx := formulas.indexOf formula
+  let self_idx := formulas.idxOf formula
   let repMap := [[(self_idx, 0)]]
 
   introMap ++ elimMaps ++ repMap
@@ -1851,21 +1799,21 @@ def buildIncomingMap (formulas : List Formula) : LayerIncoming :=
 ### 6.5: Node Construction
 -/
 axiom nodeForFormula_nodupIds (formulas : List Formula) (lvl : Nat) (formula : Formula) :
-  let n := formulas.length
-  let ruleId_base := lvl * n * 10 + (formulas.indexOf formula) * 10
-  let introRules := match formula with
-    | .impl A B => match encoderForIntro formulas formula with
-      | some encoder => [mkIntroRule ruleId_base encoder false]
-      | none => []
-    | _ => []
-  let elimRules := match formula with
-    | .impl _ _ => []
-    | φ => formulas.enum.filterMap fun (idx, f) =>
-        match f with
-        | .impl A B => if B = φ then some (mkElimRule (ruleId_base + 1 + idx) false false) else none
-        | _ => none
-  let repRules := [mkRepetitionRule (ruleId_base + 1000) false]
-  (introRules ++ elimRules ++ repRules).map (·.ruleId) |>.Nodup
+    let n := formulas.length
+    let ruleId_base := lvl * n * 10 + (formulas.idxOf formula) * 10
+    let introRules := match formula with
+      | .impl A B => match encoderForIntro formulas formula with
+        | some encoder => [mkIntroRule ruleId_base encoder false]
+        | none => []
+      | _ => []
+    let elimRules := match formula with
+      | .impl _ _ => []
+      | φ => formulas.zipIdx.filterMap fun (f, idx) =>
+          match f with
+          | .impl A B => if B = φ then some (mkElimRule (ruleId_base + 1 + idx) false false) else none
+          | _ => none
+    let repRules := [mkRepetitionRule (ruleId_base + 1000) false]
+    (introRules ++ elimRules ++ repRules).map (·.ruleId) |>.Nodup
 /-- Construct a circuit node for a formula at a given level
 
     Creates rules:
@@ -1877,7 +1825,7 @@ def nodeForFormula (formulas : List Formula) (lvl : Nat) (formula : Formula)
   : CircuitNode formulas.length :=
 
   let n := formulas.length
-  let ruleId_base := lvl * n * 10 + (formulas.indexOf formula) * 10
+  let ruleId_base := lvl * n * 10 + (formulas.idxOf formula) * 10
 
   -- INTRO rules
   let introRules := match formula with
@@ -1891,7 +1839,7 @@ def nodeForFormula (formulas : List Formula) (lvl : Nat) (formula : Formula)
   let elimRules := match formula with
     | .impl _ _ => []
     | φ =>
-        formulas.enum.filterMap fun (idx, f) =>
+        formulas.zipIdx.filterMap fun (f, idx) =>
           match f with
           | .impl A B =>
               if B = φ then
@@ -1985,7 +1933,7 @@ def GridWellFormed {n : Nat}
     layer.incoming.length = n ∧
     ∀ (node_idx : Fin layer.nodes.length),
       let node := layer.nodes.get node_idx
-      let formula := formulas.get! node_idx.val
+      let formula := formulas[node_idx.val]!
       ∀ rule ∈ node.rules,
         match rule.type with
         | RuleData.intro encoder => IntroRuleWellFormed encoder formula formulas
@@ -2052,11 +2000,11 @@ lemma encoderForIntro_wellformed (formulas : List Formula) (A B : Formula) :
         have h_fin_eq : (⟨i.val, i.isLt⟩ : Fin formulas.length) = ⟨i.val, h_lt⟩ := by ext; rfl
         rw [h_fin_eq]
         exact h_eq
-      -- Now convert h_goal to the form with Fin.cast
       have h_cast_eq : (Fin.cast h_len.symm i) = ⟨i.val, by simp⟩ := by
         ext; rfl
       rw [h_cast_eq]
       exact h_goal
+
 
 lemma nodeForFormula_atom_rules_wellformed (formulas : List Formula) (lvl : Nat) (name : String) :
     ∀ rule ∈ (nodeForFormula formulas lvl (Formula.atom name)).rules,
@@ -2065,37 +2013,32 @@ lemma nodeForFormula_atom_rules_wellformed (formulas : List Formula) (lvl : Nat)
       | RuleData.elim => True
       | RuleData.repetition => True := by
   intro rule h_mem
-  -- Get the actual rules for an atom
   have h_rules : (nodeForFormula formulas lvl (Formula.atom name)).rules =
-    (formulas.enum.filterMap fun x =>
-      match x.2 with
+    (formulas.zipIdx.filterMap fun x =>
+      match x.1 with
       | .impl A B => if B = Formula.atom name
-          then some (mkElimRule (lvl * formulas.length * 10 + (formulas.indexOf (Formula.atom name)) * 10 + 1 + x.1) false false)
+          then some (mkElimRule (lvl * formulas.length * 10 + (formulas.idxOf (Formula.atom name)) * 10 + 1 + x.2) false false)
           else none
       | _ => none) ++
-    [mkRepetitionRule (lvl * formulas.length * 10 + (formulas.indexOf (Formula.atom name)) * 10 + 1000) false] := rfl
+    [mkRepetitionRule (lvl * formulas.length * 10 + (formulas.idxOf (Formula.atom name)) * 10 + 1000) false] := rfl
 
   rw [h_rules] at h_mem
 
   cases h_append : List.mem_append.mp h_mem with
   | inl h_elim =>
-    -- In the filterMap list - must be an elim rule
     have ⟨x, _, hx⟩ := List.mem_filterMap.mp h_elim
-    match hf : x.2 with
+    match hf : x.1 with
     | .atom _ => simp [hf] at hx
     | .impl A B =>
       simp only [hf] at hx
       by_cases hB : B = Formula.atom name
       · simp only [hB, ↓reduceIte, Option.some.injEq] at hx
         subst hx
-        -- Now goal is about mkElimRule, need to show its type is RuleData.elim
         simp only [mkElimRule]
-      · -- hB : ¬B = Formula.atom name, so the if-then-else gives none
+      ·
         simp only [hB, ↓reduceIte] at hx
-        -- hx : none = some rule, which is a contradiction
         exact Option.noConfusion hx
   | inr h_rep =>
-    -- In the singleton list - must be the rep rule
     cases List.mem_singleton.mp h_rep
     simp only [mkRepetitionRule]
 
@@ -2106,32 +2049,26 @@ lemma nodeForFormula_impl_rules_wellformed (formulas : List Formula) (lvl : Nat)
       | RuleData.elim => True
       | RuleData.repetition => True := by
   intro rule h_mem
-  -- Get the actual rules for impl
   have h_rules : (nodeForFormula formulas lvl (Formula.impl A B)).rules =
     (match encoderForIntro formulas (Formula.impl A B) with
-     | some encoder => [mkIntroRule (lvl * formulas.length * 10 + (formulas.indexOf (Formula.impl A B)) * 10) encoder false]
+     | some encoder => [mkIntroRule (lvl * formulas.length * 10 + (formulas.idxOf (Formula.impl A B)) * 10) encoder false]
      | none => []) ++
-    [mkRepetitionRule (lvl * formulas.length * 10 + (formulas.indexOf (Formula.impl A B)) * 10 + 1000) false] := rfl
+    [mkRepetitionRule (lvl * formulas.length * 10 + (formulas.idxOf (Formula.impl A B)) * 10 + 1000) false] := rfl
 
   rw [h_rules] at h_mem
   rw [List.mem_append] at h_mem
 
   cases h_mem with
   | inl h_intro =>
-    -- In the intro rules list
-    -- encoderForIntro for impl A B always returns some
     have h_enc_eq : encoderForIntro formulas (Formula.impl A B) =
         some ⟨formulas.map (fun ψ => decide (ψ = A)), by simp⟩ := rfl
     simp only [h_enc_eq, List.mem_singleton] at h_intro
     subst h_intro
-    -- rule = mkIntroRule ...
     simp only [mkIntroRule]
-    -- Need IntroRuleWellFormed
     have h_wf := encoderForIntro_wellformed formulas A B
     simp only [h_enc_eq] at h_wf
     exact h_wf
   | inr h_rep =>
-    -- In the singleton rep list
     cases List.mem_singleton.mp h_rep
     simp only [mkRepetitionRule]
 
@@ -2175,37 +2112,38 @@ theorem buildGridFromDLDS_wellformed (d : DLDS) :
     constructor
     · exact buildIncomingMap_length formulas
     · intro node_idx
-      simp only [List.get!, List.getD]
+      dsimp only
 
       have h_idx : node_idx.val < formulas.length := by
         have : node_idx.val < (List.map (nodeForFormula formulas lvl) formulas).length := node_idx.isLt
         simp only [List.length_map] at this
         exact this
 
+      have h_node_eq : (List.map (nodeForFormula formulas lvl) formulas).get node_idx =
+                       nodeForFormula formulas lvl (formulas.get ⟨node_idx.val, h_idx⟩) := by
+        simp only [List.get_eq_getElem, List.getElem_map]
+
       intro rule h_rule_mem
 
-      -- Instead of proving an equality and rewriting,
-      -- let's use the fact that rule is in the rules of nodeForFormula
-      have h_rule_mem' : rule ∈ (nodeForFormula formulas lvl (formulas.get ⟨node_idx.val, h_idx⟩)).rules := by
-        convert h_rule_mem using 2
-        rw [List.get_map' (nodeForFormula formulas lvl) formulas ⟨node_idx.val, h_idx⟩]
-
+      -- rule is in the node's rules
+      have hr_mem' : rule ∈ (nodeForFormula formulas lvl (formulas.get ⟨node_idx.val, h_idx⟩)).rules := by
+        have : rule ∈ ((List.map (nodeForFormula formulas lvl) formulas).get node_idx).rules := h_rule_mem
+        rw [h_node_eq] at this
+        exact this
 
       have h_wf := nodeForFormula_rules_wellformed formulas lvl
-                     (formulas.get ⟨node_idx.val, h_idx⟩) rule h_rule_mem'
+                     (formulas.get ⟨node_idx.val, h_idx⟩) rule hr_mem'
 
-      have h_get_eq : formulas[node_idx.val]?.getD default = formulas.get ⟨node_idx.val, h_idx⟩ := by
-        simp only [List.getElem?_eq_getElem, h_idx, Option.getD_some]
-        rfl
+      have h_get_eq : formulas[node_idx.val]! = formulas.get ⟨node_idx.val, h_idx⟩ := by
+        conv_lhs => rw [List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem h_idx]
+        simp only [Option.getD_some, List.get_eq_getElem]
 
       match h_type : rule.type with
       | RuleData.intro encoder =>
         simp only [h_type] at h_wf ⊢
-        rw [h_get_eq]
-        exact h_wf
+        convert h_wf using 2
       | RuleData.elim => trivial
       | RuleData.repetition => trivial
-
 
 /-!
 ### 6.11: Main Evaluation Function
