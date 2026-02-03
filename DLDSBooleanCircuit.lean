@@ -7,8 +7,6 @@ import Mathlib.Data.Vector.Defs
 import Mathlib.Data.Vector.Zip
 import Mathlib.Data.Fin.Basic
 
-set_option linter.unusedVariables false
-
 
 /-!
 # DLDS Boolean Circuit Formalization (CORE)
@@ -665,7 +663,7 @@ def activate_node_from_tokens {n : Nat}
 
 
 /-!
-### 6.4: Node Evaluation Using PROVEN node_logic (FIXED)
+### 6.4: Node Evaluation Using node_logic
 -/
 
 def gather_rule_inputs {n : Nat}
@@ -674,9 +672,6 @@ def gather_rule_inputs {n : Nat}
   : List (List.Vector Bool n) :=
   let result := rule_incoming.filterMap fun (required_col, _edge_id) =>
     available_inputs.find? (fun (col, _) => col = required_col) |>.map Prod.snd
-
-  -- DEBUG
-  -- -- dbg_trace s!"    [gather] required_cols={rule_incoming.map Prod.fst} found={result.length}";
   result
 
 /-- Modified apply_activations that uses per-rule inputs -/
@@ -697,21 +692,11 @@ def node_logic_with_routing {n : Nat}
   (node_incoming : NodeIncoming)
   (available_inputs : List (Nat × List.Vector Bool n))
   : (List.Vector Bool n) × Bool :=
-  -- dbg_trace s!"[node_logic_routing] node_incoming.length={node_incoming.length}, rules.length={rules.length}"
-  -- dbg_trace s!"[node_logic_routing] available_inputs={available_inputs.map Prod.fst}"
   let acts := extract_activations rules
-  -- dbg_trace s!"    [node_logic] acts={acts}";
-
   let xor := multiple_xor acts
-  -- dbg_trace s!"    [node_logic] xor={xor}";
-
   let masks := and_bool_list xor acts
-  -- dbg_trace s!"    [node_logic] masks={masks}";
-
   -- Detect conflict: XOR fails and at least one rule is active
   let has_conflict := !xor && acts.any (· = true)
-  -- dbg_trace s!"    [node_logic] conflict={has_conflict}"
-
   -- Gather per-rule inputs based on IncomingMap
   let per_rule_inputs := rules.zipIdx.map fun (_rule, rule_idx) =>
     let rule_inc := node_incoming[rule_idx]!
@@ -719,7 +704,6 @@ def node_logic_with_routing {n : Nat}
 
   -- Apply with routing
   let outs := apply_activations_with_routing rules masks per_rule_inputs
-  -- dbg_trace s!"    [node_logic] rule_outputs={outs.map (fun v => v.toList.take 4)}";
 
   let result := list_or outs
   (result, has_conflict)
@@ -1416,7 +1400,6 @@ theorem evaluate_node_correct
 def evaluate_layer {n : Nat}
   (layer : GridLayer n)
   (tokens : List (Token n))
-  (current_level : Nat)
   : (List (List.Vector Bool n)) × Bool :=
 
   let results := layer.nodes.zipIdx.map fun (node, col_idx) =>
@@ -1448,7 +1431,7 @@ def eval_from_level {n : Nat}
       let final_outputs := (List.range n).map fun _ => List.Vector.replicate n false
       (final_outputs, accumulated_error)
   | layer :: rest =>
-      let (outputs, layer_error) := evaluate_layer layer tokens level
+      let (outputs, layer_error) := evaluate_layer layer tokens
       match rest with
       | [] =>
           -- Return its outputs directly
@@ -1559,7 +1542,6 @@ lemma no_error_accept_implies_discharged
   (initial_vectors : List (List.Vector Bool n))
   (paths : PathInput)
   (goal_column : Nat)
-  (h_no_error : (get_eval_result layers initial_vectors paths).snd = false)
   (h_accept :
     let (final_outputs, _) := get_eval_result layers initial_vectors paths
     ∃ (h : goal_column < final_outputs.length),
@@ -1634,7 +1616,7 @@ theorem circuit_correctness
       · -- In bounds: extract that all entries are false
         simp [h_bounds] at h_accept
 
-        apply no_error_accept_implies_discharged layers initial_vectors paths goal_column h_err_snd
+        apply no_error_accept_implies_discharged layers initial_vectors paths goal_column
 
         -- Rewrite the match using h_eval
         rw [h_eval]
@@ -1773,18 +1755,15 @@ def buildIncomingMapForFormula
         [[(b_idx, 0)]]
     | _ => []
 
-  -- ELIM rules: φ needs A⊃φ and A for each such A
-  let elimMaps := match formula with
-    | .impl _ _ => []
-    | φ =>
-        formulas.zipIdx.filterMap fun (f, idx) =>
-          match f with
-          | .impl A B =>
-              if B = φ then
-                let a_idx := formulas.idxOf A
-                some [(idx, 0), (a_idx, 0)]
-              else none
-          | _ => none
+  -- ELIM rules: φ needs A⊃φ and A for each such A (for ANY formula φ)
+  let elimMaps := formulas.zipIdx.filterMap fun (f, idx) =>
+    match f with
+    | .impl A B =>
+        if B = formula then
+          let a_idx := formulas.idxOf A
+          some [(idx, 0), (a_idx, 0)]
+        else none
+    | _ => none
 
   let self_idx := formulas.idxOf formula
   let repMap := [[(self_idx, 0)]]
@@ -1800,15 +1779,15 @@ def buildIncomingMap (formulas : List Formula) : LayerIncoming :=
 -/
 
 
-lemma nodeForFormula_nodupIds (formulas : List Formula) (lvl : Nat) (formula : Formula) :
+lemma nodeForFormula_nodupIds (formulas : List Formula) (formula : Formula) :
     let introData := match formula with
-      | .impl A B => match encoderForIntro formulas formula with
+      | .impl _ _ => match encoderForIntro formulas formula with
         | some encoder => [encoder]
         | none => []
       | _ => []
     let elimData := formulas.zipIdx.filterMap fun (f, idx) =>
       match f with
-      | .impl A B => if B = formula then some idx else none
+      | .impl _ B => if B = formula then some idx else none
       | _ => none
     let introRules := introData.zipIdx.map fun (encoder, pos) =>
       mkIntroRule pos encoder false
@@ -1865,14 +1844,12 @@ lemma nodeForFormula_nodupIds (formulas : List Formula) (lvl : Nat) (formula : F
     - REP: Identity rule
 -/
 
-def nodeForFormula (formulas : List Formula) (lvl : Nat) (formula : Formula)
+def nodeForFormula (formulas : List Formula) (formula : Formula)
   : CircuitNode formulas.length :=
-
-  let n := formulas.length
 
   -- INTRO rules data (just the encoder, no ID yet)
   let introData := match formula with
-    | .impl A B =>
+    | .impl _ _ =>
         match encoderForIntro formulas formula with
         | some encoder => [encoder]
         | none => []
@@ -1881,7 +1858,7 @@ def nodeForFormula (formulas : List Formula) (lvl : Nat) (formula : Formula)
   -- ELIM rules data (just collect which source indices produce elim rules)
   let elimData := formulas.zipIdx.filterMap fun (f, idx) =>
     match f with
-    | .impl A B =>
+    | .impl _ B =>
         if B = formula then some idx
         else none
     | _ => none
@@ -1898,7 +1875,7 @@ def nodeForFormula (formulas : List Formula) (lvl : Nat) (formula : Formula)
   let rules := introRules ++ elimRules ++ repRules
 
   { rules := rules
-    nodupIds := nodeForFormula_nodupIds formulas lvl formula
+    nodupIds := nodeForFormula_nodupIds formulas formula
   }
 
 /-!
@@ -1909,10 +1886,8 @@ def nodeForFormula (formulas : List Formula) (lvl : Nat) (formula : Formula)
 def buildLayers (d : DLDS) : List (GridLayer (buildFormulas d).length) :=
   let formulas := buildFormulas d
   let maxLvl := (d.V.map (·.LEVEL)).foldl max 0
-
-  -- Build layers from level 0 to maxLvl
-  (List.range (maxLvl + 1)).map fun lvl =>
-    { nodes := formulas.map (nodeForFormula formulas lvl)
+  List.replicate (maxLvl + 1)
+    { nodes := formulas.map (nodeForFormula formulas)
       incoming := buildIncomingMap formulas
     }
 
@@ -1925,9 +1900,7 @@ def buildLayers (d : DLDS) : List (GridLayer (buildFormulas d).length) :=
     Note: Layers are reversed because evaluation proceeds top-to-bottom
     but we build layers 0→max
 -/
-def buildGridFromDLDS (d : DLDS) :
-  let n := (buildFormulas d).length
-  List (GridLayer n) :=
+def buildGridFromDLDS (d : DLDS) : List (GridLayer (buildFormulas d).length) :=
   buildLayers d |>.reverse
 
 /-!
@@ -1970,10 +1943,10 @@ def IntroRuleWellFormed {n : Nat}
     3. Each intro rule has correct encoder
 -/
 def GridWellFormed {n : Nat}
-  (grid : List (GridLayer n))
-  (formulas : List Formula) : Prop :=
+  (formulas : List Formula)
+  (grid : List (GridLayer n)) : Prop :=
   formulas.length = n ∧
-  ∀ (layer : GridLayer n) (layer_mem : layer ∈ grid),
+  ∀ layer ∈ grid,
     layer.nodes.length = n ∧
     layer.incoming.length = n ∧
     ∀ (node_idx : Fin layer.nodes.length),
@@ -2050,8 +2023,8 @@ lemma encoderForIntro_wellformed (formulas : List Formula) (A B : Formula) :
       rw [h_cast_eq]
       exact h_goal
 
-lemma nodeForFormula_atom_rules_wellformed (formulas : List Formula) (lvl : Nat) (name : String) :
-    ∀ rule ∈ (nodeForFormula formulas lvl (Formula.atom name)).rules,
+lemma nodeForFormula_atom_rules_wellformed (formulas : List Formula) (name : String) :
+    ∀ rule ∈ (nodeForFormula formulas (Formula.atom name)).rules,
       match rule.type with
       | RuleData.intro _ => False
       | RuleData.elim => True
@@ -2075,8 +2048,8 @@ lemma nodeForFormula_atom_rules_wellformed (formulas : List Formula) (lvl : Nat)
     subst h_rep
     simp only [mkRepetitionRule]
 
-lemma nodeForFormula_impl_rules_wellformed (formulas : List Formula) (lvl : Nat) (A B : Formula) :
-    ∀ rule ∈ (nodeForFormula formulas lvl (Formula.impl A B)).rules,
+lemma nodeForFormula_impl_rules_wellformed (formulas : List Formula) (A B : Formula) :
+    ∀ rule ∈ (nodeForFormula formulas  (Formula.impl A B)).rules,
       match rule.type with
       | RuleData.intro encoder => IntroRuleWellFormed encoder (Formula.impl A B) formulas
       | RuleData.elim => True
@@ -2115,8 +2088,8 @@ lemma nodeForFormula_impl_rules_wellformed (formulas : List Formula) (lvl : Nat)
     subst h_rep
     simp only [mkRepetitionRule]
 
-lemma nodeForFormula_rules_wellformed (formulas : List Formula) (lvl : Nat) (formula : Formula) :
-    ∀ rule ∈ (nodeForFormula formulas lvl formula).rules,
+lemma nodeForFormula_rules_wellformed (formulas : List Formula) (formula : Formula) :
+    ∀ rule ∈ (nodeForFormula formulas formula).rules,
       match rule.type with
       | RuleData.intro encoder => IntroRuleWellFormed encoder formula formulas
       | RuleData.elim => True
@@ -2124,30 +2097,29 @@ lemma nodeForFormula_rules_wellformed (formulas : List Formula) (lvl : Nat) (for
   cases formula with
   | atom name =>
     intro rule h_mem
-    have h := nodeForFormula_atom_rules_wellformed formulas lvl name rule h_mem
+    have h := nodeForFormula_atom_rules_wellformed formulas name rule h_mem
     match h_type : rule.type with
     | RuleData.intro encoder =>
       simp only [h_type] at h
     | RuleData.elim => trivial
     | RuleData.repetition => trivial
   | impl A B =>
-    exact nodeForFormula_impl_rules_wellformed formulas lvl A B
+    exact nodeForFormula_impl_rules_wellformed formulas A B
 
 lemma buildIncomingMap_length (formulas : List Formula) :
     (buildIncomingMap formulas).length = formulas.length := by
   simp only [buildIncomingMap, List.length_map]
 
 theorem buildGridFromDLDS_wellformed (d : DLDS) :
-    GridWellFormed (buildGridFromDLDS d) (buildFormulas d) := by
+    GridWellFormed (buildFormulas d) (buildGridFromDLDS d) := by
   unfold GridWellFormed
   let formulas := buildFormulas d
   constructor
   · rfl
   · intro layer h_layer_mem
-    simp only [buildGridFromDLDS] at h_layer_mem
-    rw [List.mem_reverse] at h_layer_mem
-    simp only [buildLayers, List.mem_map] at h_layer_mem
-    obtain ⟨lvl, _, h_layer_eq⟩ := h_layer_mem
+    simp only [buildGridFromDLDS, buildLayers] at h_layer_mem
+    rw [List.mem_reverse, List.mem_replicate] at h_layer_mem
+    obtain ⟨_, h_layer_eq⟩ := h_layer_mem
     subst h_layer_eq
 
     constructor
@@ -2158,23 +2130,22 @@ theorem buildGridFromDLDS_wellformed (d : DLDS) :
       dsimp only
 
       have h_idx : node_idx.val < formulas.length := by
-        have : node_idx.val < (List.map (nodeForFormula formulas lvl) formulas).length := node_idx.isLt
+        have : node_idx.val < (List.map (nodeForFormula formulas) formulas).length := node_idx.isLt
         simp only [List.length_map] at this
         exact this
 
-      have h_node_eq : (List.map (nodeForFormula formulas lvl) formulas).get node_idx =
-                       nodeForFormula formulas lvl (formulas.get ⟨node_idx.val, h_idx⟩) := by
+      have h_node_eq : (List.map (nodeForFormula formulas) formulas).get node_idx =
+                       nodeForFormula formulas (formulas.get ⟨node_idx.val, h_idx⟩) := by
         simp only [List.get_eq_getElem, List.getElem_map]
 
       intro rule h_rule_mem
 
-      -- rule is in the node's rules
-      have hr_mem' : rule ∈ (nodeForFormula formulas lvl (formulas.get ⟨node_idx.val, h_idx⟩)).rules := by
-        have : rule ∈ ((List.map (nodeForFormula formulas lvl) formulas).get node_idx).rules := h_rule_mem
+      have hr_mem' : rule ∈ (nodeForFormula formulas (formulas.get ⟨node_idx.val, h_idx⟩)).rules := by
+        have : rule ∈ ((List.map (nodeForFormula formulas) formulas).get node_idx).rules := h_rule_mem
         rw [h_node_eq] at this
         exact this
 
-      have h_wf := nodeForFormula_rules_wellformed formulas lvl
+      have h_wf := nodeForFormula_rules_wellformed formulas
                      (formulas.get ⟨node_idx.val, h_idx⟩) rule hr_mem'
 
       have h_get_eq : formulas[node_idx.val]! = formulas.get ⟨node_idx.val, h_idx⟩ := by
@@ -2222,7 +2193,6 @@ theorem dlds_evaluation_correct
   (goal_column : Nat)
   (h_accept : evaluateDLDS d paths goal_column = true) :
   let grid := buildGridFromDLDS d
-  let formulas := buildFormulas d
   let initial_vecs := initialVectorsFromDLDS d
   PathStructurallyInvalid paths grid initial_vecs
   ∨
@@ -2240,3 +2210,242 @@ theorem dlds_evaluation_correct
   -- Apply the general circuit correctness theorem
   unfold evaluateDLDS at h_accept
   exact circuit_correctness grid initial_vecs paths goal_column h_accept
+
+
+
+namespace Testing
+
+open Semantic (Formula Vertex Deduction DLDS)
+
+/-!
+### Convenience Functions for Testing
+-/
+
+/-- Check if a DLDS proof is valid under a given path -/
+def checkDLDSProof (d : DLDS) (paths : Semantic.PathInput) (goal_column : Nat) : IO Unit := do
+  let result := Semantic.evaluateDLDS d paths goal_column
+  IO.println s!"Evaluation result: {result}"
+
+  if result then
+    IO.println "✓ Path accepted: Either structurally invalid OR valid proof with discharged assumptions"
+  else
+    IO.println "✗ Path rejected: Invalid routing or undischarged assumptions"
+
+end Testing
+
+namespace PathTesting
+
+-- Import types from Semantic
+open Semantic (Formula Vertex Deduction DLDS)
+
+-- Formulas
+def A : Formula := .atom "A"
+def B : Formula := .atom "B"
+def AimpB : Formula := .impl A B
+def ABimpAB : Formula := .impl AimpB AimpB
+
+-- Vertices for (A⊃B)⊃(A⊃B) proof
+-- Level 3: Assumptions
+def v0 : Vertex := { node := 0, LEVEL := 3, FORMULA := A, HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+def v1 : Vertex := { node := 1, LEVEL := 3, FORMULA := AimpB, HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+
+-- Level 2: B derived by modus ponens
+def v2 : Vertex := { node := 2, LEVEL := 2, FORMULA := B, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+
+-- Level 1: A⊃B derived by intro (discharge A)
+def v3 : Vertex := { node := 3, LEVEL := 1, FORMULA := AimpB, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+
+-- Level 0: (A⊃B)⊃(A⊃B) derived by intro (discharge A⊃B)
+def v4 : Vertex := { node := 4, LEVEL := 0, FORMULA := ABimpAB, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+
+-- Edges
+def e0 : Deduction := { START := v0, END := v2, COLOUR := 0, DEPENDENCY := [A] }
+def e1 : Deduction := { START := v1, END := v2, COLOUR := 0, DEPENDENCY := [AimpB] }
+def e2 : Deduction := { START := v2, END := v3, COLOUR := 0, DEPENDENCY := [A, B] }
+def e3 : Deduction := { START := v3, END := v4, COLOUR := 0, DEPENDENCY := [AimpB] }
+
+-- The DLDS
+def testDLDS : DLDS := {
+  V := [v0, v1, v2, v3, v4],
+  E := [e0, e1, e2, e3],
+  A := []
+}
+
+-- Build grid
+def layers := Semantic.buildGridFromDLDS testDLDS
+def testFormulas := Semantic.buildFormulas testDLDS
+def initialVecs := Semantic.initialVectorsFromDLDS testDLDS
+
+-- Valid path: Both A and A⊃B follow the derivation path
+-- Grid indices (1-indexed): 1=A, 2=B, 3=A⊃B, 4=(A⊃B)⊃(A⊃B)
+def validPath : List (List Nat) :=
+  [ [3, 2, 4],   -- A: step1→B(2), step2→A⊃B(3), step3→(A⊃B)⊃(A⊃B)(4)
+    [3, 2, 4],   -- B: inactive (not an assumption)
+    [0, 0, 0],   -- A⊃B: step1→B(2), step2→A⊃B(3), step3→(A⊃B)⊃(A⊃B)(4)
+    [0, 0, 0]    -- (A⊃B)⊃(A⊃B): inactive (it's the conclusion)
+  ]
+
+-- Invalid path: A tries to go directly to conclusion
+def invalidPath : List (List Nat) :=
+  [ [4, 4, 4],   -- A: wrong - tries to skip intermediate steps
+    [4, 0, 0],   -- B: inactive
+    [4, 3, 4],   -- A⊃B: correct path
+    [4, 0, 0]    -- (A⊃B)⊃(A⊃B): inactive
+  ]
+
+#eval IO.println "\n========== VALID PATH TEST ==========\n"
+#eval! Testing.checkDLDSProof testDLDS validPath 4
+
+-- Test invalid path
+#eval IO.println "\n========== INVALID PATH TEST ==========\n"
+#eval! Testing.checkDLDSProof testDLDS invalidPath 4
+
+end PathTesting
+
+
+namespace PathTesting2
+
+-- Import types from Semantic
+open Semantic (Formula Vertex Deduction DLDS)
+
+def A : Formula := .atom "A"
+def B : Formula := .atom "B"
+def C : Formula := .atom "C"
+def AimpB : Formula := .impl A B
+def BimpC : Formula := .impl B C
+def AimpC : Formula := .impl A C
+def BimpCimpAimpC : Formula := .impl BimpC AimpC
+def conclusion3 : Formula := .impl AimpB BimpCimpAimpC
+
+-- Level 5: Assumptions
+def w0 : Vertex := { node := 0, LEVEL := 5, FORMULA := AimpB, HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+def w1 : Vertex := { node := 1, LEVEL := 5, FORMULA := BimpC, HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+def w2 : Vertex := { node := 2, LEVEL := 5, FORMULA := A, HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+
+-- Level 4: B
+def w3 : Vertex := { node := 3, LEVEL := 4, FORMULA := B, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+
+-- Level 3: C
+def w4 : Vertex := { node := 4, LEVEL := 3, FORMULA := C, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+
+-- Level 2: A→C (intro, discharge A)
+def w5 : Vertex := { node := 5, LEVEL := 2, FORMULA := AimpC, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+
+-- Level 1: (B→C)→(A→C) (intro, discharge B→C)
+def w6 : Vertex := { node := 6, LEVEL := 1, FORMULA := BimpCimpAimpC, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+
+-- Level 0: Conclusion (intro, discharge A→B)
+def w7 : Vertex := { node := 7, LEVEL := 0, FORMULA := conclusion3, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+
+-- Edges
+def e0 : Deduction := { START := w0, END := w3, COLOUR := 0, DEPENDENCY := [AimpB] }  -- f for elim
+def e1 : Deduction := { START := w2, END := w3, COLOUR := 0, DEPENDENCY := [A] }      -- a for elim → B
+def e2 : Deduction := { START := w1, END := w4, COLOUR := 0, DEPENDENCY := [BimpC] }
+def e3 : Deduction := { START := w3, END := w4, COLOUR := 0, DEPENDENCY := [B] }
+def e4 : Deduction := { START := w4, END := w5, COLOUR := 0, DEPENDENCY := [C] }
+def e5 : Deduction := { START := w5, END := w6, COLOUR := 0, DEPENDENCY := [AimpC] }
+def e6 : Deduction := { START := w6, END := w7, COLOUR := 0, DEPENDENCY := [BimpCimpAimpC] }
+
+def testDLDS : DLDS := {
+  V := [w0, w1, w2, w3, w4, w5, w6, w7],
+  E := [e0, e1, e2, e3, e4, e5, e6],
+  A := []
+}
+
+def layers := Semantic.buildGridFromDLDS testDLDS
+def testFormulas := Semantic.buildFormulas testDLDS
+def initialVecs := Semantic.initialVectorsFromDLDS testDLDS
+
+def validPath : List (List Nat) :=
+  [ [4, 5, 6, 7, 8, 8, 8, 8],
+    [2, 5, 6, 7, 8, 8, 8, 8],
+    [4, 5, 6, 7, 8, 8, 8, 8],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0]
+  ]
+
+#eval! Testing.checkDLDSProof testDLDS validPath 8
+
+end PathTesting2
+
+namespace PathTesting3
+
+-- Import types from Semantic
+open Semantic (Formula Vertex Deduction DLDS)
+
+-- Formulas
+def A : Formula := .atom "A"
+def B : Formula := .atom "B"
+def AimpB : Formula := .impl A B
+
+-- INCOMPLETE PROOF: Derives B but doesn't discharge assumptions
+
+-- Level 1: Assumptions
+def v0 : Vertex := {
+  node := 0,
+  LEVEL := 1,
+  FORMULA := A,
+  HYPOTHESIS := true,
+  COLLAPSED := false,
+  PAST := []
+}
+
+def v1 : Vertex := {
+  node := 1,
+  LEVEL := 1,
+  FORMULA := AimpB,
+  HYPOTHESIS := true,
+  COLLAPSED := false,
+  PAST := []
+}
+
+-- Level 0: B derived by modus ponens (but assumptions NOT discharged)
+def v2 : Vertex := {
+  node := 2,
+  LEVEL := 0,
+  FORMULA := B,
+  HYPOTHESIS := false,
+  COLLAPSED := false,
+  PAST := []
+}
+
+-- Edges: Both assumptions feed into B via elimination
+def e0 : Deduction := {
+  START := v0,
+  END := v2,
+  COLOUR := 0,
+  DEPENDENCY := [A]
+}
+
+def e1 : Deduction := {
+  START := v1,
+  END := v2,
+  COLOUR := 0,
+  DEPENDENCY := [AimpB]
+}
+
+-- The INCOMPLETE DLDS (valid derivation, but assumptions not discharged)
+def testDLDS : DLDS := {
+  V := [v0, v1, v2],
+  E := [e0, e1],
+  A := []
+}
+
+-- Build grid
+def layers := Semantic.buildGridFromDLDS testDLDS
+def testFormulas := Semantic.buildFormulas testDLDS
+def initialVecs := Semantic.initialVectorsFromDLDS testDLDS
+
+-- Path for this incomplete proof
+-- Universe: A, B, A⊃B (3 formulas)
+def validPath : List (List Nat) :=
+  [ [3,3],    -- A: routes to B(2)
+    [3,3],    -- B: conclusion
+    [0,0]     -- A⊃B: routes to B(2)
+  ]
+
+#eval! Testing.checkDLDSProof testDLDS validPath 2
+
+end PathTesting3
