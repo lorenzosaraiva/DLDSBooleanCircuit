@@ -1798,22 +1798,65 @@ def buildIncomingMap (formulas : List Formula) : LayerIncoming :=
 /-!
 ### 6.5: Node Construction
 -/
-axiom nodeForFormula_nodupIds (formulas : List Formula) (lvl : Nat) (formula : Formula) :
-    let n := formulas.length
-    let ruleId_base := lvl * n * 10 + (formulas.idxOf formula) * 10
-    let introRules := match formula with
+
+
+lemma nodeForFormula_nodupIds (formulas : List Formula) (lvl : Nat) (formula : Formula) :
+    let introData := match formula with
       | .impl A B => match encoderForIntro formulas formula with
-        | some encoder => [mkIntroRule ruleId_base encoder false]
+        | some encoder => [encoder]
         | none => []
       | _ => []
-    let elimRules := match formula with
-      | .impl _ _ => []
-      | φ => formulas.zipIdx.filterMap fun (f, idx) =>
-          match f with
-          | .impl A B => if B = φ then some (mkElimRule (ruleId_base + 1 + idx) false false) else none
-          | _ => none
-    let repRules := [mkRepetitionRule (ruleId_base + 1000) false]
-    (introRules ++ elimRules ++ repRules).map (·.ruleId) |>.Nodup
+    let elimData := formulas.zipIdx.filterMap fun (f, idx) =>
+      match f with
+      | .impl A B => if B = formula then some idx else none
+      | _ => none
+    let introRules := introData.zipIdx.map fun (encoder, pos) =>
+      mkIntroRule pos encoder false
+    let elimRules := elimData.zipIdx.map fun (_, pos) =>
+      mkElimRule (introData.length + pos) false false
+    let repRules := [mkRepetitionRule (introData.length + elimData.length) false]
+    ((introRules ++ elimRules ++ repRules).map (fun (r : Rule formulas.length) => r.ruleId)).Nodup := by
+  intro introData elimData introRules elimRules repRules
+  rw [List.nodup_iff_injective_get]
+  intro ⟨i, hi⟩ ⟨j, hj⟩ heq
+  ext
+  -- The key insight: ID at position k equals k
+  have id_eq_pos : ∀ k (hk : k < (introRules ++ elimRules ++ repRules).length),
+      (introRules ++ elimRules ++ repRules)[k].ruleId = k := by
+    intro k hk
+    simp only [introRules, elimRules, repRules] at hk ⊢
+    simp only [List.length_append, List.length_map, List.length_zipIdx, List.length_singleton] at hk
+    simp only [List.getElem_append]
+    split_ifs with h1 h2
+    · -- k < introData.zipIdx.length
+      simp only [List.getElem_map, List.getElem_zipIdx, mkIntroRule]
+      omega
+    · -- k in elim range
+      simp only [List.getElem_map, List.getElem_zipIdx, mkElimRule]
+      simp only [List.length_map, List.length_zipIdx] at h1 h2 ⊢
+      -- The goal should be: introData.length + (0 + (k - introData.length)) = k
+      -- which simplifies to: introData.length + (k - introData.length) = k
+      -- Since h2 is ¬(k < introData.length), we have introData.length ≤ k
+      have hle : introData.length ≤ k := Nat.not_lt.mp h2
+      omega
+    · -- k is the rep rule
+      simp only [List.length_map, List.length_zipIdx] at h1
+      simp only [List.getElem_singleton, mkRepetitionRule]
+      simp only [List.length_map, List.length_zipIdx, List.length_append] at h1 hk
+      -- h1 : ¬(k < introData.length + elimData.length)
+      -- hk : k < introData.length + elimData.length + 1
+      -- So k = introData.length + elimData.length
+      have hk_eq : k = introData.length + elimData.length := by omega
+      subst hk_eq
+      simp only [Nat.add_sub_cancel]
+  simp only [List.get_eq_getElem, List.getElem_map] at heq
+  have hi' : i < (introRules ++ elimRules ++ repRules).length := by
+    simp only [List.length_map] at hi; exact hi
+  have hj' : j < (introRules ++ elimRules ++ repRules).length := by
+    simp only [List.length_map] at hj; exact hj
+  rw [id_eq_pos i hi', id_eq_pos j hj'] at heq
+  exact heq
+
 /-- Construct a circuit node for a formula at a given level
 
     Creates rules:
@@ -1821,34 +1864,36 @@ axiom nodeForFormula_nodupIds (formulas : List Formula) (lvl : Nat) (formula : F
     - ELIM: For each A⊃formula in formulas list, create elim rule
     - REP: Identity rule
 -/
+
 def nodeForFormula (formulas : List Formula) (lvl : Nat) (formula : Formula)
   : CircuitNode formulas.length :=
 
   let n := formulas.length
-  let ruleId_base := lvl * n * 10 + (formulas.idxOf formula) * 10
 
-  -- INTRO rules
-  let introRules := match formula with
+  -- INTRO rules data (just the encoder, no ID yet)
+  let introData := match formula with
     | .impl A B =>
         match encoderForIntro formulas formula with
-        | some encoder => [mkIntroRule ruleId_base encoder false]
+        | some encoder => [encoder]
         | none => []
     | _ => []
 
-  -- ELIM rules
-  let elimRules := match formula with
-    | .impl _ _ => []
-    | φ =>
-        formulas.zipIdx.filterMap fun (f, idx) =>
-          match f with
-          | .impl A B =>
-              if B = φ then
-                some (mkElimRule (ruleId_base + 1 + idx) false false)
-              else none
-          | _ => none
+  -- ELIM rules data (just collect which source indices produce elim rules)
+  let elimData := formulas.zipIdx.filterMap fun (f, idx) =>
+    match f with
+    | .impl A B =>
+        if B = formula then some idx
+        else none
+    | _ => none
 
-  -- REPETITION rule
-  let repRules := [mkRepetitionRule (ruleId_base + 1000) false]
+  -- Now build actual rules with sequential IDs
+  let introRules := introData.zipIdx.map fun (encoder, pos) =>
+    mkIntroRule pos encoder false
+
+  let elimRules := elimData.zipIdx.map fun (_, pos) =>
+    mkElimRule (introData.length + pos) false false
+
+  let repRules := [mkRepetitionRule (introData.length + elimData.length) false]
 
   let rules := introRules ++ elimRules ++ repRules
 
@@ -2005,7 +2050,6 @@ lemma encoderForIntro_wellformed (formulas : List Formula) (A B : Formula) :
       rw [h_cast_eq]
       exact h_goal
 
-
 lemma nodeForFormula_atom_rules_wellformed (formulas : List Formula) (lvl : Nat) (name : String) :
     ∀ rule ∈ (nodeForFormula formulas lvl (Formula.atom name)).rules,
       match rule.type with
@@ -2013,33 +2057,22 @@ lemma nodeForFormula_atom_rules_wellformed (formulas : List Formula) (lvl : Nat)
       | RuleData.elim => True
       | RuleData.repetition => True := by
   intro rule h_mem
-  have h_rules : (nodeForFormula formulas lvl (Formula.atom name)).rules =
-    (formulas.zipIdx.filterMap fun x =>
-      match x.1 with
-      | .impl A B => if B = Formula.atom name
-          then some (mkElimRule (lvl * formulas.length * 10 + (formulas.idxOf (Formula.atom name)) * 10 + 1 + x.2) false false)
-          else none
-      | _ => none) ++
-    [mkRepetitionRule (lvl * formulas.length * 10 + (formulas.idxOf (Formula.atom name)) * 10 + 1000) false] := rfl
-
-  rw [h_rules] at h_mem
-
-  cases h_append : List.mem_append.mp h_mem with
-  | inl h_elim =>
-    have ⟨x, _, hx⟩ := List.mem_filterMap.mp h_elim
-    match hf : x.1 with
-    | .atom _ => simp [hf] at hx
-    | .impl A B =>
-      simp only [hf] at hx
-      by_cases hB : B = Formula.atom name
-      · simp only [hB, ↓reduceIte, Option.some.injEq] at hx
-        subst hx
-        simp only [mkElimRule]
-      ·
-        simp only [hB, ↓reduceIte] at hx
-        exact Option.noConfusion hx
+  unfold nodeForFormula at h_mem
+  simp only at h_mem
+  cases h_mem_app : List.mem_append.mp h_mem with
+  | inl h_left =>
+    rw [List.mem_append] at h_left
+    cases h_left with
+    | inl h_intro =>
+      simp at h_intro
+    | inr h_elim =>
+      rw [List.mem_map] at h_elim
+      obtain ⟨⟨srcIdx, pos⟩, _, hf_eq⟩ := h_elim
+      subst hf_eq
+      simp only [mkElimRule]
   | inr h_rep =>
-    cases List.mem_singleton.mp h_rep
+    simp only [List.mem_singleton] at h_rep
+    subst h_rep
     simp only [mkRepetitionRule]
 
 lemma nodeForFormula_impl_rules_wellformed (formulas : List Formula) (lvl : Nat) (A B : Formula) :
@@ -2049,27 +2082,37 @@ lemma nodeForFormula_impl_rules_wellformed (formulas : List Formula) (lvl : Nat)
       | RuleData.elim => True
       | RuleData.repetition => True := by
   intro rule h_mem
-  have h_rules : (nodeForFormula formulas lvl (Formula.impl A B)).rules =
-    (match encoderForIntro formulas (Formula.impl A B) with
-     | some encoder => [mkIntroRule (lvl * formulas.length * 10 + (formulas.idxOf (Formula.impl A B)) * 10) encoder false]
-     | none => []) ++
-    [mkRepetitionRule (lvl * formulas.length * 10 + (formulas.idxOf (Formula.impl A B)) * 10 + 1000) false] := rfl
-
-  rw [h_rules] at h_mem
-  rw [List.mem_append] at h_mem
-
-  cases h_mem with
-  | inl h_intro =>
-    have h_enc_eq : encoderForIntro formulas (Formula.impl A B) =
-        some ⟨formulas.map (fun ψ => decide (ψ = A)), by simp⟩ := rfl
-    simp only [h_enc_eq, List.mem_singleton] at h_intro
-    subst h_intro
-    simp only [mkIntroRule]
-    have h_wf := encoderForIntro_wellformed formulas A B
-    simp only [h_enc_eq] at h_wf
-    exact h_wf
+  unfold nodeForFormula at h_mem
+  simp only at h_mem
+  cases h_mem_app : List.mem_append.mp h_mem with
+  | inl h_left =>
+    rw [List.mem_append] at h_left
+    cases h_left with
+    | inl h_intro =>
+      -- In introRules - this is List.map over zipIdx of a singleton
+      have h_enc_eq : encoderForIntro formulas (Formula.impl A B) =
+          some ⟨formulas.map (fun ψ => decide (ψ = A)), by simp⟩ := rfl
+      simp only [h_enc_eq] at h_intro
+      rw [List.mem_map] at h_intro
+      obtain ⟨⟨encoder, pos⟩, h_mem_zipIdx, hf_eq⟩ := h_intro
+      subst hf_eq
+      simp only [mkIntroRule]
+      -- Now need to show IntroRuleWellFormed for the encoder
+      simp only [List.zipIdx_singleton, List.mem_singleton, Prod.mk.injEq] at h_mem_zipIdx
+      obtain ⟨h_enc, h_pos⟩ := h_mem_zipIdx
+      subst h_enc h_pos
+      have h_wf := encoderForIntro_wellformed formulas A B
+      simp only [h_enc_eq] at h_wf
+      exact h_wf
+    | inr h_elim =>
+      -- In elimRules - this is List.map over zipIdx
+      rw [List.mem_map] at h_elim
+      obtain ⟨⟨srcIdx, pos⟩, _, hf_eq⟩ := h_elim
+      subst hf_eq
+      simp only [mkElimRule]
   | inr h_rep =>
-    cases List.mem_singleton.mp h_rep
+    simp only [List.mem_singleton] at h_rep
+    subst h_rep
     simp only [mkRepetitionRule]
 
 lemma nodeForFormula_rules_wellformed (formulas : List Formula) (lvl : Nat) (formula : Formula) :
