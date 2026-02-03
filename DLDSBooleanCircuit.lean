@@ -1633,13 +1633,14 @@ theorem circuit_correctness
         omega  -- or: push_neg at h_bounds; exact Nat.le_of_not_lt h_bounds
 
           -- This case means "accept because goal out of bounds" - may want to refine spec
+
 /-!
 ## Summary of Section 6
 
 **Built:**
-1. ✅ Path-based circuit evaluation using PROVEN node_logic
+1. ✅ Path-based circuit evaluation using node_logic
 2. ✅ Token propagation through grid following paths
-3. ✅ Error detection using PROVEN multiple_xor
+3. ✅ Error detection using multiple_xor
 4. ✅ Main correctness theorem structure complete
 
 **Key properties proven:**
@@ -2211,150 +2212,242 @@ theorem dlds_evaluation_correct
   unfold evaluateDLDS at h_accept
   exact circuit_correctness grid initial_vecs paths goal_column h_accept
 
+#check @dlds_evaluation_correct
 
+/-!
+# DLDS Circuit Evaluation Tests
+
+This module contains test cases demonstrating the DLDS-to-circuit
+translation and evaluation. Each test constructs a natural deduction
+proof as a DLDS and verifies it evaluates correctly.
+
+## Test Cases
+
+1. **Test.Identity**: Identity proof (A⊃B)⊃(A⊃B) - valid and invalid paths
+2. **Test.Syllogism**: Hypothetical syllogism (A⊃B)⊃(B⊃C)⊃(A⊃C)
+3. **Test.Incomplete**: Incomplete proof - undischarged assumptions detected
+
+## Path Encoding
+
+Paths are `List (List Nat)` where:
+- Outer list: one entry per formula in the universe
+- Inner list: one entry per level transition
+- Value 0: token stops (inactive)
+- Value n > 0: route to column (n-1)
+-/
 
 namespace Testing
 
 open Semantic (Formula Vertex Deduction DLDS)
 
-/-!
-### Convenience Functions for Testing
--/
-
 /-- Check if a DLDS proof is valid under a given path -/
 def checkDLDSProof (d : DLDS) (paths : Semantic.PathInput) (goal_column : Nat) : IO Unit := do
   let result := Semantic.evaluateDLDS d paths goal_column
   IO.println s!"Evaluation result: {result}"
-
   if result then
-    IO.println "✓ Path accepted: Either structurally invalid OR valid proof with discharged assumptions"
+    IO.println "✓ Accepted: Valid proof with discharged assumptions OR structural error"
   else
-    IO.println "✗ Path rejected: Invalid routing or undischarged assumptions"
+    IO.println "✗ Rejected: Invalid routing or undischarged assumptions"
 
 end Testing
 
-namespace PathTesting
 
--- Import types from Semantic
+namespace Test.Identity
+/-!
+### Test: Identity Combinator (A⊃B)⊃(A⊃B)
+
+This proof demonstrates:
+- Implication introduction (twice)
+- Implication elimination (modus ponens)
+- Proper assumption discharge
+```
+    [A]¹  [A⊃B]²
+    ───────────── ⊃E
+          B
+       ─────── ⊃I¹
+        A⊃B
+    ─────────── ⊃I²
+    (A⊃B)⊃(A⊃B)
+```
+-/
+
 open Semantic (Formula Vertex Deduction DLDS)
 
 -- Formulas
 def A : Formula := .atom "A"
 def B : Formula := .atom "B"
-def AimpB : Formula := .impl A B
-def ABimpAB : Formula := .impl AimpB AimpB
+def A_imp_B : Formula := .impl A B
+def identity : Formula := .impl A_imp_B A_imp_B
 
--- Vertices for (A⊃B)⊃(A⊃B) proof
 -- Level 3: Assumptions
-def v0 : Vertex := { node := 0, LEVEL := 3, FORMULA := A, HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
-def v1 : Vertex := { node := 1, LEVEL := 3, FORMULA := AimpB, HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+def v_A : Vertex :=
+  { node := 0, LEVEL := 3, FORMULA := A,
+    HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+
+def v_AimpB_hyp : Vertex :=
+  { node := 1, LEVEL := 3, FORMULA := A_imp_B,
+    HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
 
 -- Level 2: B derived by modus ponens
-def v2 : Vertex := { node := 2, LEVEL := 2, FORMULA := B, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+def v_B : Vertex :=
+  { node := 2, LEVEL := 2, FORMULA := B,
+    HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
 
 -- Level 1: A⊃B derived by intro (discharge A)
-def v3 : Vertex := { node := 3, LEVEL := 1, FORMULA := AimpB, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+def v_AimpB : Vertex :=
+  { node := 3, LEVEL := 1, FORMULA := A_imp_B,
+    HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
 
 -- Level 0: (A⊃B)⊃(A⊃B) derived by intro (discharge A⊃B)
-def v4 : Vertex := { node := 4, LEVEL := 0, FORMULA := ABimpAB, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+def v_conclusion : Vertex :=
+  { node := 4, LEVEL := 0, FORMULA := identity,
+    HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
 
 -- Edges
-def e0 : Deduction := { START := v0, END := v2, COLOUR := 0, DEPENDENCY := [A] }
-def e1 : Deduction := { START := v1, END := v2, COLOUR := 0, DEPENDENCY := [AimpB] }
-def e2 : Deduction := { START := v2, END := v3, COLOUR := 0, DEPENDENCY := [A, B] }
-def e3 : Deduction := { START := v3, END := v4, COLOUR := 0, DEPENDENCY := [AimpB] }
+def e_A_to_B : Deduction :=
+  { START := v_A, END := v_B, COLOUR := 0, DEPENDENCY := [A] }
+
+def e_AimpB_to_B : Deduction :=
+  { START := v_AimpB_hyp, END := v_B, COLOUR := 0, DEPENDENCY := [A_imp_B] }
+
+def e_B_to_AimpB : Deduction :=
+  { START := v_B, END := v_AimpB, COLOUR := 0, DEPENDENCY := [A, B] }
+
+def e_AimpB_to_conclusion : Deduction :=
+  { START := v_AimpB, END := v_conclusion, COLOUR := 0, DEPENDENCY := [A_imp_B] }
 
 -- The DLDS
-def testDLDS : DLDS := {
-  V := [v0, v1, v2, v3, v4],
-  E := [e0, e1, e2, e3],
+def dlds : DLDS := {
+  V := [v_A, v_AimpB_hyp, v_B, v_AimpB, v_conclusion],
+  E := [e_A_to_B, e_AimpB_to_B, e_B_to_AimpB, e_AimpB_to_conclusion],
   A := []
 }
 
--- Build grid
-def layers := Semantic.buildGridFromDLDS testDLDS
-def testFormulas := Semantic.buildFormulas testDLDS
-def initialVecs := Semantic.initialVectorsFromDLDS testDLDS
+/-!
+Formula universe (from `buildFormulas`):
+- 0: A
+- 1: A⊃B
+- 2: B
+- 3: (A⊃B)⊃(A⊃B)
 
--- Valid path: Both A and A⊃B follow the derivation path
--- Grid indices (1-indexed): 1=A, 2=B, 3=A⊃B, 4=(A⊃B)⊃(A⊃B)
+Goal column: 3
+-/
+
 def validPath : List (List Nat) :=
-  [ [3, 2, 4],   -- A: step1→B(2), step2→A⊃B(3), step3→(A⊃B)⊃(A⊃B)(4)
-    [3, 2, 4],   -- B: inactive (not an assumption)
-    [0, 0, 0],   -- A⊃B: step1→B(2), step2→A⊃B(3), step3→(A⊃B)⊃(A⊃B)(4)
-    [0, 0, 0]    -- (A⊃B)⊃(A⊃B): inactive (it's the conclusion)
+  [ [3, 2, 4],   -- A: →B(col 2) →A⊃B(col 1) →conclusion(col 3)
+    [3, 2, 4],   -- A⊃B: follows derivation path
+    [0, 0, 0],   -- B: derived formula, not an assumption
+    [0, 0, 0]    -- (A⊃B)⊃(A⊃B): goal, inactive
   ]
 
--- Invalid path: A tries to go directly to conclusion
 def invalidPath : List (List Nat) :=
   [ [4, 4, 4],   -- A: wrong - tries to skip intermediate steps
     [4, 0, 0],   -- B: inactive
-    [4, 3, 4],   -- A⊃B: correct path
-    [4, 0, 0]    -- (A⊃B)⊃(A⊃B): inactive
+    [4, 3, 4],   -- A⊃B: partially correct
+    [4, 0, 0]    -- conclusion: inactive
   ]
 
-#eval IO.println "\n========== VALID PATH TEST ==========\n"
-#eval! Testing.checkDLDSProof testDLDS validPath 4
+#eval IO.println "\n══════════ TEST: Identity (Valid Path) ══════════"
+-- Expected: ✓ Accepted (valid proof, all assumptions discharged)
+#eval! Testing.checkDLDSProof dlds validPath 4
 
--- Test invalid path
-#eval IO.println "\n========== INVALID PATH TEST ==========\n"
-#eval! Testing.checkDLDSProof testDLDS invalidPath 4
+#eval IO.println "\n══════════ TEST: Identity (Invalid Path) ══════════"
+-- Expected: ✓ Accepted (structural error detected)
+#eval! Testing.checkDLDSProof dlds invalidPath 4
 
-end PathTesting
+end Test.Identity
 
 
-namespace PathTesting2
+namespace Test.Syllogism
+/-!
+### Test: Hypothetical Syllogism (A⊃B)⊃(B⊃C)⊃(A⊃C)
 
--- Import types from Semantic
+This proof demonstrates a more complex derivation with three assumptions
+and nested implication introductions.
+```
+    [A⊃B]³  [A]¹
+    ──────────── ⊃E
+    [B⊃C]²    B
+    ──────────── ⊃E
+          C
+       ─────── ⊃I¹
+        A⊃C
+    ─────────── ⊃I²
+    (B⊃C)⊃(A⊃C)
+    ─────────────── ⊃I³
+    (A⊃B)⊃(B⊃C)⊃(A⊃C)
+```
+-/
+
 open Semantic (Formula Vertex Deduction DLDS)
 
+-- Formulas
 def A : Formula := .atom "A"
 def B : Formula := .atom "B"
 def C : Formula := .atom "C"
-def AimpB : Formula := .impl A B
-def BimpC : Formula := .impl B C
-def AimpC : Formula := .impl A C
-def BimpCimpAimpC : Formula := .impl BimpC AimpC
-def conclusion3 : Formula := .impl AimpB BimpCimpAimpC
+def A_imp_B : Formula := .impl A B
+def B_imp_C : Formula := .impl B C
+def A_imp_C : Formula := .impl A C
+def inner : Formula := .impl B_imp_C A_imp_C
+def conclusion : Formula := .impl A_imp_B inner
 
 -- Level 5: Assumptions
-def w0 : Vertex := { node := 0, LEVEL := 5, FORMULA := AimpB, HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
-def w1 : Vertex := { node := 1, LEVEL := 5, FORMULA := BimpC, HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
-def w2 : Vertex := { node := 2, LEVEL := 5, FORMULA := A, HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+def v_AimpB : Vertex :=
+  { node := 0, LEVEL := 5, FORMULA := A_imp_B,
+    HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
 
--- Level 4: B
-def w3 : Vertex := { node := 3, LEVEL := 4, FORMULA := B, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+def v_BimpC : Vertex :=
+  { node := 1, LEVEL := 5, FORMULA := B_imp_C,
+    HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
 
--- Level 3: C
-def w4 : Vertex := { node := 4, LEVEL := 3, FORMULA := C, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+def v_A : Vertex :=
+  { node := 2, LEVEL := 5, FORMULA := A,
+    HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
 
--- Level 2: A→C (intro, discharge A)
-def w5 : Vertex := { node := 5, LEVEL := 2, FORMULA := AimpC, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+-- Level 4: B (from A⊃B and A)
+def v_B : Vertex :=
+  { node := 3, LEVEL := 4, FORMULA := B,
+    HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
 
--- Level 1: (B→C)→(A→C) (intro, discharge B→C)
-def w6 : Vertex := { node := 6, LEVEL := 1, FORMULA := BimpCimpAimpC, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+-- Level 3: C (from B⊃C and B)
+def v_C : Vertex :=
+  { node := 4, LEVEL := 3, FORMULA := C,
+    HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
 
--- Level 0: Conclusion (intro, discharge A→B)
-def w7 : Vertex := { node := 7, LEVEL := 0, FORMULA := conclusion3, HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+-- Level 2: A⊃C (intro, discharge A)
+def v_AimpC : Vertex :=
+  { node := 5, LEVEL := 2, FORMULA := A_imp_C,
+    HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+
+-- Level 1: (B⊃C)⊃(A⊃C) (intro, discharge B⊃C)
+def v_inner : Vertex :=
+  { node := 6, LEVEL := 1, FORMULA := inner,
+    HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+
+-- Level 0: Conclusion (intro, discharge A⊃B)
+def v_conclusion : Vertex :=
+  { node := 7, LEVEL := 0, FORMULA := conclusion,
+    HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
 
 -- Edges
-def e0 : Deduction := { START := w0, END := w3, COLOUR := 0, DEPENDENCY := [AimpB] }  -- f for elim
-def e1 : Deduction := { START := w2, END := w3, COLOUR := 0, DEPENDENCY := [A] }      -- a for elim → B
-def e2 : Deduction := { START := w1, END := w4, COLOUR := 0, DEPENDENCY := [BimpC] }
-def e3 : Deduction := { START := w3, END := w4, COLOUR := 0, DEPENDENCY := [B] }
-def e4 : Deduction := { START := w4, END := w5, COLOUR := 0, DEPENDENCY := [C] }
-def e5 : Deduction := { START := w5, END := w6, COLOUR := 0, DEPENDENCY := [AimpC] }
-def e6 : Deduction := { START := w6, END := w7, COLOUR := 0, DEPENDENCY := [BimpCimpAimpC] }
+def e0 : Deduction := { START := v_AimpB, END := v_B, COLOUR := 0, DEPENDENCY := [A_imp_B] }
+def e1 : Deduction := { START := v_A, END := v_B, COLOUR := 0, DEPENDENCY := [A] }
+def e2 : Deduction := { START := v_BimpC, END := v_C, COLOUR := 0, DEPENDENCY := [B_imp_C] }
+def e3 : Deduction := { START := v_B, END := v_C, COLOUR := 0, DEPENDENCY := [B] }
+def e4 : Deduction := { START := v_C, END := v_AimpC, COLOUR := 0, DEPENDENCY := [C] }
+def e5 : Deduction := { START := v_AimpC, END := v_inner, COLOUR := 0, DEPENDENCY := [A_imp_C] }
+def e6 : Deduction := { START := v_inner, END := v_conclusion, COLOUR := 0, DEPENDENCY := [inner] }
 
-def testDLDS : DLDS := {
-  V := [w0, w1, w2, w3, w4, w5, w6, w7],
+def dlds : DLDS := {
+  V := [v_AimpB, v_BimpC, v_A, v_B, v_C, v_AimpC, v_inner, v_conclusion],
   E := [e0, e1, e2, e3, e4, e5, e6],
   A := []
 }
 
-def layers := Semantic.buildGridFromDLDS testDLDS
-def testFormulas := Semantic.buildFormulas testDLDS
-def initialVecs := Semantic.initialVectorsFromDLDS testDLDS
+/-!
+Formula universe will include: A, B, C, A⊃B, B⊃C, A⊃C, (B⊃C)⊃(A⊃C), conclusion
+Goal column: 7 (or wherever conclusion lands in eraseDups order)
+-/
 
 def validPath : List (List Nat) :=
   [ [4, 5, 6, 7, 8, 8, 8, 8],
@@ -2366,86 +2459,114 @@ def validPath : List (List Nat) :=
     [0, 0, 0, 0, 0, 0, 0, 0]
   ]
 
-#eval! Testing.checkDLDSProof testDLDS validPath 8
+#eval IO.println "\n══════════ TEST: Hypothetical Syllogism ══════════"
+-- Expected: ✓ Accepted
+#eval! Testing.checkDLDSProof dlds validPath 8
 
-end PathTesting2
+end Test.Syllogism
 
-namespace PathTesting3
 
--- Import types from Semantic
+namespace Test.Incomplete
+/-!
+### Test: Incomplete Proof (Undischarged Assumptions)
+
+This test verifies that the circuit correctly REJECTS proofs where
+assumptions are not properly discharged.
+
+We derive B from A and A⊃B using modus ponens, but we do NOT
+wrap it in an implication introduction to discharge the assumptions.
+```
+    A    A⊃B
+    ───────── ⊃E
+        B
+```
+
+This is a valid DERIVATION but not a valid PROOF of B, since B
+depends on undischarged assumptions A and A⊃B.
+
+The evaluation should return `false` because the dependency vector
+at the goal column will NOT be all zeros.
+-/
+
 open Semantic (Formula Vertex Deduction DLDS)
 
 -- Formulas
 def A : Formula := .atom "A"
 def B : Formula := .atom "B"
-def AimpB : Formula := .impl A B
+def A_imp_B : Formula := .impl A B
 
--- INCOMPLETE PROOF: Derives B but doesn't discharge assumptions
+-- Level 1: Assumptions (NOT discharged)
+def v_A : Vertex :=
+  { node := 0, LEVEL := 1, FORMULA := A,
+    HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
 
--- Level 1: Assumptions
-def v0 : Vertex := {
-  node := 0,
-  LEVEL := 1,
-  FORMULA := A,
-  HYPOTHESIS := true,
-  COLLAPSED := false,
-  PAST := []
-}
+def v_AimpB : Vertex :=
+  { node := 1, LEVEL := 1, FORMULA := A_imp_B,
+    HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
 
-def v1 : Vertex := {
-  node := 1,
-  LEVEL := 1,
-  FORMULA := AimpB,
-  HYPOTHESIS := true,
-  COLLAPSED := false,
-  PAST := []
-}
+-- Level 0: B derived by modus ponens
+def v_B : Vertex :=
+  { node := 2, LEVEL := 0, FORMULA := B,
+    HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
 
--- Level 0: B derived by modus ponens (but assumptions NOT discharged)
-def v2 : Vertex := {
-  node := 2,
-  LEVEL := 0,
-  FORMULA := B,
-  HYPOTHESIS := false,
-  COLLAPSED := false,
-  PAST := []
-}
+-- Edges
+def e_A : Deduction :=
+  { START := v_A, END := v_B, COLOUR := 0, DEPENDENCY := [A] }
 
--- Edges: Both assumptions feed into B via elimination
-def e0 : Deduction := {
-  START := v0,
-  END := v2,
-  COLOUR := 0,
-  DEPENDENCY := [A]
-}
+def e_AimpB : Deduction :=
+  { START := v_AimpB, END := v_B, COLOUR := 0, DEPENDENCY := [A_imp_B] }
 
-def e1 : Deduction := {
-  START := v1,
-  END := v2,
-  COLOUR := 0,
-  DEPENDENCY := [AimpB]
-}
-
--- The INCOMPLETE DLDS (valid derivation, but assumptions not discharged)
-def testDLDS : DLDS := {
-  V := [v0, v1, v2],
-  E := [e0, e1],
+def dlds : DLDS := {
+  V := [v_A, v_AimpB, v_B],
+  E := [e_A, e_AimpB],
   A := []
 }
 
--- Build grid
-def layers := Semantic.buildGridFromDLDS testDLDS
-def testFormulas := Semantic.buildFormulas testDLDS
-def initialVecs := Semantic.initialVectorsFromDLDS testDLDS
+/-!
+Formula universe: A, A⊃B, B (3 formulas)
+Goal column: 1 (B)
 
--- Path for this incomplete proof
--- Universe: A, B, A⊃B (3 formulas)
-def validPath : List (List Nat) :=
-  [ [3,3],    -- A: routes to B(2)
-    [3,3],    -- B: conclusion
-    [0,0]     -- A⊃B: routes to B(2)
+The path routes both assumptions to B, but since there's no
+intro rule to discharge them, the final dependency vector for B
+will have bits set for A and A⊃B.
+-/
+
+def path : List (List Nat) :=
+  [ [2, 2],   -- A: routes to B
+    [0, 0],   -- B: goal (inactive routing)
+    [2, 2]    -- A⊃B: routes to B
   ]
 
-#eval! Testing.checkDLDSProof testDLDS validPath 2
+#eval IO.println "\n══════════ TEST: Incomplete Proof ══════════"
+-- Expected: ✗ Rejected (undischarged assumptions)
+#eval! Testing.checkDLDSProof dlds path 1
 
-end PathTesting3
+end Test.Incomplete
+
+
+namespace Test.Summary
+/-!
+## Test Summary
+
+| Test | Description | Expected Result |
+|------|-------------|-----------------|
+| Identity (valid) | Correct derivation of (A⊃B)⊃(A⊃B) | ✓ Accepted |
+| Identity (invalid) | Wrong routing path | ✓ Accepted (structural error) |
+| Syllogism | Hypothetical syllogism | ✓ Accepted |
+| Incomplete | Undischarged assumptions | ✗ Rejected |
+
+## Interpretation
+
+- **Accepted (true)**: Either the path has a structural error (detected by XOR check)
+  OR it represents a valid proof with all assumptions discharged.
+
+- **Rejected (false)**: The path is structurally valid but the proof has
+  undischarged assumptions (dependency vector is non-zero at goal).
+
+This matches the main theorem `circuit_correctness`:
+```
+evaluateCircuit = true →
+  PathStructurallyInvalid ∨ (PathRepresentsValidProof ∧ AllAssumptionsDischarged)
+```
+-/
+end Test.Summary
