@@ -25,7 +25,7 @@ This allows you to experiment with the definitions without setting up Lean local
 
 1. Install [Lean 4](https://lean-lang.org/) (version ≥ 4.8 recommended).  
 2. Clone this repository:
-   git clone https://github.com/<your-username>/DLDSBooleanCircuit.git
+   git clone https://github.com/lorenzosaraiva/DLDSBooleanCircuit.git
    cd DLDSBooleanCircuit
 3. Open DLDSBooleanCircuit.lean in VS Code with the Lean4 extension, or build it with:
    lake build
