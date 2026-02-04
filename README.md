@@ -43,7 +43,7 @@ No local setup required.
 > [jeffsantos/lean-project-template](https://github.com/jeffsantos/lean-project-template).
 
 
-## Repository Contents
+### 4. Repository Contents
 
 **`DLDSBooleanCircuit.lean`** (~1400 lines) – Complete Lean 4 formalization with:
 
