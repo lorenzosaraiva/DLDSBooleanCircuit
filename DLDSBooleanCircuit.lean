@@ -9,14 +9,20 @@ import Mathlib.Data.Fin.Basic
 
 
 /-!
-# DLDS Boolean Circuit Formalization (CORE)
+# Verified DLDS-to-Boolean Circuit Translation
 
-This file contains the clean, proven core of the DLDS circuit formalization.
-It includes:
-- Core types (rules, nodes, layers)
-- Node evaluation logic with correctness proof
-- Infrastructure for path-based circuit evaluation
+This file formalizes the translation from Dag-Like Derivability Structures (DLDS)
+to Boolean circuits, with machine-checked correctness proofs in Lean 4.
 
+## Main Results
+
+* `node_correct` - Single node evaluation correctness
+* `circuit_correctness` - Circuit soundness theorem
+* `dlds_evaluation_correct` - End-to-end DLDS verification correctness
+
+## References
+
+* Gordeev & Haeusler, "Proof Compression and NP Versus PSPACE"
 -/
 
 open scoped Classical
@@ -24,45 +30,59 @@ open scoped Classical
 namespace Semantic
 /-!
 ## Section 1: Core Types and Structures
+
+This section defines the fundamental types for representing Boolean circuits
+that verify DLDS proofs:
+- `ActivationBits` - Activation state for each rule type
+- `RuleData` - Rule parameters (intro encoder, elim, repetition)
+- `Rule` - Complete rule with ID, activation, type, and combine function
+- `CircuitNode` - Collection of alternative rules at a formula position
 -/
 
-/-- Activation bits for each inference rule type -/
+
+/-- Activation bits for each inference rule type.
+    - Intro rules require one input (the premise of the implication)
+    - Elim rules require two inputs (the implication and its antecedent)
+    - Repetition rules require one input (identity/structural rule) -/
 inductive ActivationBits
   | intro (bit : Bool)
   | elim (bit1 : Bool) (bit2 : Bool)
   | repetition (bit : Bool)
   deriving DecidableEq
 
-/-- Rule data: which kind of rule and its parameters -/
+/-- Rule data: the type of inference rule and its parameters.
+    - `intro encoder`: Implication introduction with discharge mask
+    - `elim`: Implication elimination (modus ponens)
+    - `repetition`: Structural rule (identity) -/
 inductive RuleData (n : Nat)
-  | intro (encoder : List.Vector Bool n)  -- Bitstring of discharged hypothesis
+  | intro (encoder : List.Vector Bool n)
   | elim
   | repetition
 
-/-- A single inference rule with activation and dependency update -/
+/-- A single inference rule consisting of:
+    - `ruleId`: Unique identifier within the node
+    - `activation`: Current activation state
+    - `type`: Rule type and parameters
+    - `combine`: Function computing output dependency vector from inputs -/
 structure Rule (n : ℕ) where
-  ruleId    : Nat
+  ruleId     : Nat
   activation : ActivationBits
   type       : RuleData n
   combine    : List (List.Vector Bool n) → List.Vector Bool n
 
-instance instInhabitedRule {n} : Inhabited (Rule n) :=
-  ⟨{
-    ruleId := 0
-    activation := ActivationBits.intro false
-    type := RuleData.repetition
-    combine := fun _ => List.Vector.replicate n false
-  }⟩
-
-/-- Circuit node: collection of alternative rules at this formula label -/
+/-- Circuit node: a collection of alternative inference rules at a formula position.
+    The `nodupIds` invariant ensures rule IDs are unique within the node,
+    which is essential for the XOR-based exactly-one-active check. -/
 structure CircuitNode (n : ℕ) where
   rules    : List (Rule n)
   nodupIds : (rules.map (·.ruleId)).Nodup
 
-/-- Constructor for implication introduction rule -/
+/-- Constructor for implication introduction rule (⊃I).
+    The combine function clears dependency bits for discharged assumptions:
+    `output[i] = input[i] ∧ ¬encoder[i]` -/
 def mkIntroRule {n : ℕ} (rid : Nat) (encoder : List.Vector Bool n) (bit : Bool) : Rule n :=
 {
-  ruleId    := rid,
+  ruleId     := rid,
   activation := ActivationBits.intro bit,
   type       := RuleData.intro encoder,
   combine    := fun deps =>
@@ -71,10 +91,12 @@ def mkIntroRule {n : ℕ} (rid : Nat) (encoder : List.Vector Bool n) (bit : Bool
     | _   => List.Vector.replicate n false
 }
 
-/-- Constructor for implication elimination rule -/
+/-- Constructor for implication elimination rule (⊃E / modus ponens).
+    The combine function unions dependencies from both premises:
+    `output[i] = d1[i] ∨ d2[i]` -/
 def mkElimRule {n : ℕ} (rid : Nat) (bit1 bit2 : Bool) : Rule n :=
 {
-  ruleId    := rid,
+  ruleId     := rid,
   activation := ActivationBits.elim bit1 bit2,
   type       := RuleData.elim,
   combine    := fun deps =>
@@ -83,10 +105,11 @@ def mkElimRule {n : ℕ} (rid : Nat) (bit1 bit2 : Bool) : Rule n :=
     | _        => List.Vector.replicate n false
 }
 
-/-- Constructor for repetition rule (structural, passes vector unchanged) -/
+/-- Constructor for repetition rule (structural).
+    The combine function passes the dependency vector unchanged. -/
 def mkRepetitionRule {n : ℕ} (rid : Nat) (bit : Bool) : Rule n :=
 {
-  ruleId    := rid,
+  ruleId     := rid,
   activation := ActivationBits.repetition bit,
   type       := RuleData.repetition,
   combine    := fun deps =>
@@ -95,7 +118,8 @@ def mkRepetitionRule {n : ℕ} (rid : Nat) (bit : Bool) : Rule n :=
     | _   => List.Vector.replicate n false
 }
 
-/-- A rule is well-formed if its combine function matches its type -/
+/-- A rule is well-formed if its combine function matches its declared type.
+    This ensures the rule constructors produce consistent rules. -/
 def Rule.WellFormed {n : Nat} (r : Rule n) : Prop :=
   match r.type with
   | RuleData.intro encoder =>
@@ -116,72 +140,97 @@ def Rule.WellFormed {n : Nat} (r : Rule n) : Prop :=
 
 /-!
 ## Section 2: Boolean Circuit Logic
+
+Core Boolean operations for circuit evaluation:
+- `is_rule_active` - Check if a rule's activation bits are set
+- `multiple_xor` - XOR-based exactly-one-true checker
+- `node_logic` - Compute node output when exactly one rule is active
+- `exactlyOneActive` - Predicate capturing the exactly-one-active property
+
+The key insight is that `multiple_xor` returns true iff exactly one element
+is true, which we prove equivalent to `exactlyOneActive` in Section 3.
 -/
 
-/-- Check if a rule is active based on its activation bits -/
-def is_rule_active {n: Nat} (r : Rule n) : Bool :=
+/-- Check if a rule is active based on its activation bits.
+    Intro and repetition rules need one input; elim rules need both inputs. -/
+def is_rule_active {n : Nat} (r : Rule n) : Bool :=
   match r.activation with
-  | ActivationBits.intro b   => b
-  | ActivationBits.elim b1 b2 => b1 && b2
+  | ActivationBits.intro b      => b
+  | ActivationBits.elim b1 b2   => b1 && b2
   | ActivationBits.repetition b => b
 
-/-- XOR-based "exactly one true" checker -/
+/-- XOR-based "exactly one true" checker.
+    Returns true iff exactly one element of the list is true.
+    This is the core conflict detection mechanism for the circuit. -/
 def multiple_xor : List Bool → Bool
-| []       => false
-| [x]      => x
-| x :: xs  => (x && not (List.or xs)) || (not x && multiple_xor xs)
+  | []      => false
+  | [x]     => x
+  | x :: xs => (x && not (List.or xs)) || (not x && multiple_xor xs)
 
-/-- Extract activation status of all rules in a list -/
-def extract_activations {n: Nat} (rules : List (Rule n)) : List Bool :=
+/-- Extract activation status of all rules in a list. -/
+def extract_activations {n : Nat} (rules : List (Rule n)) : List Bool :=
   rules.map is_rule_active
 
-/-- Mask a list of bools with a single bool (AND each element) -/
-def and_bool_list (bool : Bool) (l : List Bool): List Bool :=
-  l.map (λ b => bool && b)
+/-- Mask a list of bools: AND each element with a single bool. -/
+def and_bool_list (b : Bool) (l : List Bool) : List Bool :=
+  l.map (fun x => b && x)
 
-/-- Bitwise OR over a list of boolean vectors -/
-def list_or {n: Nat} (lists : List (List.Vector Bool n)) : List.Vector Bool n :=
-  lists.foldl (λ acc lst => acc.zipWith (λ x y => x || y) lst)
-              (List.Vector.replicate n false)
+/-- Bitwise OR over a list of boolean vectors.
+    Used to combine outputs from multiple rules (only one should be non-zero). -/
+def list_or {n : Nat} (vecs : List (List.Vector Bool n)) : List.Vector Bool n :=
+  vecs.foldl (fun acc v => acc.zipWith (· || ·) v) (List.Vector.replicate n false)
 
-/-- Apply rules with their activation masks -/
-def apply_activations {n: Nat}
-  (rules : List (Rule n))
-  (masks : List Bool)
-  (inputs : List (List.Vector Bool n))
-: List (List.Vector Bool n) :=
+/-- Apply rules with their activation masks.
+    Each rule produces output only if its mask is true; otherwise zeros. -/
+def apply_activations {n : Nat}
+    (rules : List (Rule n))
+    (masks : List Bool)
+    (inputs : List (List.Vector Bool n)) : List (List.Vector Bool n) :=
   List.zipWith
-    (fun (r : Rule n) (m : Bool) =>
-      if m then r.combine inputs
-      else List.Vector.replicate n false)
+    (fun r m => if m then r.combine inputs else List.Vector.replicate n false)
     rules masks
 
-/-- Node logic: compute output when exactly one rule is active -/
+/-- Node logic: compute output dependency vector.
+    1. Extract activation bits from all rules
+    2. Check exactly-one-active via XOR
+    3. Mask activations (all zero if XOR fails)
+    4. Apply active rule's combine function
+    5. OR results (only one is non-zero if valid) -/
 def node_logic {n : Nat}
-  (rules : List (Rule n))
-  (inputs : List (List.Vector Bool n)) : List.Vector Bool n :=
+    (rules : List (Rule n))
+    (inputs : List (List.Vector Bool n)) : List.Vector Bool n :=
   let acts  := extract_activations rules
   let xor   := multiple_xor acts
   let masks := and_bool_list xor acts
   let outs  := apply_activations rules masks inputs
   list_or outs
 
-/-- Run a circuit node -/
-def CircuitNode.run {n: Nat} (c : CircuitNode n)
+/-- Run a circuit node on given inputs. -/
+def CircuitNode.run {n : Nat} (c : CircuitNode n)
     (inputs : List (List.Vector Bool n)) : List.Vector Bool n :=
   node_logic c.rules inputs
 
-/-- Predicate: exactly one rule is active -/
-def exactlyOneActive {n: Nat} (rules : List (Rule n)) : Prop :=
-  ∃ r, r ∈ rules ∧ is_rule_active r ∧
-    ∀ r', r' ∈ rules → is_rule_active r' → r' = r
-
+/-- Predicate: exactly one rule in the list is active.
+    This is the semantic property that `multiple_xor` checks. -/
+def exactlyOneActive {n : Nat} (rules : List (Rule n)) : Prop :=
+  ∃ r, r ∈ rules ∧ is_rule_active r ∧ ∀ r', r' ∈ rules → is_rule_active r' → r' = r
 /-!
-## Section 3: Key Lemmas for Proofs
+
+## Section 3: Key Lemmas for Correctness Proofs
+
+This section establishes the fundamental correspondence between the Boolean
+`multiple_xor` function and the semantic `exactlyOneActive` predicate.
+
+Main result: `multiple_xor_bool_iff_exactlyOneActive`
+  - `multiple_xor (rules.map is_rule_active) = true ↔ exactlyOneActive rules`
+
+This equivalence is the foundation of circuit correctness: the XOR check
+in `node_logic` succeeds precisely when exactly one rule is active.
 -/
 
+/-- If a mapped list has no duplicates, the original list has no duplicates. -/
 lemma nodup_of_map {α β} (f : α → β) {l : List α} :
-  (l.map f).Nodup → l.Nodup := by
+    (l.map f).Nodup → l.Nodup := by
   induction l with
   | nil => intro _; simp
   | cons a tl ih =>
@@ -195,34 +244,38 @@ lemma nodup_of_map {α β} (f : α → β) {l : List α} :
 
 @[simp]
 lemma multiple_xor_cons_false (l : List Bool) :
-  multiple_xor (false :: l) = multiple_xor l := by
+    multiple_xor (false :: l) = multiple_xor l := by
   induction l with
   | nil => simp [multiple_xor]
   | cons b bs ih => simp [multiple_xor]
 
 lemma multiple_xor_cons_true_aux {l : List Bool} :
-  multiple_xor (true :: l) = !l.or := by
+    multiple_xor (true :: l) = !l.or := by
   cases l with
   | nil => simp [multiple_xor, List.or]
   | cons b bs => simp [multiple_xor]
 
 lemma multiple_xor_cons_true {l : List Bool} :
-  multiple_xor (true :: l) = true ↔ List.or l = false := by
+    multiple_xor (true :: l) = true ↔ List.or l = false := by
   simp
   exact multiple_xor_cons_true_aux
 
 lemma List.or_eq_false_iff_all_false {l : List Bool} :
-  l.or = false ↔ ∀ b ∈ l, b = false := by
+    l.or = false ↔ ∀ b ∈ l, b = false := by
   induction l with
   | nil => simp
   | cons a l ih =>
     simp only [List.or, List.mem_cons, forall_eq_or_imp]
     simp [List.any]
 
-/-- Core theorem: XOR over activations ↔ exactly one active rule -/
+/-- **Core equivalence theorem**: XOR over activation bits equals true
+    if and only if exactly one rule is active.
+
+    This is the key lemma connecting the Boolean circuit implementation
+    to its semantic specification. -/
 theorem multiple_xor_bool_iff_exactlyOneActive
-  {n : ℕ} (rs : List (Rule n)) (h_nodup : rs.Nodup) :
-  multiple_xor (rs.map is_rule_active) = true ↔ exactlyOneActive rs := by
+    {n : ℕ} (rs : List (Rule n)) (h_nodup : rs.Nodup) :
+    multiple_xor (rs.map is_rule_active) = true ↔ exactlyOneActive rs := by
   induction rs with
   | nil => simp [multiple_xor, exactlyOneActive]
   | cons r rs ih =>
@@ -288,12 +341,18 @@ theorem multiple_xor_bool_iff_exactlyOneActive
           contradiction
 
 /-!
-## Section 4: Auxiliary Lemmas
+## Section 4: Auxiliary Lemmas for Vector Operations
+
+Technical lemmas about boolean vector operations used in the main proofs:
+- OR with zero vector is identity
+- zipWith commutativity
+- Folding over zero vectors preserves accumulator
 -/
 
+/-- OR-ing a zero vector on the left is identity. -/
 lemma zip_with_zero_identity :
-  ∀ (N : ℕ) (v : List.Vector Bool N),
-    (List.Vector.replicate N false).zipWith (λ x y => x || y) v = v := by
+    ∀ (N : ℕ) (v : List.Vector Bool N),
+      (List.Vector.replicate N false).zipWith (· || ·) v = v := by
   intro N v
   let ⟨l, hl⟩ := v
   dsimp [List.Vector.zipWith, List.Vector.replicate]
@@ -312,8 +371,9 @@ lemma zip_with_zero_identity :
 
 @[simp]
 theorem List.getElem_eq_get {α : Type*} (l : List α) (i : Fin l.length) :
-  l[↑i] = l.get i := rfl
+    l[↑i] = l.get i := rfl
 
+/-- zipWith is commutative for commutative operations. -/
 @[simp]
 lemma List.Vector.zipWith_comm {n : ℕ} (f : Bool → Bool → Bool)
     (h : ∀ x y, f x y = f y x)
@@ -327,37 +387,40 @@ lemma List.Vector.zipWith_comm {n : ℕ} (f : Bool → Bool → Bool)
   rw [List.getElem_zipWith, List.getElem_zipWith]
   apply h
 
-
+/-- Folding OR with zero vectors preserves the accumulator. -/
 lemma foldl_add_false {n : ℕ} (v : List.Vector Bool n) (l : List α) :
-  List.foldl (fun acc (_ : α) => acc.zipWith (fun x y => x || y) (List.Vector.replicate n false)) v l = v :=
-by
+    List.foldl (fun acc (_ : α) => acc.zipWith (· || ·) (List.Vector.replicate n false)) v l = v := by
   induction l with
   | nil => rfl
   | cons _ tl ih =>
     simp only [List.foldl]
-    rw [List.Vector.zipWith_comm (fun x y => x || y) Bool.or_comm]
+    rw [List.Vector.zipWith_comm (· || ·) Bool.or_comm]
     rw [zip_with_zero_identity]
     exact ih
 
-
 /-!
-## Section 5: Node Correctness - Main Theorem
+## Section 5: Node Correctness Theorem
+
+This section proves the main correctness theorem for individual circuit nodes:
+when exactly one rule is active, the node outputs precisely that rule's result.
+
+Main result: `node_correct`
+  - If `exactlyOneActive c.rules`, then `c.run inputs = r.combine inputs`
+    for the unique active rule `r`.
+
+This theorem is the foundation for the full circuit correctness proof.
 -/
 
-/-!
-#### Lemma: Unique Active Rule Output for Node OR
-
-If exactly one rule in `rules` is active, then OR-combining the outputs yields the output of the active rule only.
--/
+/-- When exactly one rule is active, OR-combining all rule outputs yields
+    just the active rule's output (all others contribute zero vectors). -/
 lemma list_or_apply_unique_active_of_exactlyOne {n : ℕ}
-  {rules : List (Rule n)} (h_nonempty : rules ≠ [])
-  {r0 : Rule n} (hr0_mem : r0 ∈ rules)
-  (h_nodup : rules.Nodup)
-  (h_one : exactlyOneActive rules)
-  (hr0_active : is_rule_active r0 = true)
-  (inputs : List (List.Vector Bool n)) :
-  list_or (apply_activations rules (extract_activations rules) inputs) = r0.combine inputs :=
-by
+    {rules : List (Rule n)} (h_nonempty : rules ≠ [])
+    {r0 : Rule n} (hr0_mem : r0 ∈ rules)
+    (h_nodup : rules.Nodup)
+    (h_one : exactlyOneActive rules)
+    (hr0_active : is_rule_active r0 = true)
+    (inputs : List (List.Vector Bool n)) :
+    list_or (apply_activations rules (extract_activations rules) inputs) = r0.combine inputs := by
   induction rules with
   | nil => contradiction
   | cons r rs ih =>
@@ -454,12 +517,15 @@ by
           rw [zip_with_zero_identity n (List.Vector.replicate n false)]
           exact ih h_nonempty_tail r0_in_rs rs_nodup h_one_tail
 
-/-- MAIN NODE CORRECTNESS THEOREM:
-    If exactly one rule is active, the node outputs that rule's result -/
+/-- **Main Node Correctness Theorem**: If exactly one rule is active,
+    the node outputs that rule's combine result.
+
+    This is the core correctness property: the XOR-gated node logic
+    correctly selects and applies the unique active rule. -/
 theorem node_correct {n} (c : CircuitNode n)
     (inputs : List (List.Vector Bool n))
     (h_one : exactlyOneActive c.rules) :
-  ∃ r ∈ c.rules, c.run inputs = r.combine inputs := by
+    ∃ r ∈ c.rules, c.run inputs = r.combine inputs := by
   have h_nodup : c.rules.Nodup :=
     nodup_of_map (fun (r : Rule n) => r.ruleId) c.nodupIds
 
@@ -483,74 +549,91 @@ theorem node_correct {n} (c : CircuitNode n)
   constructor
   · exact hr0_mem
   · exact eq
-
 /-!
 ## Section 6: Path-Based Circuit Evaluation
 
-This section builds the complete circuit evaluation on top of the proven
-node_correct theorem from Section 5. We reuse all the proven machinery:
-- node_logic (proven correct via node_correct)
-- multiple_xor (proven equivalent to exactlyOneActive)
-- extract_activations (used in proofs)
+This section builds the complete circuit evaluation pipeline on top of the
+proven `node_correct` theorem from Section 5.
 
+### Overview
+
+The evaluation proceeds as follows:
+1. Initialize tokens at the top level (one per formula)
+2. Propagate tokens through layers following path routing choices
+3. At each node, activate rules based on available inputs
+4. Detect conflicts via XOR check (multiple active rules = error)
+5. Accumulate dependency vectors through rule applications
+6. Check final goal vector for discharged assumptions
+
+### Main Results
+
+- `circuit_correctness`: If circuit accepts, then either the path is
+  structurally invalid OR the path represents a valid proof with all
+  assumptions discharged.
 -/
 
 /-!
 ### 6.1: Core Structures
+
+Types for tokens, wiring maps, grid layers, and path inputs.
 -/
 
-/-- Token flowing through the circuit -/
+/-- Token flowing through the circuit, carrying dependency information.
+    - `origin_column`: Fixed; used for path lookup
+    - `source_column`: Updated each step; indicates immediate predecessor
+    - `dep_vector`: Accumulated dependency bitvector -/
 structure Token (n : Nat) where
-  origin_column : Nat      -- Never changes, used for path lookup
-  source_column : Nat      -- Updates each step, indicates immediate source
+  origin_column : Nat
+  source_column : Nat
   current_level : Nat
   current_column : Nat
   dep_vector : List.Vector Bool n
   deriving Inhabited
 
-/-- IncomingMap: For each rule, which predecessor columns it needs
-    Example: [(2, 0), (3, 1)] means rule expects inputs from columns 2 and 3 -/
+/-- Wiring specification for a single rule: list of (source_column, edge_id) pairs. -/
 abbrev RuleIncoming := List (Nat × Nat)
 
-/-- IncomingMap for a node: one entry per rule -/
+/-- Wiring specification for a node: one entry per rule. -/
 abbrev NodeIncoming := List RuleIncoming
 
-/-- IncomingMap for a layer: one entry per node/column -/
+/-- Wiring specification for a layer: one entry per column. -/
 abbrev LayerIncoming := List NodeIncoming
 
-/-- Grid layer with wiring information -/
+/-- Grid layer containing circuit nodes and their wiring information. -/
 structure GridLayer (n : ℕ) where
-  nodes : List (CircuitNode n)      -- One node per column
-  incoming : LayerIncoming          -- Wiring: which predecessors each rule needs
+  nodes : List (CircuitNode n)
+  incoming : LayerIncoming
 
-/-- Path input format: List of paths, one per column -/
+/-- Path input: routing choices for each formula at each level.
+    Value 0 means "stop", value k > 0 means "route to column k-1". -/
 abbrev PathInput := List (List Nat)
 
 /-!
 ### 6.2: Token Propagation
+
+Initialization and propagation of tokens through the circuit grid.
 -/
 
-/-- Initialize tokens: one per column at top level -/
+/-- Initialize tokens: one per column at the top level with initial dependency vectors. -/
 def initialize_tokens {n : Nat}
-  (initial_vectors : List (List.Vector Bool n))
-  (top_level : Nat) : List (Token n) :=
+    (initial_vectors : List (List.Vector Bool n))
+    (top_level : Nat) : List (Token n) :=
   initial_vectors.zipIdx.map fun (vec, col) =>
-    {
-      origin_column := col
+    { origin_column := col
       source_column := col
       current_level := top_level
       current_column := col
-      dep_vector := vec}
+      dep_vector := vec }
 
+/-- Propagate tokens to the next level following path routing choices. -/
 def propagate_tokens {n : Nat}
-  (tokens : List (Token n))
-  (paths : PathInput)
-  (current_level : Nat)
-  (num_levels : Nat)
-  (outputs : List (List.Vector Bool n))
-  : List (Token n) :=
+    (tokens : List (Token n))
+    (paths : PathInput)
+    (current_level : Nat)
+    (num_levels : Nat)
+    (outputs : List (List.Vector Bool n)) : List (Token n) :=
   tokens.filterMap fun token =>
-    if h_path : token.origin_column < paths.length then  -- ← Use origin for path lookup
+    if h_path : token.origin_column < paths.length then
       let path := paths.get ⟨token.origin_column, h_path⟩
       if h_level : current_level > 0 ∧ num_levels - current_level - 1 < path.length then
         let step_index := num_levels - current_level - 1
@@ -560,10 +643,10 @@ def propagate_tokens {n : Nat}
         else
           let target_column := edge_choice - 1
           if h_out : token.current_column < outputs.length then
-            some { origin_column := token.origin_column,        -- Keep same
-                   source_column := token.current_column,       -- Update to current position
-                   current_level := current_level - 1,
-                   current_column := target_column,
+            some { origin_column := token.origin_column
+                   source_column := token.current_column
+                   current_level := current_level - 1
+                   current_column := target_column
                    dep_vector := outputs.get ⟨token.current_column, h_out⟩ }
           else
             none
@@ -571,47 +654,40 @@ def propagate_tokens {n : Nat}
         none
     else
       none
-/--
-Converts a natural number to its `k`-bit Boolean (big-endian) vector.
-Used for encoding selector indices.
--/
+
+/-- Convert natural number to k-bit big-endian boolean vector.
+    (Reserved for future bit-encoded path representation.) -/
 def natToBits (n k : ℕ) : List Bool :=
   (List.range k).map (fun i => (n.shiftRight (k - 1 - i)) % 2 = 1)
 
-/--
-Generates a "one-hot" selector vector for an input vector, such that only one output is true,
-depending on the Boolean encoding of the input.
--/
+/-- Generate one-hot selector from boolean input encoding.
+    (Reserved for future bit-encoded path representation.) -/
 def selector (input : List Bool) : List Bool :=
   let n := input.length
   let total := 2 ^ n
   List.ofFn (fun (i : Fin total) =>
     let bits := natToBits i.val n
     (input.zip bits).foldl (fun acc (inp, b) =>
-      acc && if b then inp else !inp) true
-  )
-
+      acc && if b then inp else !inp) true)
 
 /-!
-### 6.3: Node Activation - Setting Activation Bits
+### 6.3: Rule Activation
+
+Setting activation bits based on which required inputs are available.
 -/
 
-/-- Set activation bits for a rule based on which inputs are available -/
+/-- Set activation bits for a rule based on available inputs.
+    - Intro/Rep rules: active iff all required inputs present
+    - Elim rules: each bit set independently based on input availability -/
 def set_rule_activation {n : Nat}
-  (rule : Rule n)
-  (rule_incoming : RuleIncoming)
-  (available_inputs : List (Nat × List.Vector Bool n))
-  : Rule n :=
-
+    (rule : Rule n)
+    (rule_incoming : RuleIncoming)
+    (available_inputs : List (Nat × List.Vector Bool n)) : Rule n :=
   let required_cols := rule_incoming.map Prod.fst
   let available_cols := available_inputs.map Prod.fst
-
   let has_all := required_cols.all fun req => available_cols.contains req
-
   let new_activation := match rule.activation with
-    | ActivationBits.intro _ =>
-        ActivationBits.intro has_all
-
+    | ActivationBits.intro _ => ActivationBits.intro has_all
     | ActivationBits.elim _ _ =>
         if required_cols.length = 2 then
           let has_first := available_cols.contains (required_cols[0]!)
@@ -619,51 +695,48 @@ def set_rule_activation {n : Nat}
           ActivationBits.elim has_first has_second
         else
           ActivationBits.elim false false
-
-    | ActivationBits.repetition _ =>
-        ActivationBits.repetition has_all
-
+    | ActivationBits.repetition _ => ActivationBits.repetition has_all
   { rule with activation := new_activation }
 
 def activateRulesAux {n : Nat}
-  (node_incoming : NodeIncoming)
-  (available_inputs : List (Nat × List.Vector Bool n)) :
-  Nat → List (Rule n) → List (Rule n)
+    (node_incoming : NodeIncoming)
+    (available_inputs : List (Nat × List.Vector Bool n)) :
+    Nat → List (Rule n) → List (Rule n)
   | _, [] => []
   | idx, r :: rs =>
       let rule_inc := node_incoming[idx]!
       let r' := set_rule_activation r rule_inc available_inputs
       r' :: activateRulesAux node_incoming available_inputs (idx + 1) rs
 
+/-- Activation preserves rule IDs (needed for nodupIds invariant). -/
 lemma activateRulesAux_ids {n : Nat}
-  (node_incoming : NodeIncoming)
-  (available_inputs : List (Nat × List.Vector Bool n)) :
-  ∀ idx (rs : List (Rule n)),
-    (activateRulesAux node_incoming available_inputs idx rs).map (·.ruleId)
-      = rs.map (·.ruleId)
-  | idx, [] => by
-      simp [activateRulesAux]
+    (node_incoming : NodeIncoming)
+    (available_inputs : List (Nat × List.Vector Bool n)) :
+    ∀ idx (rs : List (Rule n)),
+      (activateRulesAux node_incoming available_inputs idx rs).map (·.ruleId) = rs.map (·.ruleId)
+  | idx, [] => by simp [activateRulesAux]
   | idx, r :: rs => by
       have ih := activateRulesAux_ids node_incoming available_inputs (idx + 1) rs
       simp [activateRulesAux, set_rule_activation, ih]
 
+/-- Activate a node's rules based on available token inputs. -/
 def activate_node_from_tokens {n : Nat}
-  (node : CircuitNode n)
-  (node_incoming : NodeIncoming)
-  (available_inputs : List (Nat × List.Vector Bool n))
-  : CircuitNode n :=
+    (node : CircuitNode n)
+    (node_incoming : NodeIncoming)
+    (available_inputs : List (Nat × List.Vector Bool n)) : CircuitNode n :=
   let activated_rules := activateRulesAux node_incoming available_inputs 0 node.rules
   { rules := activated_rules
     nodupIds := by
       classical
-      have h_ids :
-        activated_rules.map (·.ruleId) = node.rules.map (·.ruleId) :=
+      have h_ids : activated_rules.map (·.ruleId) = node.rules.map (·.ruleId) :=
         activateRulesAux_ids node_incoming available_inputs 0 node.rules
       simpa [activated_rules, h_ids] using node.nodupIds }
 
 
 /-!
-### 6.4: Node Evaluation Using node_logic
+### 6.4: Node Evaluation with Routing
+
+Extended node logic that routes inputs to individual rules and detects conflicts.
 -/
 
 def gather_rule_inputs {n : Nat}
@@ -740,7 +813,10 @@ def evaluate_node {n : Nat}
     (result, error)
 
 /-!
-### 6.4b: Connection to Original node_logic
+### 6.5: Helper Lemmas for Routing Correctness
+
+Technical lemmas about list operations (zipWith3, membership, indexing)
+used in proving `node_logic_with_routing_correct`.
 -/
 
 lemma exists_fin_of_mem {α} {a : α} {l : List α} (h : a ∈ l) :
@@ -797,7 +873,6 @@ lemma List.get_zipWith3 {α β γ δ : Type*} (f : α → β → γ → δ)
           have hc' : i' < cs'.length := Nat.lt_of_succ_lt_succ hc
           exact ih bs' cs' i' ha' hb' hc'
 
--- Helper: zipWith (· || ·) with zero vector is identity
 lemma Vector.zipWith_or_replicate_false_left {n : Nat} (v : List.Vector Bool n) :
     List.Vector.zipWith (· || ·) (List.Vector.replicate n false) v = v := by
   apply List.Vector.ext
@@ -810,7 +885,6 @@ lemma Vector.zipWith_or_replicate_false_right {n : Nat} (v : List.Vector Bool n)
   intro i
   simp [List.Vector.get_replicate]
 
--- Helper: folding over all-zero vectors preserves the accumulator
 lemma foldl_zipWith_or_all_zeros {n : Nat} (acc : List.Vector Bool n) (vecs : List (List.Vector Bool n))
     (h_all_zero : ∀ j (hj : j < vecs.length), vecs.get ⟨j, hj⟩ = List.Vector.replicate n false) :
     List.foldl (fun a v => List.Vector.zipWith (· || ·) a v) acc vecs = acc := by
@@ -849,7 +923,6 @@ lemma list_or_single_nonzero {n : Nat} (vecs : List (List.Vector Bool n))
       rw [foldl_zipWith_or_all_zeros x xs h_xs_zero]
       simp
     | succ i' =>
-      -- x is zero, active element is in xs at index i'
       have hx_zero : x = List.Vector.replicate n false := by
         have h0 : 0 < (x :: xs).length := by simp
         have := h_others 0 h0 (by omega)
@@ -865,7 +938,6 @@ lemma list_or_single_nonzero {n : Nat} (vecs : List (List.Vector Bool n))
       have := ih i' hi' h_others'
       convert this using 1
 
--- Add this helper lemma before node_logic_with_routing_correct
 lemma list_map_get {α β : Type*} (f : α → β) (l : List α) (i : Nat)
     (hi : i < l.length) (hi' : i < (l.map f).length) :
     (l.map f).get ⟨i, hi'⟩ = f (l.get ⟨i, hi⟩) := by
@@ -915,7 +987,6 @@ by
   classical
   rcases h_one with ⟨r₀, hr₀_mem, hr₀_act, hr₀_unique⟩
 
-  -- 1. Activations list
   let acts := extract_activations rules
   have h_acts :
     ∀ r ∈ rules, is_rule_active r = true ↔ r = r₀ := by
@@ -926,17 +997,14 @@ by
     · intro h
       simp [h, hr₀_act]
 
-  -- 2. XOR = true (using your proven lemma with Nodup)
   have h_xor : multiple_xor acts = true := by
     have := (multiple_xor_bool_iff_exactlyOneActive rules h_nodup).mpr
       ⟨r₀, hr₀_mem, hr₀_act, hr₀_unique⟩
     simpa [acts, extract_activations] using this
 
-  -- 3. Masks = activations
   have h_masks : and_bool_list (multiple_xor acts) acts = acts := by
     simp [and_bool_list, h_xor]
 
-  -- 4. Per-rule inputs, aligned with rules
   let per_rule_inputs :=
     (List.range rules.length).map (fun idx =>
       let rule_inc := node_incoming[idx]!
@@ -946,19 +1014,16 @@ by
     per_rule_inputs.length = rules.length := by
     simp [per_rule_inputs]
 
-  -- 5. Outputs list
   let masks := and_bool_list (multiple_xor acts) acts
   have hmasks_eq : masks = acts := h_masks
 
   let outs := apply_activations_with_routing rules masks per_rule_inputs
 
-  -- 6. Choose the *index* i₀ where r₀ sits.
   classical
   have ⟨i₀_fin, hi₀_get⟩ :
     ∃ i₀ : Fin rules.length, rules.get i₀ = r₀ :=
     exists_fin_of_mem (l := rules) hr₀_mem
 
-  -- Turn Fin index into Nat + inequality
   let i₀ : ℕ := i₀_fin
   have hi₀_lt : i₀ < rules.length := i₀_fin.isLt
 
@@ -1009,7 +1074,6 @@ by
     rw [hi₀_get', h_mask_i₀]
     simp
 
-  -- Key lemma: only i₀ has true activation
   have h_only_i₀_active : ∀ j (hj : j < rules.length), j ≠ i₀ →
       is_rule_active (rules.get ⟨j, hj⟩) = false := by
     intro j hj hne
@@ -1037,18 +1101,15 @@ by
     rw [List.get_zipWith3 _ rules masks per_rule_inputs j hj_rules hj_masks hj_per]
     have h_mask_j : masks.get ⟨j, hj_masks⟩ = false := by
       have h_inactive := h_only_i₀_active j hj_rules hne
-      -- First, masks = acts by hmasks_eq
       have hj_acts : j < acts.length := by simp [acts, extract_activations]; exact hj_rules
       have h_eq1 : masks.get ⟨j, hj_masks⟩ = acts.get ⟨j, hj_acts⟩ := by
         have h : masks[j]'hj_masks = acts[j]'hj_acts := by simp only [hmasks_eq]
         simp only [List.get_eq_getElem] at h ⊢
         exact h
-      -- Second, acts.get = is_rule_active (rules.get ...)
       have h_eq2 : acts.get ⟨j, hj_acts⟩ = is_rule_active (rules.get ⟨j, hj_rules⟩) := by
         simp only [acts, extract_activations]
         exact list_map_get is_rule_active rules j hj_rules (by simp; exact hj_rules)
       rw [h_eq1, h_eq2, h_inactive]
-    -- The if-then-else simplification
     simp only [h_mask_j, Bool.false_eq_true, ↓reduceIte]
 
   have h_per_rule_i₀ : per_rule_inputs.get ⟨i₀, hi₀_per⟩ =
@@ -1073,8 +1134,6 @@ by
       rw [list_map_get _ _ _ hi_zipIdx (by rw [List.length_map]; exact hi_zipIdx)]
       rw [list_map_get _ _ _ (by simp; exact hi_rules) hi₂]
       congr 1
-      -- Need to show node_incoming[idx]?.getD default = node_incoming[idx]!
-      -- when idx < node_incoming.length
       have h1 : (rules.zipIdx.get ⟨i, hi_zipIdx⟩).2 = 0 + i := by
         rw [← List.getElem_eq_get]
         simp [List.getElem_zipIdx]
@@ -1082,35 +1141,27 @@ by
         rw [← List.getElem_eq_get]
         simp [List.getElem_range]
       simp only [h1, h2, Nat.zero_add]
-      -- Now need: node_incoming[i]?.getD default = node_incoming[i]!
       have hi_incoming : i < node_incoming.length := by rw [hlen]; exact hi_rules
       rw [List.getElem?_eq_getElem hi_incoming, Option.getD_some]
       simp only [List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem hi_incoming, Option.getD_some]
 
   constructor
-  · -- First part: list_or (...) = r₀.combine (...)
+  ·
     have h_list_or_eq : list_or outs = outs.get ⟨i₀, hi₀_outs⟩ := by
       unfold list_or
       exact list_or_single_nonzero outs i₀ hi₀_outs h_outs_zero
 
-    -- The goal after unfold has multiple_xor ... && b, need to simplify using h_xor
     have h_xor' : multiple_xor (List.map is_rule_active rules) = true := by
       exact h_xor
 
-    -- Show that (fun b => multiple_xor ... && b) ∘ is_rule_active simplifies to is_rule_active
     have h_masks_eq_acts : List.map ((fun b => multiple_xor (List.map is_rule_active rules) && b) ∘ is_rule_active) rules =
                            List.map is_rule_active rules := by
       congr 1
       funext r
       simp only [Function.comp_apply, h_xor', Bool.true_and]
 
-    -- acts = List.map is_rule_active rules
     have h_acts_def : acts = List.map is_rule_active rules := rfl
-
-    -- Combine everything
     rw [h_enum_per, h_masks_eq_acts]
-    -- Now goal should involve apply_activations_with_routing rules (List.map is_rule_active rules) per_rule_inputs
-
     have h_goal_eq_outs :
         apply_activations_with_routing rules (List.map is_rule_active rules) per_rule_inputs = outs := by
       simp only [outs]
@@ -1120,14 +1171,25 @@ by
     congr 2
     have hi₀_incoming : i₀ < node_incoming.length := by rw [hlen]; exact hi₀_lt
     rw [List.getElem!_eq_getElem?_getD (α := _), List.getElem?_eq_getElem hi₀_incoming]
-  · -- Second part: XOR false implies all inactive (vacuously true)
+  ·
     intro h_xor_false
     simp only [acts, extract_activations] at h_xor
     rw [h_xor] at h_xor_false
     simp at h_xor_false
+
 /-!
-### 6.5: Theorems with Routing
+### Section 6.6: Routing-Aware Node Semantics
+
+This section proves that routing-aware node evaluation correctly implements the
+semantic “exactly one active rule” condition and raises a structural error
+precisely when uniqueness fails.
+
+Main results:
+- `node_logic_with_routing_correct`
+- `evaluate_node_error_iff_not_unique`
+- `evaluate_node_correct`
 -/
+
 lemma activateRulesAux_eq_zipIdx_map {n : Nat}
     (node_incoming : NodeIncoming)
     (available_inputs : List (Nat × List.Vector Bool n))
@@ -1161,12 +1223,11 @@ lemma activateRulesAux_eq_zipIdx_map {n : Nat}
       | elim b1 b2 =>
         simp only
         split
-        · -- if length = 2
+        ·
           rename_i h
           simp only [h]
         ·
           rename_i h1
-          -- Force the match to evaluate for non-2 cases
           match hlen : (node_incoming[start]!.map Prod.fst).length with
           | 0 => rfl
           | 1 => rfl
@@ -1196,6 +1257,14 @@ lemma activateRulesAux_eq_zipIdx_map_zero {n : Nat}
       { x.1 with activation := new_activation } := by
   exact activateRulesAux_eq_zipIdx_map node_incoming available_inputs rules 0
 
+/-!
+### evaluate_node as a Derived Evaluator
+
+This lemma establishes that `evaluate_node` does not introduce new
+semantics: it computes rule activations from available tokens and then
+invokes the already verified routing-aware node logic.
+-/
+
 theorem evaluate_node_uses_proven_node_logic
   {n : Nat}
   (node : CircuitNode n)
@@ -1216,18 +1285,24 @@ theorem evaluate_node_uses_proven_node_logic
     simp at h_nonempty
 
   rw [if_neg]
-  · -- Main goal: prove the equality
+  ·
     simp only [activated_node, available_inputs]
     rw [Prod.eta]
     congr 1
     simp only [activate_node_from_tokens]
     rw [activateRulesAux_eq_zipIdx_map_zero]
-  · -- Prove ¬tokens.isEmpty = true
+  ·
     intro h_isEmpty
     cases tokens with
     | nil => exact h_tokens_ne_nil rfl
     | cons head tail => simp at h_isEmpty
 
+/-!
+### `evaluate_node`: No-Conflict + Some-Active ↔ Exactly-One-Active
+
+For nonempty tokens, `evaluate_node` reports no conflict and activates at least
+one rule iff exactly one rule is active.
+-/
 theorem evaluate_node_error_iff_not_unique
   {n : Nat}
   (node : CircuitNode n)
@@ -1250,7 +1325,6 @@ theorem evaluate_node_error_iff_not_unique
                    exactlyOneActive activated_node.rules :=
     multiple_xor_bool_iff_exactlyOneActive activated_node.rules h_nodup
 
-  -- First, rewrite evaluate_node using the earlier theorem
   have h_eval : evaluate_node node node_incoming tokens =
       node_logic_with_routing activated_node.rules node_incoming available_inputs :=
     evaluate_node_uses_proven_node_logic node node_incoming tokens h_nonempty
@@ -1276,21 +1350,21 @@ theorem evaluate_node_error_iff_not_unique
       simp only [extract_activations]
       exact h_xor
 
-  · -- Backward: exactlyOneActive → (!xor && any) = false ∧ any
+  ·
     intro h_one
     have h_xor : multiple_xor (extract_activations activated_node.rules) = true :=
       h_xor_iff.mpr h_one
     constructor
-    · -- error = false: !xor && any = false
+    ·
       simp only [extract_activations] at h_xor ⊢
       simp [h_xor]
-    · -- any = true
+    ·
       obtain ⟨r, hr_mem, hr_act, _⟩ := h_one
       simp only [acts, extract_activations]
       rw [List.any_eq_true]
       use true
       constructor
-      · -- true ∈ activated_node.rules.map is_rule_active
+      ·
         rw [List.mem_map]
         exact ⟨r, hr_mem, hr_act⟩
       · rfl
@@ -1323,6 +1397,13 @@ lemma indexOf_eq_of_get {α : Type*} [DecidableEq α] {l : List α} {a : α} {i 
       simp only [List.idxOf] at ih_result
       rw [ih_result]
 
+/-!
+### `evaluate_node` Produces the Output of the Selected Rule
+
+If no conflict is reported and some rule is active, then the first component of
+`evaluate_node` equals `r.combine` applied to the routed inputs of a rule `r`
+in the activated node.
+-/
 theorem evaluate_node_correct
   {n : Nat}
   (node : CircuitNode n)
@@ -1336,20 +1417,18 @@ theorem evaluate_node_correct
   let available_inputs := tokens.map fun t => (t.source_column, t.dep_vector)
   let activated_node := activate_node_from_tokens node node_incoming available_inputs
   ∃ r ∈ activated_node.rules,
-    let rule_idx := activated_node.rules.idxOf r  -- Changed from indexOf to idxOf
+    let rule_idx := activated_node.rules.idxOf r
     let rule_inc := node_incoming[rule_idx]!
     let inputs := gather_rule_inputs rule_inc available_inputs
     (evaluate_node node node_incoming tokens).fst = r.combine inputs := by
 
   intro available_inputs activated_node
 
-  -- No error + some active means exactlyOneActive
   have h_one : exactlyOneActive activated_node.rules := by
     have h_iff := evaluate_node_error_iff_not_unique node node_incoming tokens h_nonempty
     simp only at h_iff
     exact h_iff.mp ⟨h_no_error, h_some_active⟩
 
-  -- Need nodup and length hypotheses
   have h_nodup : activated_node.rules.Nodup :=
     nodup_of_map (·.ruleId) activated_node.nodupIds
 
@@ -1367,16 +1446,13 @@ theorem evaluate_node_correct
   have h_len : node_incoming.length = activated_node.rules.length := by
     rw [h_incoming_len, h_activated_len]
 
-  -- Apply node_logic_with_routing_correct
   have h_routing := node_logic_with_routing_correct activated_node.rules node_incoming
                       available_inputs h_one h_nodup h_len
 
   obtain ⟨r, i, hi, hr_mem, hr_get, hr_eq⟩ := h_routing
 
-  -- Rewrite with evaluate_node_uses_proven_node_logic
   rw [evaluate_node_uses_proven_node_logic node node_incoming tokens h_nonempty]
 
-  -- Extract from tuple equality
   have h_fst : (node_logic_with_routing activated_node.rules node_incoming available_inputs).fst =
                r.combine (gather_rule_inputs (node_incoming[i]!) available_inputs) := by
     rw [hr_eq]
@@ -1385,16 +1461,21 @@ theorem evaluate_node_correct
   simp only [available_inputs, activated_node]
   rw [h_fst]
 
-  -- Show idxOf r = i
   congr 1
   congr 1
   have h_indexOf : activated_node.rules.idxOf r = i := by
     exact indexOf_eq_of_get hi h_nodup hr_get
   simp only [activated_node, available_inputs] at h_indexOf ⊢
   rw [h_indexOf]
+
 /-!
-### 6.6: Layer Evaluation
+### 6.7: Layer Evaluation and Error Aggregation
+
+This section defines evaluation of an entire grid layer by applying
+`evaluate_node` to each column, collecting dependency outputs, and
+aggregating structural error flags.
 -/
+
 
 /-- Evaluate entire layer using evaluate_node -/
 def evaluate_layer {n : Nat}
@@ -1417,6 +1498,7 @@ def evaluate_layer {n : Nat}
 ### 6.8: Correctness Predicates
 -/
 
+/-- Recursive circuit evaluation --/
 def eval_from_level {n : Nat}
   (paths : PathInput)
   (level : Nat)
@@ -1427,17 +1509,14 @@ def eval_from_level {n : Nat}
   : (List (List.Vector Bool n)) × Bool :=
   match remaining_layers with
   | [] =>
-      -- Shouldn't reach here if we start with all layers
       let final_outputs := (List.range n).map fun _ => List.Vector.replicate n false
       (final_outputs, accumulated_error)
   | layer :: rest =>
       let (outputs, layer_error) := evaluate_layer layer tokens
       match rest with
       | [] =>
-          -- Return its outputs directly
           (outputs, accumulated_error || layer_error)
       | _ =>
-          -- More layers to process
           let new_tokens := propagate_tokens tokens paths level num_levels outputs
           eval_from_level paths (level - 1) new_tokens rest (accumulated_error || layer_error) num_levels
 
@@ -1475,17 +1554,22 @@ def AllAssumptionsDischarged {n : Nat}
   ∃ (h : goal_column < final_outputs.length),
     ∀ i : Fin n, (final_outputs.get ⟨goal_column, h⟩).get i = false
 /-!
-### 6.9: Shared Evaluation Logic
+### 6.9: Circuit Evaluation Entry Point
+
+The main evaluation function combines layer-by-layer propagation with
+the final check for discharged assumptions.
 -/
 
-
-/-- Main circuit evaluation -/
+/-- Main circuit evaluation.
+    Returns true iff:
+    - A structural error occurred (XOR conflict), OR
+    - Goal column is out of bounds, OR
+    - Goal vector has all-zero dependencies (all assumptions discharged) -/
 def evaluateCircuit {n : Nat}
-  (layers : List (GridLayer n))
-  (initial_vectors : List (List.Vector Bool n))
-  (paths : PathInput)
-  (goal_column : Nat)
-  : Bool :=
+    (layers : List (GridLayer n))
+    (initial_vectors : List (List.Vector Bool n))
+    (paths : PathInput)
+    (goal_column : Nat) : Bool :=
   let (final_outputs, had_error) := get_eval_result layers initial_vectors paths
   if h : goal_column < final_outputs.length then
     let goal_vector := final_outputs.get ⟨goal_column, h⟩
@@ -1494,67 +1578,64 @@ def evaluateCircuit {n : Nat}
   else
     true
 
-/-- Now the lemma is trivial! -/
-lemma evaluateCircuit_eq
-  {n : Nat}
-  (layers : List (GridLayer n))
-  (initial_vectors : List (List.Vector Bool n))
-  (paths : PathInput)
-  (goal_column : Nat) :
-  evaluateCircuit layers initial_vectors paths goal_column =
-  let (final_outputs, had_error) := get_eval_result layers initial_vectors paths
-  if h : goal_column < final_outputs.length then
-    let goal_vector := final_outputs.get ⟨goal_column, h⟩
-    let all_discharged := goal_vector.toList.all (· = false)
-    had_error || all_discharged
-  else true := by
+/-- Definitional unfolding of evaluateCircuit. -/
+lemma evaluateCircuit_eq {n : Nat}
+    (layers : List (GridLayer n))
+    (initial_vectors : List (List.Vector Bool n))
+    (paths : PathInput)
+    (goal_column : Nat) :
+    evaluateCircuit layers initial_vectors paths goal_column =
+    let (final_outputs, had_error) := get_eval_result layers initial_vectors paths
+    if h : goal_column < final_outputs.length then
+      let goal_vector := final_outputs.get ⟨goal_column, h⟩
+      let all_discharged := goal_vector.toList.all (· = false)
+      had_error || all_discharged
+    else true := by
   unfold evaluateCircuit get_eval_result
   rfl
 
 /-!
-### 6.10: Auxiliary Lemmas for Circuit Correctness
+### 6.10: Circuit Correctness Theorem
+
+This section proves the main soundness result: if the circuit accepts,
+then either a structural error occurred OR the path represents a valid
+proof with all assumptions discharged.
 -/
 
+/-- Structural error in evaluation implies path is structurally invalid. -/
+lemma error_implies_structurally_invalid {n : Nat}
+    (layers : List (GridLayer n))
+    (initial_vectors : List (List.Vector Bool n))
+    (paths : PathInput)
+    (h_error : (get_eval_result layers initial_vectors paths).snd = true) :
+    PathStructurallyInvalid paths layers initial_vectors :=
+  h_error
 
-/-- If evaluation produces an error, the path is structurally invalid -/
-lemma error_implies_structurally_invalid
-  {n : Nat}
-  (layers : List (GridLayer n))
-  (initial_vectors : List (List.Vector Bool n))
-  (paths : PathInput)
-  (h_error : (get_eval_result layers initial_vectors paths).snd = true) :
-  PathStructurallyInvalid paths layers initial_vectors := by
-  exact h_error
+/-- Path structurally invalid implies evaluation produced an error. -/
+lemma structurally_invalid_implies_error {n : Nat}
+    (layers : List (GridLayer n))
+    (initial_vectors : List (List.Vector Bool n))
+    (paths : PathInput)
+    (h_invalid : PathStructurallyInvalid paths layers initial_vectors) :
+    (get_eval_result layers initial_vectors paths).snd = true :=
+  h_invalid
 
-lemma structurally_invalid_implies_error
-  {n : Nat}
-  (layers : List (GridLayer n))
-  (initial_vectors : List (List.Vector Bool n))
-  (paths : PathInput)
-  (h_invalid : PathStructurallyInvalid paths layers initial_vectors) :
-  (get_eval_result layers initial_vectors paths).snd = true := by
-  exact h_invalid
-
-/-- If no error and circuit accepts, then all assumptions are discharged -/
-lemma no_error_accept_implies_discharged
-  {n : Nat}
-  (layers : List (GridLayer n))
-  (initial_vectors : List (List.Vector Bool n))
-  (paths : PathInput)
-  (goal_column : Nat)
-  (h_accept :
-    let (final_outputs, _) := get_eval_result layers initial_vectors paths
-    ∃ (h : goal_column < final_outputs.length),
-      (final_outputs.get ⟨goal_column, h⟩).toList.all (· = false) = true) :
-  AllAssumptionsDischarged paths layers initial_vectors goal_column := by
-
+/-- If no error and goal vector is all-false, then all assumptions are discharged. -/
+lemma no_error_accept_implies_discharged {n : Nat}
+    (layers : List (GridLayer n))
+    (initial_vectors : List (List.Vector Bool n))
+    (paths : PathInput)
+    (goal_column : Nat)
+    (h_accept :
+      let (final_outputs, _) := get_eval_result layers initial_vectors paths
+      ∃ (h : goal_column < final_outputs.length),
+        (final_outputs.get ⟨goal_column, h⟩).toList.all (· = false) = true) :
+    AllAssumptionsDischarged paths layers initial_vectors goal_column := by
   unfold AllAssumptionsDischarged
   rcases h_accept with ⟨h_len, h_all⟩
-
   right
   refine ⟨h_len, ?_⟩
   intro i
-
   let vec := (get_eval_result layers initial_vectors paths).fst.get ⟨goal_column, h_len⟩
   have h_all_elems := List.all_eq_true.mp h_all
   have h_in : vec.get i ∈ vec.toList := by
@@ -1564,40 +1645,37 @@ lemma no_error_accept_implies_discharged
   simp at h_decide
   exact h_decide
 
+/-- **Main Circuit Correctness Theorem**:
+    If `evaluateCircuit` returns true, then either:
+    1. The path is structurally invalid (XOR conflict detected), OR
+    2. The path represents a valid proof AND all assumptions are discharged.
 
-theorem circuit_correctness
-  {n : Nat}
-  (layers : List (GridLayer n))
-  (initial_vectors : List (List.Vector Bool n))
-  (paths : PathInput)
-  (goal_column : Nat)
-  (h_accept : evaluateCircuit layers initial_vectors paths goal_column = true) :
-  PathStructurallyInvalid paths layers initial_vectors
-  ∨
-  (PathRepresentsValidProof paths layers initial_vectors ∧
-   AllAssumptionsDischarged paths layers initial_vectors goal_column) := by
-
+    This is the key soundness result connecting Boolean circuit evaluation
+    to proof validity. -/
+theorem circuit_correctness {n : Nat}
+    (layers : List (GridLayer n))
+    (initial_vectors : List (List.Vector Bool n))
+    (paths : PathInput)
+    (goal_column : Nat)
+    (h_accept : evaluateCircuit layers initial_vectors paths goal_column = true) :
+    PathStructurallyInvalid paths layers initial_vectors
+    ∨
+    (PathRepresentsValidProof paths layers initial_vectors ∧
+     AllAssumptionsDischarged paths layers initial_vectors goal_column) := by
   rw [evaluateCircuit_eq] at h_accept
-
   cases h_eval : get_eval_result layers initial_vectors paths with
   | mk final_outputs had_error =>
-
   by_cases h_err : had_error
-
   · -- Case: had_error = true → structurally invalid
     left
     have h_err_snd : (get_eval_result layers initial_vectors paths).snd = true := by
       rw [h_eval]; exact h_err
     exact error_implies_structurally_invalid layers initial_vectors paths h_err_snd
-
   · -- Case: had_error = false → valid proof with all discharged
     right
-
     have h_err_snd : (get_eval_result layers initial_vectors paths).snd = false := by
       rw [h_eval]; simp [h_err]
-
     constructor
-
     · -- PathRepresentsValidProof
       unfold PathRepresentsValidProof
       intro h_invalid
@@ -1605,77 +1683,39 @@ theorem circuit_correctness
         structurally_invalid_implies_error layers initial_vectors paths h_invalid
       rw [h_err_snd] at this
       contradiction
-
     · -- AllAssumptionsDischarged
-      -- Simplify h_accept using h_eval
       rw [h_eval] at h_accept
       simp [h_err] at h_accept
-
       by_cases h_bounds : goal_column < final_outputs.length
-
       · -- In bounds: extract that all entries are false
         simp [h_bounds] at h_accept
-
         apply no_error_accept_implies_discharged layers initial_vectors paths goal_column
-
-        -- Rewrite the match using h_eval
         rw [h_eval]
         simp
-
         use h_bounds
-
-      · -- Out of bounds: circuit returned true from else branch
-        simp [h_bounds] at h_accept
+      · -- Out of bounds: vacuously true
         unfold AllAssumptionsDischarged
         rw [h_eval]
         simp
         left
-        omega  -- or: push_neg at h_bounds; exact Nat.le_of_not_lt h_bounds
-
-          -- This case means "accept because goal out of bounds" - may want to refine spec
+        omega
 
 /-!
-## Summary of Section 6
+## Section 7: DLDS Grid Construction
 
-**Built:**
-1. ✅ Path-based circuit evaluation using node_logic
-2. ✅ Token propagation through grid following paths
-3. ✅ Error detection using multiple_xor
-4. ✅ Main correctness theorem structure complete
-
-**Key properties proven:**
-- `evaluate_node_uses_proven_node_logic`: Output = proven node_logic
-- `evaluate_node_error_iff_not_unique`: Error ↔ ¬exactlyOneActive
-- `evaluate_node_correct`: Applies node_correct when no error
-- `circuit_correctness`: Main theorem (modulo auxiliary lemmas)
-
-The core correctness argument is complete and builds on proven foundations!
--/
-
-def allPathsAccept (layers : List (GridLayer n))
-    (initial_vectors : List (List.Vector Bool n))
-    (goal_column : Nat) : Prop :=
-  ∀ (paths : PathInput),
-    evaluateCircuit layers initial_vectors paths goal_column = true
-
-
-/-!
-## Section 6: DLDS Grid Construction and Well-Formedness
-
-This section bridges raw DLDS structures to evaluation-ready GridLayers.
-It includes:
-- Formula list extraction (unique formulas)
+This section bridges raw DLDS structures to evaluation-ready GridLayers:
+- Formula universe extraction
 - Encoder generation for intro rules
-- Incoming map construction (wiring)
+- Incoming map (wiring) construction
 - Node and layer builders
-- Well-formedness predicates
-- Construction correctness theorem
+- Well-formedness predicates and construction correctness
 -/
 
 /-!
-### 6.1: DLDS Type Definitions
+### 7.1: DLDS Type Definitions
 -/
 
+/-- Propositional formula: atoms or implications. -/
 inductive Formula
   | atom (name : String)
   | impl (A B : Formula)
@@ -1688,6 +1728,7 @@ def Formula.toString : Formula → String
 instance : ToString Formula where
   toString := Formula.toString
 
+/-- Vertex in a DLDS: a formula occurrence at a specific level. -/
 structure Vertex where
   node : Nat
   LEVEL : Nat
@@ -1697,6 +1738,7 @@ structure Vertex where
   PAST : List Nat
   deriving Repr, DecidableEq
 
+/-- Deduction edge: connects two vertices with dependency tracking. -/
 structure Deduction where
   START : Vertex
   END : Vertex
@@ -1704,6 +1746,7 @@ structure Deduction where
   DEPENDENCY : List Formula
   deriving Repr, DecidableEq
 
+/-- Dag-Like Derivability Structure: vertices, edges, and auxiliary pairs. -/
 structure DLDS where
   V : List Vertex
   E : List Deduction
@@ -1711,52 +1754,49 @@ structure DLDS where
   deriving Repr, DecidableEq
 
 /-!
-### 6.2: Formula List Construction
+### 7.2: Formula Universe Construction
 -/
 
-/-- Extract the list of unique formulas from a DLDS -/
+/-- Extract the list of unique formulas from a DLDS.
+    This forms the "column universe" for the circuit grid. -/
 def buildFormulas (d : DLDS) : List Formula :=
   (d.V.map (·.FORMULA)).eraseDups
 
 /-!
-### 6.3: Encoder Generation
+### 7.3: Encoder Generation
 -/
 
-/-- Generate encoder vector for an intro rule
-    For A⊃B, creates a vector with bit i = true iff formulas[i] = A -/
+/-- Generate encoder vector for an implication introduction rule.
+    For A⊃B, creates a vector with bit i = true iff formulas[i] = A.
+    This encodes which assumption gets discharged. -/
 def encoderForIntro (formulas : List Formula) (φ : Formula)
-  : Option (List.Vector Bool formulas.length) :=
+    : Option (List.Vector Bool formulas.length) :=
   match φ with
   | .impl A _ =>
       some ⟨formulas.map (fun ψ => decide (ψ = A)), by rw [List.length_map]⟩
   | _ => none
 
 /-!
-### 6.4: Incoming Map Construction
+### 7.4: Incoming Map Construction
 -/
 
-/-- Build incoming wiring map for a single formula
+/-- Build incoming wiring map for a single formula.
 
-    Returns NodeIncoming = List RuleIncoming
-    where RuleIncoming = List (Nat × Nat) maps (source_column, edge_id)
+    Returns `NodeIncoming = List RuleIncoming` where each `RuleIncoming`
+    specifies (source_column, edge_id) pairs for a rule's inputs.
 
-    Rules created:
-    1. INTRO: A⊃B needs input from B (at its column index)
-    2. ELIM: φ needs inputs from (A⊃φ, A) for each such pair
-    3. REP: Needs input from same formula
--/
+    Rules created for formula φ:
+    - INTRO (if φ = A⊃B): needs input from column of B
+    - ELIM: for each A⊃φ in formulas, needs inputs from columns of A⊃φ and A
+    - REP: needs input from column of φ itself -/
 def buildIncomingMapForFormula
-  (formulas : List Formula)
-  (formula : Formula) : NodeIncoming :=
-
-  -- INTRO rules: A⊃B needs input from B
+    (formulas : List Formula)
+    (formula : Formula) : NodeIncoming :=
   let introMap := match formula with
     | .impl _ B =>
         let b_idx := formulas.idxOf B
         [[(b_idx, 0)]]
     | _ => []
-
-  -- ELIM rules: φ needs A⊃φ and A for each such A (for ANY formula φ)
   let elimMaps := formulas.zipIdx.filterMap fun (f, idx) =>
     match f with
     | .impl A B =>
@@ -1765,18 +1805,16 @@ def buildIncomingMapForFormula
           some [(idx, 0), (a_idx, 0)]
         else none
     | _ => none
-
   let self_idx := formulas.idxOf formula
   let repMap := [[(self_idx, 0)]]
-
   introMap ++ elimMaps ++ repMap
 
-/-- Build complete incoming map for all formulas -/
+/-- Build complete incoming map for all formulas. -/
 def buildIncomingMap (formulas : List Formula) : LayerIncoming :=
   formulas.map (buildIncomingMapForFormula formulas)
 
 /-!
-### 6.5: Node Construction
+### 7.5: Node Construction
 -/
 
 
@@ -1800,7 +1838,6 @@ lemma nodeForFormula_nodupIds (formulas : List Formula) (formula : Formula) :
   rw [List.nodup_iff_injective_get]
   intro ⟨i, hi⟩ ⟨j, hj⟩ heq
   ext
-  -- The key insight: ID at position k equals k
   have id_eq_pos : ∀ k (hk : k < (introRules ++ elimRules ++ repRules).length),
       (introRules ++ elimRules ++ repRules)[k].ruleId = k := by
     intro k hk
@@ -1808,24 +1845,18 @@ lemma nodeForFormula_nodupIds (formulas : List Formula) (formula : Formula) :
     simp only [List.length_append, List.length_map, List.length_zipIdx, List.length_singleton] at hk
     simp only [List.getElem_append]
     split_ifs with h1 h2
-    · -- k < introData.zipIdx.length
+    ·
       simp only [List.getElem_map, List.getElem_zipIdx, mkIntroRule]
       omega
-    · -- k in elim range
+    ·
       simp only [List.getElem_map, List.getElem_zipIdx, mkElimRule]
       simp only [List.length_map, List.length_zipIdx] at h1 h2 ⊢
-      -- The goal should be: introData.length + (0 + (k - introData.length)) = k
-      -- which simplifies to: introData.length + (k - introData.length) = k
-      -- Since h2 is ¬(k < introData.length), we have introData.length ≤ k
       have hle : introData.length ≤ k := Nat.not_lt.mp h2
       omega
-    · -- k is the rep rule
+    ·
       simp only [List.length_map, List.length_zipIdx] at h1
       simp only [List.getElem_singleton, mkRepetitionRule]
       simp only [List.length_map, List.length_zipIdx, List.length_append] at h1 hk
-      -- h1 : ¬(k < introData.length + elimData.length)
-      -- hk : k < introData.length + elimData.length + 1
-      -- So k = introData.length + elimData.length
       have hk_eq : k = introData.length + elimData.length := by omega
       subst hk_eq
       simp only [Nat.add_sub_cancel]
@@ -1837,18 +1868,17 @@ lemma nodeForFormula_nodupIds (formulas : List Formula) (formula : Formula) :
   rw [id_eq_pos i hi', id_eq_pos j hj'] at heq
   exact heq
 
-/-- Construct a circuit node for a formula at a given level
+/-- Construct a circuit node for a formula.
 
-    Creates rules:
-    - INTRO: If formula is A⊃B, discharge A
-    - ELIM: For each A⊃formula in formulas list, create elim rule
-    - REP: Identity rule
+    Creates rules with sequential IDs:
+    - INTRO (id=0): If formula is A⊃B, discharge assumption A
+    - ELIM (id=1,2,...): For each A⊃formula in the universe
+    - REP (id=last): Identity/structural rule
 -/
 
 def nodeForFormula (formulas : List Formula) (formula : Formula)
   : CircuitNode formulas.length :=
 
-  -- INTRO rules data (just the encoder, no ID yet)
   let introData := match formula with
     | .impl _ _ =>
         match encoderForIntro formulas formula with
@@ -1856,7 +1886,6 @@ def nodeForFormula (formulas : List Formula) (formula : Formula)
         | none => []
     | _ => []
 
-  -- ELIM rules data (just collect which source indices produce elim rules)
   let elimData := formulas.zipIdx.filterMap fun (f, idx) =>
     match f with
     | .impl _ B =>
@@ -1864,7 +1893,6 @@ def nodeForFormula (formulas : List Formula) (formula : Formula)
         else none
     | _ => none
 
-  -- Now build actual rules with sequential IDs
   let introRules := introData.zipIdx.map fun (encoder, pos) =>
     mkIntroRule pos encoder false
 
@@ -1880,10 +1908,11 @@ def nodeForFormula (formulas : List Formula) (formula : Formula)
   }
 
 /-!
-### 6.6: Layer Construction
+### 7.6: Layer Construction
 -/
 
-/-- Build all layers for a DLDS (one layer per level) -/
+/-- Build all layers for a DLDS.
+    Each layer is identical (same nodes and wiring), replicated for each level. -/
 def buildLayers (d : DLDS) : List (GridLayer (buildFormulas d).length) :=
   let formulas := buildFormulas d
   let maxLvl := (d.V.map (·.LEVEL)).foldl max 0
@@ -1893,7 +1922,7 @@ def buildLayers (d : DLDS) : List (GridLayer (buildFormulas d).length) :=
     }
 
 /-!
-### 6.7: Main Grid Constructor
+### 7.7: Main Grid Constructor
 -/
 
 /-- Build complete grid from DLDS
@@ -1905,14 +1934,12 @@ def buildGridFromDLDS (d : DLDS) : List (GridLayer (buildFormulas d).length) :=
   buildLayers d |>.reverse
 
 /-!
-### 6.8: Initial Vectors
+### 7.8: Initial Vectors
 -/
 
-/-- Create initial dependency vectors (one-hot encoding)
-
-    Vector i has bit j = true iff i = j
-    This encodes "formula i depends only on itself initially"
--/
+/-- Create initial dependency vectors (one-hot encoding).
+    Vector i has bit j = true iff i = j, encoding
+    "formula i initially depends only on itself." -/
 def initialVectorsFromDLDS (d : DLDS)
   : List (List.Vector Bool (buildFormulas d).length) :=
   let n := (buildFormulas d).length
@@ -1921,11 +1948,12 @@ def initialVectorsFromDLDS (d : DLDS)
       simp [List.length_map, List.length_range]⟩ : List.Vector Bool n)
 
 /-!
-### 6.9: Well-Formedness Predicates
+### 7.9: Well-Formedness Predicates
 -/
 
 /-- An intro rule is well-formed if its encoder correctly marks
-    the discharged assumption -/
+    the discharged assumption: bit i is true iff formulas[i] = A
+    where the formula is A⊃B. -/
 def IntroRuleWellFormed {n : Nat}
   (encoder : List.Vector Bool n)
   (formula : Formula)
@@ -1939,10 +1967,9 @@ def IntroRuleWellFormed {n : Nat}
   | _ => False
 
 /-- A grid is well-formed if:
-    1. Formula list length matches vector dimension
-    2. Each layer has incoming map of correct length
-    3. Each intro rule has correct encoder
--/
+    1. Formula list length matches vector dimension n
+    2. Each layer has n nodes and n incoming map entries
+    3. Each intro rule has a correct encoder for its formula -/
 def GridWellFormed {n : Nat}
   (formulas : List Formula)
   (grid : List (GridLayer n)) : Prop :=
@@ -1957,9 +1984,8 @@ def GridWellFormed {n : Nat}
         match rule.type with
         | RuleData.intro encoder => IntroRuleWellFormed encoder formula formulas
         | _ => True
-
 /-!
-### 6.10: Construction Correctness Theorem
+### 7.10: Construction Correctness
 -/
 
 lemma List.get_map' {α β : Type*} (f : α → β) (l : List α) (i : Fin l.length) :
@@ -1978,6 +2004,7 @@ lemma Fin.heq_of_val_eq {n m : Nat} (h : n = m) (i : Fin n) (j : Fin m) (hv : i.
   subst h
   exact heq_of_eq (Fin.ext hv)
 
+/-- Encoder for implication introduction is well-formed. -/
 lemma encoderForIntro_wellformed (formulas : List Formula) (A B : Formula) :
     match encoderForIntro formulas (Formula.impl A B) with
     | some encoder => IntroRuleWellFormed encoder (Formula.impl A B) formulas
@@ -1990,21 +2017,15 @@ lemma encoderForIntro_wellformed (formulas : List Formula) (A B : Formula) :
     simp only [List.Vector.get]
     have h_len : (formulas.map fun ψ => decide (ψ = A)).length = formulas.length := by simp
     have h_idx : i.val < (formulas.map fun ψ => decide (ψ = A)).length := by simp
-
-    -- Key: Fin.cast doesn't change the value
     have h_cast_val : (Fin.cast h_len.symm i).val = i.val := rfl
-
     constructor
     · intro h
       use i.isLt
-      -- h : (formulas.map ...).get (Fin.cast _ i) = true
-      -- We know (Fin.cast _ i).val = i.val
       have h' : (formulas.map fun ψ => decide (ψ = A)).get ⟨i.val, h_idx⟩ = true := by
         have : (Fin.cast h_len.symm i) = ⟨i.val, h_idx⟩ := by
           ext; rfl
         rw [← this]; exact h
       have h_map := List.get_map' (fun ψ => decide (ψ = A)) formulas ⟨i.val, i.isLt⟩
-      -- h_map : (formulas.map _).get ⟨i.val, _⟩ = decide (formulas.get ⟨i.val, i.isLt⟩ = A)
       have h_idx_eq : (⟨i.val, h_idx⟩ : Fin (formulas.map _).length) = ⟨i.val, by simp⟩ := by
         ext; rfl
       rw [h_idx_eq] at h'
@@ -2024,6 +2045,7 @@ lemma encoderForIntro_wellformed (formulas : List Formula) (A B : Formula) :
       rw [h_cast_eq]
       exact h_goal
 
+/-- Atom nodes have no intro rules (only elim and rep). -/
 lemma nodeForFormula_atom_rules_wellformed (formulas : List Formula) (name : String) :
     ∀ rule ∈ (nodeForFormula formulas (Formula.atom name)).rules,
       match rule.type with
@@ -2049,8 +2071,9 @@ lemma nodeForFormula_atom_rules_wellformed (formulas : List Formula) (name : Str
     subst h_rep
     simp only [mkRepetitionRule]
 
+/-- Implication nodes have well-formed intro rules. -/
 lemma nodeForFormula_impl_rules_wellformed (formulas : List Formula) (A B : Formula) :
-    ∀ rule ∈ (nodeForFormula formulas  (Formula.impl A B)).rules,
+    ∀ rule ∈ (nodeForFormula formulas (Formula.impl A B)).rules,
       match rule.type with
       | RuleData.intro encoder => IntroRuleWellFormed encoder (Formula.impl A B) formulas
       | RuleData.elim => True
@@ -2063,7 +2086,6 @@ lemma nodeForFormula_impl_rules_wellformed (formulas : List Formula) (A B : Form
     rw [List.mem_append] at h_left
     cases h_left with
     | inl h_intro =>
-      -- In introRules - this is List.map over zipIdx of a singleton
       have h_enc_eq : encoderForIntro formulas (Formula.impl A B) =
           some ⟨formulas.map (fun ψ => decide (ψ = A)), by simp⟩ := rfl
       simp only [h_enc_eq] at h_intro
@@ -2071,7 +2093,6 @@ lemma nodeForFormula_impl_rules_wellformed (formulas : List Formula) (A B : Form
       obtain ⟨⟨encoder, pos⟩, h_mem_zipIdx, hf_eq⟩ := h_intro
       subst hf_eq
       simp only [mkIntroRule]
-      -- Now need to show IntroRuleWellFormed for the encoder
       simp only [List.zipIdx_singleton, List.mem_singleton, Prod.mk.injEq] at h_mem_zipIdx
       obtain ⟨h_enc, h_pos⟩ := h_mem_zipIdx
       subst h_enc h_pos
@@ -2079,7 +2100,6 @@ lemma nodeForFormula_impl_rules_wellformed (formulas : List Formula) (A B : Form
       simp only [h_enc_eq] at h_wf
       exact h_wf
     | inr h_elim =>
-      -- In elimRules - this is List.map over zipIdx
       rw [List.mem_map] at h_elim
       obtain ⟨⟨srcIdx, pos⟩, _, hf_eq⟩ := h_elim
       subst hf_eq
@@ -2089,6 +2109,7 @@ lemma nodeForFormula_impl_rules_wellformed (formulas : List Formula) (A B : Form
     subst h_rep
     simp only [mkRepetitionRule]
 
+/-- All rules in a constructed node are well-formed. -/
 lemma nodeForFormula_rules_wellformed (formulas : List Formula) (formula : Formula) :
     ∀ rule ∈ (nodeForFormula formulas formula).rules,
       match rule.type with
@@ -2111,6 +2132,7 @@ lemma buildIncomingMap_length (formulas : List Formula) :
     (buildIncomingMap formulas).length = formulas.length := by
   simp only [buildIncomingMap, List.length_map]
 
+/-- **Construction Correctness**: The grid built from a DLDS is well-formed. -/
 theorem buildGridFromDLDS_wellformed (d : DLDS) :
     GridWellFormed (buildFormulas d) (buildGridFromDLDS d) := by
   unfold GridWellFormed
@@ -2159,56 +2181,45 @@ theorem buildGridFromDLDS_wellformed (d : DLDS) :
         convert h_wf using 2
       | RuleData.elim => trivial
       | RuleData.repetition => trivial
-
 /-!
-### 6.11: Main Evaluation Function
+### 7.11: Main Evaluation Function
 -/
 
-/-- Evaluate a DLDS with a given path and goal column
-
+/-- Evaluate a DLDS with a given path and goal column.
     This is the main entry point for checking if a DLDS proof is valid
-    under a specific path assignment.
--/
+    under a specific path assignment. -/
 def evaluateDLDS (d : DLDS) (paths : PathInput) (goal_column : Nat) : Bool :=
   let grid := buildGridFromDLDS d
   let initial_vecs := initialVectorsFromDLDS d
   evaluateCircuit grid initial_vecs paths goal_column
 
 /-!
-### 6.12: Main Correctness Theorem
+### 7.12: Main Correctness Theorem
 -/
 
-/-- MAIN THEOREM: DLDS evaluation is correct
+/-- **Main Theorem**: DLDS evaluation is correct.
 
-    If evaluateDLDS returns true, then either:
-    1. The path is structurally invalid (routing error), OR
-    2. The path is valid AND all assumptions are discharged at the goal
+    If `evaluateDLDS` returns true, then either:
+    1. The path is structurally invalid (routing conflict detected), OR
+    2. The path represents a valid proof with all assumptions discharged.
 
-    This theorem combines:
-    - Grid construction correctness (buildGridFromDLDS_wellformed)
-    - Circuit evaluation correctness (circuit_correctness)
--/
+    This combines grid construction correctness (`buildGridFromDLDS_wellformed`)
+    with circuit evaluation correctness (`circuit_correctness`). -/
 theorem dlds_evaluation_correct
-  (d : DLDS)
-  (paths : PathInput)
-  (goal_column : Nat)
-  (h_accept : evaluateDLDS d paths goal_column = true) :
-  let grid := buildGridFromDLDS d
-  let initial_vecs := initialVectorsFromDLDS d
-  PathStructurallyInvalid paths grid initial_vecs
-  ∨
-  (PathRepresentsValidProof paths grid initial_vecs ∧
-   AllAssumptionsDischarged paths grid initial_vecs goal_column) := by
-
-  -- Unfold definitions
+    (d : DLDS)
+    (paths : PathInput)
+    (goal_column : Nat)
+    (h_accept : evaluateDLDS d paths goal_column = true) :
+    let grid := buildGridFromDLDS d
+    let initial_vecs := initialVectorsFromDLDS d
+    PathStructurallyInvalid paths grid initial_vecs
+    ∨
+    (PathRepresentsValidProof paths grid initial_vecs ∧
+     AllAssumptionsDischarged paths grid initial_vecs goal_column) := by
   let grid := buildGridFromDLDS d
   let formulas := buildFormulas d
   let initial_vecs := initialVectorsFromDLDS d
-
-  -- Well-formedness from construction
   have h_wf := buildGridFromDLDS_wellformed d
-
-  -- Apply the general circuit correctness theorem
   unfold evaluateDLDS at h_accept
   exact circuit_correctness grid initial_vecs paths goal_column h_accept
 
