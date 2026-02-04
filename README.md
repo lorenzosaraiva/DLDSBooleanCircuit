@@ -25,7 +25,7 @@ This allows you to experiment with the definitions without setting up Lean local
 
 1. Install [Lean 4](https://lean-lang.org/) (version ≥ 4.8 recommended).  
 2. Clone this repository:
-   git clone https://github.com/<your-username>/DLDSBooleanCircuit.git
+   git clone https://github.com/lorenzosaraiva/DLDSBooleanCircuit.git
    cd DLDSBooleanCircuit
 3. Open DLDSBooleanCircuit.lean in VS Code with the Lean4 extension, or build it with:
    lake build
@@ -43,13 +43,28 @@ No local setup required.
 > [jeffsantos/lean-project-template](https://github.com/jeffsantos/lean-project-template).
 
 
-### 4. Repository contents
+### 4. Repository Contents
 
-DLDSBooleanCircuit.lean – main Lean development, including:
-- Definition of circuit nodes and activation rules
-- Layer-by-layer grid evaluation with error detection
-- Goal node semantics
-- Global soundness theorem (circuit correctness)
+**`DLDSBooleanCircuit.lean`** (~1400 lines) – Complete Lean 4 formalization with:
+
+- **Core circuit types** (Section 1): Rules, activation bits, circuit nodes with XOR-based conflict detection
+- **Boolean circuit logic** (Section 2): `multiple_xor` exactly-one-true checker, node evaluation functions
+- **Correctness proofs** (Sections 3-5): 
+  - `multiple_xor_bool_iff_exactlyOneActive` – XOR ↔ exactly-one-active equivalence
+  - `node_correct` – Single-node correctness theorem
+- **Path-based evaluation** (Section 6): Token propagation, routing-aware node logic, layer evaluation
+  - `circuit_correctness` – **Main soundness theorem**: circuit acceptance implies structural error OR valid proof with discharged assumptions
+- **DLDS grid construction** (Section 7): Formula universe extraction, encoder generation, grid builders
+  - `dlds_evaluation_correct` – **End-to-end correctness**: combines grid construction + circuit evaluation
+- **Test cases**: Identity combinator, hypothetical syllogism, incomplete proof (undischarged assumptions)
+
+**Key theorem**:
+```lean
+theorem circuit_correctness : 
+  evaluateCircuit = true → 
+    PathStructurallyInvalid ∨ 
+    (PathRepresentsValidProof ∧ AllAssumptionsDischarged)
+```
 
 ### 5. Reference
 
