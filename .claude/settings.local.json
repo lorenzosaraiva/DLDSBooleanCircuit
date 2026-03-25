@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(elan toolchain:*)",
+      "Bash(elan show:*)",
+      "Bash(elan override:*)",
+      "Bash(npm --version)",
+      "Bash(lake build:*)"
+    ]
+  }
+}

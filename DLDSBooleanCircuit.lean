@@ -960,7 +960,7 @@ lemma list_zipIdx_get_fst {α : Type*} (l : List α) (n : Nat) (i : Nat)
   | nil => simp at hi'
   | cons x xs ih =>
     cases i with
-    | zero => simp [List.zipIdx]
+    | zero => simp
     | succ i' => simp only [List.zipIdx_cons, List.get_cons_succ]; apply ih
 
 
@@ -1392,7 +1392,7 @@ lemma indexOf_eq_of_get {α : Type*} [DecidableEq α] {l : List α} {a : α} {i 
       have h_nodup' : xs.Nodup := (List.nodup_cons.mp h_nodup).2
       have ih_result := ih hi' h_nodup' h_get
       simp only [List.idxOf, List.findIdx_cons]
-      have h_ne_beq : (x == a) = false := by simp [beq_iff_eq, h_ne]
+      have h_ne_beq : (x == a) = false := by simp [h_ne]
       simp only [h_ne_beq, cond_false]
       simp only [List.idxOf] at ih_result
       rw [ih_result]
@@ -1854,12 +1854,12 @@ lemma nodeForFormula_nodupIds (formulas : List Formula) (formula : Formula) :
       have hle : introData.length ≤ k := Nat.not_lt.mp h2
       omega
     ·
-      simp only [List.length_map, List.length_zipIdx] at h1
+      simp only at h1
       simp only [List.getElem_singleton, mkRepetitionRule]
       simp only [List.length_map, List.length_zipIdx, List.length_append] at h1 hk
       have hk_eq : k = introData.length + elimData.length := by omega
       subst hk_eq
-      simp only [Nat.add_sub_cancel]
+      simp only
   simp only [List.get_eq_getElem, List.getElem_map] at heq
   have hi' : i < (introRules ++ elimRules ++ repRules).length := by
     simp only [List.length_map] at hi; exact hi
@@ -2224,6 +2224,45 @@ theorem dlds_evaluation_correct
   exact circuit_correctness grid initial_vecs paths goal_column h_accept
 
 #check @dlds_evaluation_correct
+
+/-!
+### 7.13: Global Acceptance and Correctness
+
+The paper defines global acceptance as the conjunction over all path assignments:
+  Accept = ∧_P acc(P)
+
+Since `dlds_evaluation_correct` is universally quantified over `paths`, the global
+result follows: if every path assignment is accepted, then every path is either
+structurally invalid or represents a valid proof with all assumptions discharged.
+-/
+
+/-- Global acceptance: the circuit accepts a DLDS iff it evaluates to true
+    on ALL path assignments. -/
+def DLDSGloballyAccepted (d : DLDS) (goal_column : Nat) : Prop :=
+  ∀ paths : PathInput, evaluateDLDS d paths goal_column = true
+
+/-- **Global Soundness Theorem**: If the DLDS is globally accepted
+    (i.e., the circuit evaluates to true on every path assignment),
+    then for every path, either:
+    1. The path is structurally invalid, OR
+    2. The path represents a valid proof with all assumptions discharged.
+
+    This is the global version of `dlds_evaluation_correct`, corresponding
+    to the paper's Accept = ∧_P acc(P) definition. -/
+theorem dlds_global_soundness
+    (d : DLDS)
+    (goal_column : Nat)
+    (h_global : DLDSGloballyAccepted d goal_column) :
+    ∀ paths : PathInput,
+      let grid := buildGridFromDLDS d
+      let initial_vecs := initialVectorsFromDLDS d
+      PathStructurallyInvalid paths grid initial_vecs
+      ∨
+      (PathRepresentsValidProof paths grid initial_vecs ∧
+       AllAssumptionsDischarged paths grid initial_vecs goal_column) :=
+  fun paths => dlds_evaluation_correct d paths goal_column (h_global paths)
+
+#check @dlds_global_soundness
 
 /-!
 # DLDS Circuit Evaluation Tests
