@@ -2264,6 +2264,39 @@ theorem dlds_global_soundness
 
 #check @dlds_global_soundness
 
+/-- **Global Completeness**: If every well-formed path in a DLDS leads to
+    discharged assumptions, the circuit accepts all paths. -/
+theorem dlds_global_completeness
+    (d : DLDS)
+    (goal_column : Nat)
+    (h_all_valid : ∀ paths : PathInput,
+      let grid := buildGridFromDLDS d
+      let initial_vecs := initialVectorsFromDLDS d
+      PathStructurallyInvalid paths grid initial_vecs
+      ∨
+      (PathRepresentsValidProof paths grid initial_vecs ∧
+       AllAssumptionsDischarged paths grid initial_vecs goal_column)) :
+    DLDSGloballyAccepted d goal_column :=
+  fun paths => (dlds_evaluation_iff d paths goal_column).mpr (h_all_valid paths)
+
+/-- **Global Correctness (iff)**: A DLDS is globally accepted if and only if
+    every path is either structurally invalid or a valid closed derivation. -/
+theorem dlds_global_iff
+    (d : DLDS)
+    (goal_column : Nat) :
+    DLDSGloballyAccepted d goal_column
+    ↔
+    (∀ paths : PathInput,
+      let grid := buildGridFromDLDS d
+      let initial_vecs := initialVectorsFromDLDS d
+      PathStructurallyInvalid paths grid initial_vecs
+      ∨
+      (PathRepresentsValidProof paths grid initial_vecs ∧
+       AllAssumptionsDischarged paths grid initial_vecs goal_column)) :=
+  ⟨dlds_global_soundness d goal_column, dlds_global_completeness d goal_column⟩
+
+#check @dlds_global_iff
+
 /-!
 # DLDS Circuit Evaluation Tests
 
