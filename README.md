@@ -1,7 +1,7 @@
 # DLDS Boolean Circuit in Lean
 
 This repository contains the Lean 4 formalization accompanying the paper  
-**"From Dag-Like Proofs to Boolean Circuits in Lean" (FoIKS 2026 submission)**.  
+**"From Dag-Like Proofs to Boolean Circuits in Lean" **.  
 
 The development proves the correctness of a Boolean circuit construction
 that encodes horizontally compressed Natural Deduction proofs
