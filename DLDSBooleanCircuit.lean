@@ -1700,6 +1700,96 @@ theorem circuit_correctness {n : Nat}
         left
         omega
 
+
+/-- **Circuit Completeness Theorem**:
+    If the path represents a valid proof (no structural error) and all
+    assumptions are discharged, then `evaluateCircuit` returns true.
+
+    This is the converse of `circuit_correctness`, establishing that the
+    circuit faithfully characterizes validity: it accepts if and only if
+    the path is either structurally invalid or a valid closed derivation. -/
+
+theorem circuit_completeness {n : Nat}
+    (layers : List (GridLayer n))
+    (initial_vectors : List (List.Vector Bool n))
+    (paths : PathInput)
+    (goal_column : Nat)
+    (h_valid : PathRepresentsValidProof paths layers initial_vectors)
+    (h_discharged : AllAssumptionsDischarged paths layers initial_vectors goal_column) :
+    evaluateCircuit layers initial_vectors paths goal_column = true := by
+  unfold evaluateCircuit
+  cases h_eval : get_eval_result layers initial_vectors paths with
+  | mk final_outputs had_error =>
+  -- Since path is valid, had_error = false
+  have h_no_error : had_error = false := by
+    unfold PathRepresentsValidProof PathStructurallyInvalid at h_valid
+    rw [h_eval] at h_valid
+    simp at h_valid
+    exact h_valid
+  simp only
+  by_cases h_bounds : goal_column < final_outputs.length
+  · -- In bounds: show all_discharged = true
+    simp only [h_bounds, dite_true, h_no_error, Bool.false_or]
+    unfold AllAssumptionsDischarged at h_discharged
+    rw [h_eval] at h_discharged
+    simp at h_discharged
+    cases h_discharged with
+    | inl h_ge => omega
+    | inr h_all =>
+      obtain ⟨h_lt, h_all_false⟩ := h_all
+      have : (final_outputs.get ⟨goal_column, h_lt⟩).toList.all (· = false) = true := by
+        rw [List.all_eq_true]
+        intro b hb
+        simp only [decide_eq_true_eq]
+        by_contra h_ne
+        have hb_true : b = true := by cases b <;> simp_all
+        subst hb_true
+        -- Get the underlying list
+        obtain ⟨l, hl⟩ := final_outputs.get ⟨goal_column, h_lt⟩
+        simp [List.Vector.toList] at hb
+        rw [List.mem_iff_get] at hb
+        obtain ⟨⟨idx, hidx⟩, hget⟩ := hb
+        have idx_lt_n : idx < n := by
+          have := (final_outputs[goal_column]).2
+          omega
+        have := h_all_false ⟨idx, idx_lt_n⟩
+        simp [List.Vector.get] at this
+        simp_all
+      exact this
+  · -- Out of bounds: vacuously true
+    simp [h_bounds]
+
+/-- Circuit correctness is an iff: the circuit accepts if and only if the path
+    is structurally invalid or represents a valid proof with all assumptions
+    discharged. This combines `circuit_correctness` and `circuit_completeness`
+    with the trivial observation that structural invalidity implies acceptance. -/
+theorem circuit_iff {n : Nat}
+    (layers : List (GridLayer n))
+    (initial_vectors : List (List.Vector Bool n))
+    (paths : PathInput)
+    (goal_column : Nat) :
+    evaluateCircuit layers initial_vectors paths goal_column = true
+    ↔
+    PathStructurallyInvalid paths layers initial_vectors
+    ∨
+    (PathRepresentsValidProof paths layers initial_vectors ∧
+     AllAssumptionsDischarged paths layers initial_vectors goal_column) := by
+  constructor
+  · exact circuit_correctness layers initial_vectors paths goal_column
+  · intro h
+    cases h with
+    | inl h_invalid =>
+      -- Structural error → had_error = true → had_error || _ = true
+      unfold evaluateCircuit
+      unfold PathStructurallyInvalid at h_invalid
+      cases h_eval : get_eval_result layers initial_vectors paths with
+      | mk final_outputs had_error =>
+        rw [h_eval] at h_invalid
+        simp at h_invalid
+        simp [h_invalid]
+    | inr h =>
+      exact circuit_completeness layers initial_vectors paths goal_column h.1 h.2
+
 /-!
 ## Section 7: DLDS Grid Construction
 
@@ -2224,6 +2314,39 @@ theorem dlds_evaluation_correct
   exact circuit_correctness grid initial_vecs paths goal_column h_accept
 
 #check @dlds_evaluation_correct
+
+
+/-- **DLDS Completeness**: If a path represents a valid proof with all
+    assumptions discharged, the circuit accepts it. -/
+theorem dlds_evaluation_complete
+    (d : DLDS)
+    (paths : PathInput)
+    (goal_column : Nat)
+    (h_valid : PathRepresentsValidProof paths (buildGridFromDLDS d) (initialVectorsFromDLDS d))
+    (h_discharged : AllAssumptionsDischarged paths (buildGridFromDLDS d) (initialVectorsFromDLDS d) goal_column) :
+    evaluateDLDS d paths goal_column = true := by
+  unfold evaluateDLDS
+  exact circuit_completeness (buildGridFromDLDS d) (initialVectorsFromDLDS d) paths goal_column h_valid h_discharged
+
+/-- **DLDS Correctness (iff)**: The circuit accepts a path if and only if
+    it is structurally invalid or represents a valid closed derivation.
+    This establishes that the circuit faithfully characterizes DLDS validity. -/
+theorem dlds_evaluation_iff
+    (d : DLDS)
+    (paths : PathInput)
+    (goal_column : Nat) :
+    evaluateDLDS d paths goal_column = true
+    ↔
+    let grid := buildGridFromDLDS d
+    let initial_vecs := initialVectorsFromDLDS d
+    PathStructurallyInvalid paths grid initial_vecs
+    ∨
+    (PathRepresentsValidProof paths grid initial_vecs ∧
+     AllAssumptionsDischarged paths grid initial_vecs goal_column) := by
+  unfold evaluateDLDS
+  exact circuit_iff (buildGridFromDLDS d) (initialVectorsFromDLDS d) paths goal_column
+
+#check @dlds_evaluation_iff
 
 /-!
 ### 7.13: Global Acceptance and Correctness
