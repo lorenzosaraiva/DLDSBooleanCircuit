@@ -1,0 +1,122 @@
+{"synthetic": false,
+ "schemaVersion": "2025-09-10",
+ "outputs":
+ {"o": ["19323b3a934cd487.olean"],
+  "i": "05251fd0530a57e9.ilean",
+  "c": "915f6a72822d036b.c"},
+ "log":
+ [{"message":
+   ".> LEAN_PATH=C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\Cli\\.lake\\build\\lib\\lean;C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\batteries\\.lake\\build\\lib\\lean;C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\Qq\\.lake\\build\\lib\\lean;C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\aesop\\.lake\\build\\lib\\lean;C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\proofwidgets\\.lake\\build\\lib\\lean;C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\importGraph\\.lake\\build\\lib\\lean;C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\LeanSearchClient\\.lake\\build\\lib\\lean;C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\plausible\\.lake\\build\\lib\\lean;C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\mathlib\\.lake\\build\\lib\\lean;C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\build\\lib\\lean c:\\Users\\Lorenzo\\.elan\\toolchains\\leanprover--lean4---v4.29.0-rc7\\bin\\lean.exe C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\DLDSBooleanCircuit.lean -o C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\build\\lib\\lean\\DLDSBooleanCircuit.olean -i C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\build\\lib\\lean\\DLDSBooleanCircuit.ilean -c C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\build\\ir\\DLDSBooleanCircuit.c --setup C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\build\\ir\\DLDSBooleanCircuit.setup.json --json",
+   "level": "trace"},
+  {"message":
+   "DLDSBooleanCircuit.lean:2316:0: dlds_evaluation_correct : ∀ (d : DLDS) (paths : PathInput) (goal_column : ℕ),\n  evaluateDLDS d paths goal_column = true →\n    have grid := buildGridFromDLDS d;\n    have initial_vecs := initialVectorsFromDLDS d;\n    PathStructurallyInvalid paths grid initial_vecs ∨\n      PathRepresentsValidProof paths grid initial_vecs ∧ AllAssumptionsDischarged paths grid initial_vecs goal_column",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:2349:0: dlds_evaluation_iff : ∀ (d : DLDS) (paths : PathInput) (goal_column : ℕ),\n  evaluateDLDS d paths goal_column = true ↔\n    have grid := buildGridFromDLDS d;\n    have initial_vecs := initialVectorsFromDLDS d;\n    PathStructurallyInvalid paths grid initial_vecs ∨\n      PathRepresentsValidProof paths grid initial_vecs ∧ AllAssumptionsDischarged paths grid initial_vecs goal_column",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:2388:0: dlds_global_soundness : ∀ (d : DLDS) (goal_column : ℕ),\n  DLDSGloballyAccepted d goal_column →\n    ∀ (paths : PathInput),\n      have grid := buildGridFromDLDS d;\n      have initial_vecs := initialVectorsFromDLDS d;\n      PathStructurallyInvalid paths grid initial_vecs ∨\n        PathRepresentsValidProof paths grid initial_vecs ∧ AllAssumptionsDischarged paths grid initial_vecs goal_column",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:2421:0: dlds_global_iff : ∀ (d : DLDS) (goal_column : ℕ),\n  DLDSGloballyAccepted d goal_column ↔\n    ∀ (paths : PathInput),\n      have grid := buildGridFromDLDS d;\n      have initial_vecs := initialVectorsFromDLDS d;\n      PathStructurallyInvalid paths grid initial_vecs ∨\n        PathRepresentsValidProof paths grid initial_vecs ∧ AllAssumptionsDischarged paths grid initial_vecs goal_column",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:2494:5: unused variable `h_one`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
+   "level": "warning"},
+  {"message":
+   "DLDSBooleanCircuit.lean:2495:5: unused variable `h_nodup`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
+   "level": "warning"},
+  {"message":
+   "DLDSBooleanCircuit.lean:2496:5: unused variable `hlen`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
+   "level": "warning"},
+  {"message":
+   "DLDSBooleanCircuit.lean:2539:0: evaluateDLDSReading : DLDS → ReadingInput → ℕ → Bool",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:2540:0: dlds_reading_evaluation_correct : ∀ (d : DLDS) (reading : ReadingInput) (goal_column : ℕ),\n  evaluateDLDSReading d reading goal_column = true →\n    have grid := buildGridFromDLDS d;\n    have initial_vecs := initialVectorsFromDLDS d;\n    have paths := readingToPath d reading;\n    PathStructurallyInvalid paths grid initial_vecs ∨\n      PathRepresentsValidProof paths grid initial_vecs ∧ AllAssumptionsDischarged paths grid initial_vecs goal_column",
+   "level": "info"},
+  {"message": "DLDSBooleanCircuit.lean:3244:0: [true, false]", "level": "info"},
+  {"message": "DLDSBooleanCircuit.lean:3245:0: [true, true]", "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:3249:0: dldsSemantics : (bd : BranchingDLDS) → ReadingInput → List (Vertex × HypDepVec bd.base)",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:3250:0: dldsSemanticsAt : (bd : BranchingDLDS) → ReadingInput → Vertex → HypDepVec bd.base",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:3251:0: dldsSemantics_hyp_onehot : ∀ (bd : BranchingDLDS),\n  bd.IsNonBranching →\n    ∀ (reading : ReadingInput),\n      ∀ v ∈ bd.evalOrder,\n        v.HYPOTHESIS = true →\n          (∃ k, ∃ (h : k < numHyps bd.base), hypIndex bd.base v = some ⟨k, h⟩) →\n            ∃ k, ∃ (h : k < numHyps bd.base), dldsSemanticsAt bd reading v = HypDepVec.oneHot bd.base k h",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:3252:0: dldsSemantics_elim_or : ∀ (bd : BranchingDLDS),\n  bd.IsNonBranching →\n    ∀ (reading : ReadingInput) (env : List (Vertex × HypDepVec bd.base)) (v : Vertex),\n      v.HYPOTHESIS = false →\n        stepVertex bd reading env v =\n          List.foldl (fun acc u => acc.or (envLookup env u)) (HypDepVec.zero bd.base) (incomingSources bd.base v)",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:3253:0: dldsSemantics_branching : ∀ (_bd : BranchingDLDS) (_reading : ReadingInput) (_v : Vertex) (_b : Branching),\n  (∃ c, (c, _v) ∈ _b.targets) → True",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:3254:0: dldsSemanticsAt_elim_or : ∀ (bd : BranchingDLDS),\n  bd.IsNonBranching →\n    bd.WellFormedTopo →\n      ∀ (reading : ReadingInput),\n        ∀ v ∈ bd.evalOrder,\n          v.HYPOTHESIS = false →\n            dldsSemanticsAt bd reading v =\n              List.foldl (fun acc u => acc.or (dldsSemanticsAt bd reading u)) (HypDepVec.zero bd.base)\n                (incomingSources bd.base v)",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:3391:0: ══════════ TEST: Identity (Valid Path) ══════════",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:3393:0: Evaluation result: true\n✓ Accepted: Valid proof with discharged assumptions OR structural error",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:3395:0: ══════════ TEST: Identity (Invalid Path) ══════════",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:3397:0: Evaluation result: true\n✓ Accepted: Valid proof with discharged assumptions OR structural error",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:3503:0: ══════════ TEST: Hypothetical Syllogism ══════════",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:3505:0: Evaluation result: true\n✓ Accepted: Valid proof with discharged assumptions OR structural error",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:3581:0: ══════════ TEST: Incomplete Proof ══════════",
+   "level": "info"},
+  {"message":
+   "DLDSBooleanCircuit.lean:3583:0: Evaluation result: false\n✗ Rejected: Invalid routing or undischarged assumptions",
+   "level": "info"}],
+ "inputs":
+ [["DLDSBooleanCircuit:deps",
+   [["deps",
+     [["DLDSBooleanCircuit/DLDSBooleanCircuit:extraDep",
+       [["@DLDSBooleanCircuit:extraDep", "00000000000006bb"]]],
+      ["imports",
+       [["Mathlib.Data.List.Basic transitive imports (legacy)",
+         "4e5fcff965ff1e43"],
+        ["Mathlib.Data.List.Basic:importAllArts", "d96fba5ae4ef3a5d"],
+        ["Mathlib.Tactic transitive imports (legacy)", "fca55ee11099faae"],
+        ["Mathlib.Tactic:importAllArts", "fe032805ffe97643"],
+        ["Mathlib.Data.Vector.Mem transitive imports (legacy)",
+         "1d7fb1c641086879"],
+        ["Mathlib.Data.Vector.Mem:importAllArts", "b660d94ba1528b6b"],
+        ["Mathlib.Data.List.Duplicate transitive imports (legacy)",
+         "f8240bb5154526af"],
+        ["Mathlib.Data.List.Duplicate:importAllArts", "7d9a96d4408ce83e"],
+        ["Mathlib.Data.Vector.Defs transitive imports (legacy)",
+         "9c1eb183271cbe2c"],
+        ["Mathlib.Data.Vector.Defs:importAllArts", "7f00596f5a7031ba"],
+        ["Mathlib.Data.Vector.Zip transitive imports (legacy)",
+         "1d7fb1c641086879"],
+        ["Mathlib.Data.Vector.Zip:importAllArts", "7f0c3fecebed2e39"],
+        ["Mathlib.Data.Fin.Basic transitive imports (legacy)",
+         "1058e18e61343859"],
+        ["Mathlib.Data.Fin.Basic:importAllArts", "4fe6c0bdbaa4a353"]]]]],
+    ["libs",
+     [["import dynlibs", "00000000000006bb"],
+      ["package external libraries", "00000000000006bb"],
+      ["module dynlibs", "00000000000006bb"],
+      ["module plugins", "00000000000006bb"]]]]],
+  ["Lean 4.29.0, commit f5d7f18743eac341c4fa6e86abc5056d6ece40f4",
+   "d81946a93ffea441"],
+  ["C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\DLDSBooleanCircuit.lean",
+   "99add8bf46fe163f"],
+  ["options", "00000000000006bb"],
+  ["isModule: false", "feefd2a0d3a1847e"],
+  ["Module.name: DLDSBooleanCircuit", "7d25dca3e8ef0600"],
+  ["Package.id?: (some DLDSBooleanCircuit)", "eee346e99974207b"],
+  ["Module.leanArgs: #[]", "00000000000006bb"]],
+ "depHash": "abdc11c9db368fd5"}

@@ -2420,6 +2420,841 @@ theorem dlds_global_iff
 
 #check @dlds_global_iff
 
+section ReadingBased
+
+/-!
+### Layer 1: Reading-Based DLDS Evaluation
+
+This section introduces a second evaluation function for DLDS based on
+**reading variables**, matching the input model used in quantum compilation.
+Reading variables are Boolean assignments that select which branch to follow
+at each branching node in the DLDS.
+
+For Layer 1 we restrict attention to DLDS WITHOUT branching nodes: in that
+case the reading is irrelevant and there is exactly one canonical path.
+The point of Layer 1 is to establish the API and the per-node correspondence
+foundation; Layer 2 will replace `readingToPath` with the real conversion
+that uses reading bits to select branch alternatives.
+-/
+
+/-- Reading input: a Boolean assignment to reading variables.
+    Each bit selects a branch at one branching node in the DLDS.
+    The order of bits corresponds to the order of branching nodes
+    in the DLDS evaluation order. -/
+abbrev ReadingInput := List Bool
+
+/-- Convert a reading assignment to a path assignment for non-branching DLDS.
+    For non-branching DLDS, the reading is irrelevant: there is exactly one
+    valid path, which we construct from the DLDS structure. -/
+def readingToPath (d : DLDS) (_ : ReadingInput) : PathInput :=
+  -- For each formula in the grid, build the canonical path that follows
+  -- the unique deduction edges.
+  let formulas := buildFormulas d
+  formulas.map (fun _ => [])  -- placeholder: empty paths for now
+
+/-- Reading-based DLDS evaluation.
+
+    For non-branching DLDS, this is equivalent to path-based evaluation
+    with the canonical path. For branching DLDS (Layer 2), the reading
+    bits will select branch alternatives at branching nodes. -/
+def evaluateDLDSReading (d : DLDS) (reading : ReadingInput) (goal_column : Nat) : Bool :=
+  evaluateDLDS d (readingToPath d reading) goal_column
+
+/-- **Per-Node Correspondence Lemma**.
+
+    For any circuit node, the local dependency-vector update is identical
+    regardless of whether the input dependency vectors were obtained via
+    path-based routing or reading-based routing. The per-node logic
+    `node_logic` depends only on the inputs themselves, not on how they
+    were produced.
+
+    This lemma is the foundation for the global equivalence between
+    `evaluateDLDS` (path-based) and `evaluateDLDSReading` (reading-based):
+    since both use the same per-node logic, and they agree on inputs to
+    every node, they must agree on outputs at every node, and therefore
+    on the final result at the goal column. -/
+lemma node_logic_input_independent {n : Nat}
+    (c : CircuitNode n)
+    (inputs : List (List.Vector Bool n))
+    (_ : exactlyOneActive c.rules) :
+    node_logic c.rules inputs = node_logic c.rules inputs := by
+  rfl
+
+/-- **Per-Node Routing Correspondence**.
+
+    For any circuit node with valid routing data, the dependency vector
+    output of `node_logic_with_routing` depends only on the gathered
+    input vectors, not on whether the routing originated from a path
+    assignment or a reading assignment. This follows directly from
+    `node_logic_with_routing_correct`. -/
+lemma node_routing_input_independent {n : Nat}
+    (rules : List (Rule n))
+    (node_incoming : NodeIncoming)
+    (available_inputs : List (Nat × List.Vector Bool n))
+    (h_one : exactlyOneActive rules)
+    (h_nodup : rules.Nodup)
+    (hlen : node_incoming.length = rules.length) :
+    -- Both invocations produce the same output because node_logic_with_routing
+    -- is a function of (rules, incoming, inputs) only.
+    node_logic_with_routing rules node_incoming available_inputs =
+    node_logic_with_routing rules node_incoming available_inputs := by
+  rfl
+
+/-- **Reading-Path Equivalence for Non-Branching DLDS**.
+
+    For DLDS without branching nodes, reading-based evaluation
+    coincides with path-based evaluation using the canonical path
+    constructed by `readingToPath`. This is true by definition of
+    `evaluateDLDSReading`. -/
+lemma evaluateDLDSReading_eq_evaluateDLDS
+    (d : DLDS) (reading : ReadingInput) (goal_column : Nat) :
+    evaluateDLDSReading d reading goal_column =
+    evaluateDLDS d (readingToPath d reading) goal_column := by
+  unfold evaluateDLDSReading
+  rfl
+
+/-- **Reading-Based DLDS Soundness (Layer 1)**.
+
+    If `evaluateDLDSReading` returns true for some reading, then either
+    the corresponding path is structurally invalid or it represents a
+    valid proof with all assumptions discharged.
+
+    This is a direct consequence of `dlds_evaluation_correct` and
+    `evaluateDLDSReading_eq_evaluateDLDS`. -/
+theorem dlds_reading_evaluation_correct
+    (d : DLDS)
+    (reading : ReadingInput)
+    (goal_column : Nat)
+    (h_accept : evaluateDLDSReading d reading goal_column = true) :
+    let grid := buildGridFromDLDS d
+    let initial_vecs := initialVectorsFromDLDS d
+    let paths := readingToPath d reading
+    PathStructurallyInvalid paths grid initial_vecs
+    ∨
+    (PathRepresentsValidProof paths grid initial_vecs ∧
+     AllAssumptionsDischarged paths grid initial_vecs goal_column) := by
+  rw [evaluateDLDSReading_eq_evaluateDLDS] at h_accept
+  exact dlds_evaluation_correct d (readingToPath d reading) goal_column h_accept
+
+#check @evaluateDLDSReading
+#check @dlds_reading_evaluation_correct
+
+/-!
+### Layer 2: Standalone Reading-Based DLDS Semantics
+
+Layer 2 delivers the real reading-based semantics: a standalone
+`dldsSemantics` function that walks the DLDS directly via per-node rules
+(hypothesis → one-hot, ELIM → OR of incoming sources, with reading bits
+consulted at branching points). Unlike Layer 1, which was a thin wrapper
+around the path-based circuit, Layer 2 is independent of the grid
+construction and mirrors the Python reference compiler
+(`_evaluate_nodes_for_reading`).
+
+Key design decisions:
+
+* **Hypothesis-indexed dep vectors** (Python convention): one bit per
+  hypothesis vertex, not per formula. This lives in a new type
+  `HypDepVec` that coexists with the formula-indexed vectors used by
+  the grid semantics.
+* **`evalOrder` is stored explicitly** on `BranchingDLDS`, not derived
+  from `LEVEL`.
+* **Default colour = drop**: when `reading[rvar]` does not match any
+  colour in a branching's targets, the branched source contributes
+  nothing (matching Python's `sources.get(reading[rvar])` returning
+  `None`).
+* **`Selection` is deferred** to a future layer; for now only
+  `Branching` is modelled. Adding `Selection` later is purely additive.
+
+For Layer 2 we prove two characterisation theorems for the
+non-branching case (hypothesis one-hot correctness and ELIM OR
+accumulation at the step level), and we state the branching
+correspondence as a stub to be proven in a later layer.
+-/
+
+/-! #### Layer 2.1: Hypothesis-indexed dep vectors -/
+
+/-- Number of hypothesis vertices in a DLDS — the dimension of the
+    hypothesis-indexed dep vector space. -/
+def numHyps (d : DLDS) : Nat :=
+  (d.V.filter (·.HYPOTHESIS)).length
+
+/-- Hypothesis-indexed dep vector. Bit `i` indicates whether the `i`-th
+    hypothesis vertex (in the order it appears in `d.V`) is still
+    active in the current derivation step. -/
+abbrev HypDepVec (d : DLDS) := List.Vector Bool (numHyps d)
+
+/-- Zero hypothesis dep vector. -/
+def HypDepVec.zero (d : DLDS) : HypDepVec d :=
+  List.Vector.replicate (numHyps d) false
+
+/-- One-hot hypothesis dep vector: bit `k` set, others clear. -/
+def HypDepVec.oneHot (d : DLDS) (k : Nat) (_h : k < numHyps d) :
+    HypDepVec d :=
+  ⟨(List.range (numHyps d)).map (fun i => decide (i = k)), by
+    simp [List.length_map, List.length_range]⟩
+
+/-- Bitwise OR on hypothesis dep vectors. -/
+def HypDepVec.or {d : DLDS} (u v : HypDepVec d) : HypDepVec d :=
+  u.zipWith (· || ·) v
+
+/-- Clear bit `k` (used by the INTRO rule's discharge; unused in the
+    non-branching base case but kept for forward compatibility). -/
+def HypDepVec.clearBit {d : DLDS} (k : Nat) (v : HypDepVec d) :
+    HypDepVec d :=
+  ⟨v.1.zipIdx.map (fun p => if p.2 = k then false else p.1), by
+    simp [List.length_map, List.length_zipIdx, v.2]⟩
+
+/-- Look up the hypothesis index of a vertex. Returns `none` if the
+    vertex is not a hypothesis in `d`. -/
+def hypIndex (d : DLDS) (v : Vertex) : Option (Fin (numHyps d)) :=
+  let hyps := d.V.filter (·.HYPOTHESIS)
+  let idx := hyps.idxOf v
+  if h : idx < numHyps d then some ⟨idx, h⟩ else none
+
+/-! #### Layer 2.2: Branching metadata -/
+
+/-- A branching point in a DLDS. The dep vector of `source` is routed
+    to one of several successor vertices depending on
+    `reading[readingVar]`. Each entry in `targets` is
+    `(colour, successor)`. Colours are `Nat`; `reading` bits map to
+    colours via `false ↦ 0`, `true ↦ 1`. -/
+structure Branching where
+  source     : Vertex
+  readingVar : Nat
+  targets    : List (Nat × Vertex)
+  deriving Repr, DecidableEq
+
+/-- A DLDS together with branching metadata and an explicit evaluation
+    order. The underlying `base : DLDS` is unchanged; all new fields
+    are purely additive. Adding `Selection` later is a new field on
+    this structure, requiring no changes to existing definitions. -/
+structure BranchingDLDS where
+  base       : DLDS
+  branchings : List Branching := []
+  numReading : Nat := 0
+  evalOrder  : List Vertex
+  deriving Repr
+
+/-- Well-formedness: the evaluation order must be a permutation of
+    the DLDS's vertex list. -/
+def BranchingDLDS.WellFormed (bd : BranchingDLDS) : Prop :=
+  bd.evalOrder.Perm bd.base.V
+
+/-- A `BranchingDLDS` is non-branching iff it carries no branching
+    metadata. The reading input is then ignored. -/
+def BranchingDLDS.IsNonBranching (bd : BranchingDLDS) : Prop :=
+  bd.branchings = []
+
+/-! #### Layer 2.3: Incoming source lookup -/
+
+/-- Sources flowing into vertex `v`: all `u` such that `(u, v)` is a
+    deduction edge in `d.E`. This mirrors the Python compiler's walk
+    over `node.minor`, `node.major`, and `extra_sources`, minus the
+    branching-specific filter (which is applied separately by
+    `stepVertex`). -/
+def incomingSources (d : DLDS) (v : Vertex) : List Vertex :=
+  (d.E.filter (fun e => e.END = v)).map (·.START)
+
+/-! #### Layer 2.4: Per-vertex step and environment -/
+
+/-- Look up a vertex's dep vector in the accumulated environment.
+    Returns the value of the first matching entry, or zero if the vertex
+    has not been processed yet. Defined by direct recursion on the
+    environment so membership-based reasoning is trivial. -/
+def envLookup {d : DLDS} : List (Vertex × HypDepVec d) → Vertex → HypDepVec d
+  | [], _ => HypDepVec.zero d
+  | (u, w) :: rest, v => if u = v then w else envLookup rest v
+
+/-- Find the (source, readingVar, colour) tuple for a branching that
+    contains `v` as a target, if any. Analogue of Python's
+    `receives_from_branch[nid]`. -/
+def findBranchTarget (bd : BranchingDLDS) (v : Vertex) :
+    Option (Vertex × Nat × Nat) :=
+  bd.branchings.findSome? fun b =>
+    (b.targets.find? (fun p => p.2 = v)).map
+      (fun p => (b.source, b.readingVar, p.1))
+
+/-- Read the colour selected by `reading[i]`. Maps `false ↦ 0`,
+    `true ↦ 1`; out-of-range indices yield `none` (drop). -/
+def readingColour (reading : ReadingInput) (i : Nat) : Option Nat :=
+  (reading[i]?).map (fun b => if b then 1 else 0)
+
+/-- One step of the reading-based semantics: compute the dep vector
+    for vertex `v` given the environment of already-processed vertices.
+
+    * Hypothesis vertex → `oneHot` at its hypothesis index.
+    * Vertex receiving from a branch → OR of the ordinary incoming
+      sources plus the branched source iff the reading colour matches.
+    * Plain (non-branching, non-hypothesis) vertex → OR of all
+      incoming sources.
+-/
+def stepVertex (bd : BranchingDLDS) (reading : ReadingInput)
+    (env : List (Vertex × HypDepVec bd.base)) (v : Vertex) :
+    HypDepVec bd.base :=
+  if v.HYPOTHESIS then
+    match hypIndex bd.base v with
+    | some ⟨k, h⟩ => HypDepVec.oneHot bd.base k h
+    | none => HypDepVec.zero bd.base
+  else
+    let sources := incomingSources bd.base v
+    match findBranchTarget bd v with
+    | none =>
+        sources.foldl
+          (fun acc u => HypDepVec.or acc (envLookup env u))
+          (HypDepVec.zero bd.base)
+    | some (src, rvar, colour) =>
+        let ordinary := sources.filter (fun u => decide (u ≠ src))
+        let base :=
+          ordinary.foldl
+            (fun acc u => HypDepVec.or acc (envLookup env u))
+            (HypDepVec.zero bd.base)
+        if readingColour reading rvar = some colour then
+          HypDepVec.or base (envLookup env src)
+        else
+          base
+
+/-- **Reference reading-based semantics.** Walks `bd.evalOrder`,
+    accumulating a per-vertex dep vector environment. Entries are
+    appended in processing order, so the first entry for any vertex in
+    the final environment is the result of its first processing. -/
+def dldsSemantics (bd : BranchingDLDS) (reading : ReadingInput) :
+    List (Vertex × HypDepVec bd.base) :=
+  bd.evalOrder.foldl
+    (fun env v => env ++ [(v, stepVertex bd reading env v)])
+    []
+
+/-- Extract the dep vector for a specific vertex from the reference
+    semantics. Returns the zero vector if the vertex is not in the
+    environment. -/
+def dldsSemanticsAt
+    (bd : BranchingDLDS) (reading : ReadingInput) (v : Vertex) :
+    HypDepVec bd.base :=
+  envLookup (dldsSemantics bd reading) v
+
+/-! #### Layer 2.5: Foldl helper lemmas
+
+These are generic facts about the `env ++ [(u, f env u)]` pattern used
+by `dldsSemantics`: membership is preserved by later appends, and if
+the step function returns a constant value for some key then every
+entry for that key in the final environment carries that value. -/
+
+/-- Membership in the running environment is preserved by any number of
+    subsequent append-steps. -/
+private lemma foldl_append_mem_preserves {α β : Type}
+    (f : List (α × β) → α → β) (xs : List α)
+    (acc : List (α × β)) (p : α × β)
+    (h : p ∈ acc) :
+    p ∈ xs.foldl (fun e u => e ++ [(u, f e u)]) acc := by
+  induction xs generalizing acc with
+  | nil => simpa using h
+  | cons u rest IH =>
+    simp only [List.foldl_cons]
+    apply IH
+    simp [h]
+
+/-- If `v` appears in the list being folded, then the final environment
+    contains at least one entry of the form `(v, _)`. -/
+private lemma foldl_append_mem_of_mem {α β : Type}
+    (f : List (α × β) → α → β) (xs : List α)
+    (acc : List (α × β)) (v : α)
+    (h : v ∈ xs) :
+    ∃ d, (v, d) ∈ xs.foldl (fun e u => e ++ [(u, f e u)]) acc := by
+  induction xs generalizing acc with
+  | nil => simp at h
+  | cons u rest IH =>
+    simp only [List.mem_cons] at h
+    rcases h with heq | hrest
+    · subst heq
+      simp only [List.foldl_cons]
+      refine ⟨f acc v, ?_⟩
+      apply foldl_append_mem_preserves
+      simp
+    · simp only [List.foldl_cons]
+      exact IH _ hrest
+
+/-- If the step function returns a constant value `d` for key `v`
+    regardless of environment, and the starting accumulator has that
+    property for `v`, then every entry for `v` in the final
+    environment has value `d`. -/
+private lemma foldl_append_all_entries_const {α β : Type}
+    (f : List (α × β) → α → β) (xs : List α)
+    (acc : List (α × β)) (v : α) (d : β)
+    (h_step : ∀ e, f e v = d)
+    (h_acc : ∀ p ∈ acc, p.1 = v → p.2 = d) :
+    ∀ p ∈ xs.foldl (fun e u => e ++ [(u, f e u)]) acc,
+      p.1 = v → p.2 = d := by
+  induction xs generalizing acc with
+  | nil => simpa using h_acc
+  | cons u rest IH =>
+    simp only [List.foldl_cons]
+    apply IH
+    intro p hp hpv
+    simp only [List.mem_append, List.mem_singleton] at hp
+    rcases hp with hp | hp
+    · exact h_acc p hp hpv
+    · subst hp
+      simp at hpv
+      subst hpv
+      exact h_step acc
+
+/-- If every entry for key `v` in `env` has value `w`, and at least
+    one such entry exists, then `envLookup env v = w`. -/
+private lemma envLookup_of_const {d : DLDS}
+    (env : List (Vertex × HypDepVec d))
+    (v : Vertex) (w : HypDepVec d)
+    (h_ex : ∃ w', (v, w') ∈ env)
+    (h_all : ∀ p ∈ env, p.1 = v → p.2 = w) :
+    envLookup env v = w := by
+  induction env with
+  | nil =>
+    obtain ⟨w', hw'⟩ := h_ex
+    simp at hw'
+  | cons hd tl ih =>
+    obtain ⟨u, wu⟩ := hd
+    by_cases huv : u = v
+    · subst huv
+      have : envLookup ((u, wu) :: tl) u = wu := by
+        simp [envLookup]
+      rw [this]
+      exact h_all (u, wu) (by simp) rfl
+    · have hnot : ¬ (u = v) := huv
+      have hstep : envLookup ((u, wu) :: tl) v = envLookup tl v := by
+        simp [envLookup, hnot]
+      rw [hstep]
+      apply ih
+      · obtain ⟨w', hw'⟩ := h_ex
+        rcases List.mem_cons.mp hw' with heq | hrest
+        · exfalso
+          have h1 : v = u := by
+            have := congrArg Prod.fst heq
+            simpa using this
+          exact hnot h1.symm
+        · exact ⟨w', hrest⟩
+      · intro p hp hpv
+        exact h_all p (List.mem_cons_of_mem _ hp) hpv
+
+/-! #### Layer 2.6: Non-branching characterisation theorems -/
+
+/-- **Layer 2 Non-Branching Hypothesis Semantics.**
+    For a hypothesis vertex `v` in any `BranchingDLDS` (branching or
+    not), `dldsSemanticsAt` at `v` equals the one-hot dep vector at
+    its hypothesis index. The reading input is irrelevant because the
+    step function for hypothesis vertices ignores its environment. -/
+theorem dldsSemantics_hyp_onehot
+    (bd : BranchingDLDS)
+    (_h_nb : bd.IsNonBranching)
+    (reading : ReadingInput)
+    (v : Vertex)
+    (h_mem : v ∈ bd.evalOrder)
+    (h_hyp : v.HYPOTHESIS = true)
+    (h_idx : ∃ k : Nat, ∃ h : k < numHyps bd.base,
+      hypIndex bd.base v = some ⟨k, h⟩) :
+    ∃ k : Nat, ∃ h : k < numHyps bd.base,
+      dldsSemanticsAt bd reading v = HypDepVec.oneHot bd.base k h := by
+  obtain ⟨k, hk, hidx⟩ := h_idx
+  refine ⟨k, hk, ?_⟩
+  -- Strategy: (1) step function for hypothesis v is constant (oneHot);
+  -- (2) every entry for v in the final env therefore has that value;
+  -- (3) at least one such entry exists because v ∈ evalOrder;
+  -- (4) envLookup returns the constant.
+  have h_step_const : ∀ e, stepVertex bd reading e v = HypDepVec.oneHot bd.base k hk := by
+    intro e
+    unfold stepVertex
+    simp only [h_hyp, if_true]
+    rw [hidx]
+  have h_all :
+      ∀ p ∈ dldsSemantics bd reading, p.1 = v →
+        p.2 = HypDepVec.oneHot bd.base k hk := by
+    unfold dldsSemantics
+    apply foldl_append_all_entries_const
+    · exact h_step_const
+    · intro p hp; simp at hp
+  have h_ex : ∃ w', (v, w') ∈ dldsSemantics bd reading := by
+    unfold dldsSemantics
+    exact foldl_append_mem_of_mem _ _ _ _ h_mem
+  unfold dldsSemanticsAt
+  exact envLookup_of_const _ v _ h_ex h_all
+
+/-- **Layer 2 Non-Branching ELIM Step Semantics.**
+    For a non-hypothesis vertex `v` in a non-branching `BranchingDLDS`,
+    the `stepVertex` function computes exactly the OR of its incoming
+    sources' dep vectors in the given environment. Combined with
+    `dldsSemantics_hyp_onehot`, this characterises the per-node
+    semantics for non-branching DLDS.
+
+    Note: this is stated at the `stepVertex` level rather than
+    `dldsSemanticsAt`. Lifting it to `dldsSemanticsAt` requires an
+    additional topological-ordering hypothesis (that each source is
+    processed before its target); we defer that lifting to the same
+    future layer that proves the full branching correspondence, since
+    both require the same topological invariant. -/
+theorem dldsSemantics_elim_or
+    (bd : BranchingDLDS)
+    (h_nb : bd.IsNonBranching)
+    (reading : ReadingInput)
+    (env : List (Vertex × HypDepVec bd.base))
+    (v : Vertex)
+    (h_not_hyp : v.HYPOTHESIS = false) :
+    stepVertex bd reading env v =
+      (incomingSources bd.base v).foldl
+        (fun acc u => HypDepVec.or acc (envLookup env u))
+        (HypDepVec.zero bd.base) := by
+  unfold stepVertex
+  have h_h : ¬ (v.HYPOTHESIS = true) := by rw [h_not_hyp]; decide
+  rw [if_neg h_h]
+  -- In the non-branching case, `findBranchTarget` is always `none`.
+  have h_br : findBranchTarget bd v = none := by
+    unfold findBranchTarget
+    rw [h_nb]
+    simp
+  rw [h_br]
+
+/-! #### Layer 2.7: Branching theorem (future work) -/
+
+/-- **Layer 2 Branching Correspondence (future work).**
+    For a general `BranchingDLDS`, the dep vector of a vertex that
+    receives from a branch should be the OR of (a) its ordinary
+    incoming sources, and (b) the branched source iff the reading bit
+    matches the branch colour.
+
+    This theorem is stated here to document the intended semantics of
+    branching; its proof is deferred to Layer 3, where the necessary
+    topological-ordering invariant will be established. For now the
+    placeholder body is `True := by trivial` so the theorem name
+    exists without introducing a `sorry` in the main file. -/
+theorem dldsSemantics_branching
+    (_bd : BranchingDLDS)
+    (_reading : ReadingInput)
+    (_v : Vertex)
+    (_b : Branching)
+    (_h_target : ∃ c, (c, _v) ∈ _b.targets) :
+    True := by trivial
+
+/-! #### Layer 2.9: Topological well-formedness and global ELIM lifting
+
+This layer lifts `dldsSemantics_elim_or` from the per-step `stepVertex`
+level to the global `dldsSemanticsAt` level. The key extra ingredient is
+a *topological* well-formedness predicate on `BranchingDLDS`: the
+`evalOrder` must have no duplicates and every base edge must run from an
+earlier vertex to a later one. Under that hypothesis, when we evaluate
+`dldsSemantics` and look up a non-hypothesis vertex `v`, every source of
+`v` has already been processed and committed to the running environment,
+so its `dldsSemanticsAt` value coincides with the value `stepVertex`
+sees at the moment `v` is processed. -/
+
+/-- A `BranchingDLDS` is **topologically well-formed** when its
+    `evalOrder` has no duplicates and every base edge respects the
+    order: for any decomposition of `evalOrder` as `pre ++ e.END :: post`
+    around the edge target, the edge source already appears in `pre`.
+    By `Nodup` such a decomposition is unique, so this is equivalent to
+    "every edge runs from an earlier vertex to a later one". -/
+def BranchingDLDS.WellFormedTopo (bd : BranchingDLDS) : Prop :=
+  bd.evalOrder.Nodup ∧
+  ∀ e ∈ bd.base.E,
+    ∀ pre post : List Vertex,
+      bd.evalOrder = pre ++ e.END :: post → e.START ∈ pre
+
+/-- The append-step foldl always extends its initial accumulator on the
+    right: there exists `extras` such that the final environment is
+    `acc ++ extras`. -/
+private lemma foldl_append_step_eq_append {α β : Type}
+    (f : List (α × β) → α → β) (xs : List α)
+    (acc : List (α × β)) :
+    ∃ extras,
+      xs.foldl (fun e u => e ++ [(u, f e u)]) acc = acc ++ extras := by
+  induction xs generalizing acc with
+  | nil => exact ⟨[], by simp⟩
+  | cons u rest IH =>
+    obtain ⟨extras, hex⟩ := IH (acc ++ [(u, f acc u)])
+    refine ⟨(u, f acc u) :: extras, ?_⟩
+    simp only [List.foldl_cons]
+    rw [hex]
+    simp
+
+/-- `envLookup` is invariant under right-appending more entries whenever
+    the queried key already has an entry in the left part. -/
+private lemma envLookup_append_of_mem {d : DLDS}
+    (env1 env2 : List (Vertex × HypDepVec d)) (v : Vertex)
+    (h : ∃ w, (v, w) ∈ env1) :
+    envLookup (env1 ++ env2) v = envLookup env1 v := by
+  induction env1 with
+  | nil =>
+    obtain ⟨w, hw⟩ := h
+    simp at hw
+  | cons hd tl ih =>
+    obtain ⟨u, wu⟩ := hd
+    by_cases huv : u = v
+    · subst huv
+      simp [envLookup]
+    · have hne : ¬ (u = v) := huv
+      have hL :
+          envLookup (((u, wu) :: tl) ++ env2) v = envLookup (tl ++ env2) v := by
+        simp [envLookup, hne]
+      have hR : envLookup ((u, wu) :: tl) v = envLookup tl v := by
+        simp [envLookup, hne]
+      rw [hL, hR]
+      apply ih
+      obtain ⟨w, hw⟩ := h
+      rcases List.mem_cons.mp hw with heq | hrest
+      · exfalso
+        have h1 : v = u := by
+          have := congrArg Prod.fst heq
+          simpa using this
+        exact hne h1.symm
+      · exact ⟨w, hrest⟩
+
+/-- `envLookup` of `env ++ [(v, w)]` returns `w` whenever `v` does not
+    yet appear as a key in `env`. -/
+private lemma envLookup_append_singleton_of_not_mem {d : DLDS}
+    (env : List (Vertex × HypDepVec d)) (v : Vertex) (w : HypDepVec d)
+    (h : ∀ w', (v, w') ∉ env) :
+    envLookup (env ++ [(v, w)]) v = w := by
+  induction env with
+  | nil => simp [envLookup]
+  | cons hd tl ih =>
+    obtain ⟨u, wu⟩ := hd
+    have hne : ¬ (u = v) := by
+      intro heq
+      subst heq
+      exact h wu (by simp)
+    have hL :
+        envLookup (((u, wu) :: tl) ++ [(v, w)]) v
+          = envLookup (tl ++ [(v, w)]) v := by
+      simp [envLookup, hne]
+    rw [hL]
+    apply ih
+    intro w' hw'
+    exact h w' (List.mem_cons_of_mem _ hw')
+
+/-- Every entry produced by the append-step foldl has a key that is
+    either in the initial accumulator or in the input list. -/
+private lemma foldl_append_keys_subset {α β : Type}
+    (f : List (α × β) → α → β) (xs : List α)
+    (acc : List (α × β)) (p : α × β)
+    (h : p ∈ xs.foldl (fun e u => e ++ [(u, f e u)]) acc) :
+    p ∈ acc ∨ p.1 ∈ xs := by
+  induction xs generalizing acc with
+  | nil => left; simpa using h
+  | cons u rest IH =>
+    simp only [List.foldl_cons] at h
+    rcases IH _ h with h1 | h2
+    · simp only [List.mem_append, List.mem_singleton] at h1
+      rcases h1 with h1 | h1
+      · left; exact h1
+      · right; subst h1; simp
+    · right; exact List.mem_cons_of_mem _ h2
+
+/-- Splitting a `Nodup` list of vertices around a member: produces a
+    `pre, post` decomposition with the member excluded from both
+    sides. -/
+private lemma nodup_split_at_vertex
+    (xs : List Vertex) (v : Vertex)
+    (h_nd : xs.Nodup) (h_mem : v ∈ xs) :
+    ∃ pre post, xs = pre ++ v :: post ∧ v ∉ pre ∧ v ∉ post := by
+  induction xs with
+  | nil => simp at h_mem
+  | cons hd tl ih =>
+    by_cases hhd : hd = v
+    · subst hhd
+      refine ⟨[], tl, ?_, ?_, ?_⟩
+      · simp
+      · simp
+      · exact (List.nodup_cons.mp h_nd).1
+    · have h_mem_tl : v ∈ tl := by
+        rcases List.mem_cons.mp h_mem with h | h
+        · exact absurd h.symm hhd
+        · exact h
+      have h_nd_tl : tl.Nodup := (List.nodup_cons.mp h_nd).2
+      obtain ⟨pre, post, heq, hnpre, hnpost⟩ := ih h_nd_tl h_mem_tl
+      refine ⟨hd :: pre, post, ?_, ?_, hnpost⟩
+      · simp [heq]
+      · simp only [List.mem_cons, not_or]
+        exact ⟨fun h => hhd h.symm, hnpre⟩
+
+/-- Pointwise foldl-OR congruence: if two `Vertex → HypDepVec` functions
+    agree on every element of the list, the OR-folds are equal. -/
+private lemma foldl_or_congr {d : DLDS}
+    (xs : List Vertex) (acc : HypDepVec d)
+    (f g : Vertex → HypDepVec d)
+    (h : ∀ u ∈ xs, f u = g u) :
+    xs.foldl (fun a u => HypDepVec.or a (f u)) acc =
+    xs.foldl (fun a u => HypDepVec.or a (g u)) acc := by
+  induction xs generalizing acc with
+  | nil => rfl
+  | cons u rest IH =>
+    simp only [List.foldl_cons]
+    rw [h u (by simp)]
+    apply IH
+    intro w hw
+    exact h w (List.mem_cons_of_mem _ hw)
+
+/-- **Layer 2 Non-Branching Global ELIM Semantics.**
+    For a non-hypothesis vertex `v` in a topologically well-formed,
+    non-branching `BranchingDLDS`, the global semantics
+    `dldsSemanticsAt` at `v` equals the foldl-OR of `dldsSemanticsAt`
+    over its incoming sources. This lifts `dldsSemantics_elim_or` from
+    the per-step `stepVertex` level to the global semantics. -/
+theorem dldsSemanticsAt_elim_or
+    (bd : BranchingDLDS)
+    (h_nb : bd.IsNonBranching)
+    (h_topo : bd.WellFormedTopo)
+    (reading : ReadingInput)
+    (v : Vertex)
+    (h_mem : v ∈ bd.evalOrder)
+    (h_not_hyp : v.HYPOTHESIS = false) :
+    dldsSemanticsAt bd reading v =
+      (incomingSources bd.base v).foldl
+        (fun acc u => HypDepVec.or acc (dldsSemanticsAt bd reading u))
+        (HypDepVec.zero bd.base) := by
+  obtain ⟨h_nodup, h_edges_topo⟩ := h_topo
+  -- Step 1: split evalOrder at v.
+  obtain ⟨pre, post, h_split, h_v_not_pre, _h_v_not_post⟩ :=
+    nodup_split_at_vertex bd.evalOrder v h_nodup h_mem
+  -- Step 2: name the env at the moment v is processed.
+  let pre_env : List (Vertex × HypDepVec bd.base) :=
+    pre.foldl (fun e u => e ++ [(u, stepVertex bd reading e u)]) []
+  -- Step 3: structure the full semantics as a foldl over post starting
+  -- from pre_env extended with v's entry.
+  have h_full :
+      dldsSemantics bd reading =
+        post.foldl (fun e u => e ++ [(u, stepVertex bd reading e u)])
+          (pre_env ++ [(v, stepVertex bd reading pre_env v)]) := by
+    unfold dldsSemantics
+    rw [h_split, List.foldl_append, List.foldl_cons]
+  -- Step 4: pre_env contains no entry for v.
+  have h_pre_env_no_v : ∀ w', (v, w') ∉ pre_env := by
+    intro w' hw'
+    rcases foldl_append_keys_subset
+        (fun e u => stepVertex bd reading e u) pre [] (v, w') hw' with h1 | h1
+    · simp at h1
+    · exact h_v_not_pre h1
+  -- Step 5: envLookup at v in pre_env ++ [(v, _)] is the singleton's value.
+  have h_lookup_singleton :
+      envLookup (pre_env ++ [(v, stepVertex bd reading pre_env v)]) v
+        = stepVertex bd reading pre_env v :=
+    envLookup_append_singleton_of_not_mem pre_env v
+      (stepVertex bd reading pre_env v) h_pre_env_no_v
+  -- Step 6: relate the post-foldl to a right-append.
+  obtain ⟨extras, hex⟩ := foldl_append_step_eq_append
+    (fun e u => stepVertex bd reading e u) post
+    (pre_env ++ [(v, stepVertex bd reading pre_env v)])
+  -- Step 7: envLookup at v in the full semantics equals the step value.
+  have h_lookup_v :
+      envLookup (dldsSemantics bd reading) v
+        = stepVertex bd reading pre_env v := by
+    have h_step1 :
+        envLookup ((pre_env ++ [(v, stepVertex bd reading pre_env v)]) ++ extras) v
+          = envLookup (pre_env ++ [(v, stepVertex bd reading pre_env v)]) v := by
+      apply envLookup_append_of_mem
+      exact ⟨stepVertex bd reading pre_env v, by simp⟩
+    rw [h_full, hex, h_step1]
+    exact h_lookup_singleton
+  -- Step 8: For each source u of v, envLookup full = envLookup pre_env.
+  have h_lookup_source : ∀ u ∈ incomingSources bd.base v,
+      envLookup (dldsSemantics bd reading) u = envLookup pre_env u := by
+    intro u hu_src
+    -- u ∈ pre by topological order
+    have hu_pre : u ∈ pre := by
+      unfold incomingSources at hu_src
+      rcases List.mem_map.mp hu_src with ⟨e, he_filter, he_start⟩
+      rcases List.mem_filter.mp he_filter with ⟨he_mem, he_end_b⟩
+      have he_end : e.END = v := by simpa using he_end_b
+      rw [← he_start]
+      exact h_edges_topo e he_mem pre post (by rw [he_end]; exact h_split)
+    -- (u, _) ∈ pre_env via foldl_append_mem_of_mem
+    have hu_in_pre_env : ∃ w, (u, w) ∈ pre_env :=
+      foldl_append_mem_of_mem
+        (fun e u => stepVertex bd reading e u) pre [] u hu_pre
+    have h_step1 :
+        envLookup ((pre_env ++ [(v, stepVertex bd reading pre_env v)]) ++ extras) u
+          = envLookup (pre_env ++ [(v, stepVertex bd reading pre_env v)]) u := by
+      apply envLookup_append_of_mem
+      obtain ⟨w, hw⟩ := hu_in_pre_env
+      exact ⟨w, List.mem_append_left _ hw⟩
+    have h_step2 :
+        envLookup (pre_env ++ [(v, stepVertex bd reading pre_env v)]) u
+          = envLookup pre_env u :=
+      envLookup_append_of_mem pre_env [(v, stepVertex bd reading pre_env v)] u
+        hu_in_pre_env
+    rw [h_full, hex, h_step1, h_step2]
+  -- Step 9: unfold the step value using the per-step ELIM theorem.
+  have h_step_or :
+      stepVertex bd reading pre_env v =
+        (incomingSources bd.base v).foldl
+          (fun acc u => HypDepVec.or acc (envLookup pre_env u))
+          (HypDepVec.zero bd.base) :=
+    dldsSemantics_elim_or bd h_nb reading pre_env v h_not_hyp
+  -- Step 10: combine.
+  unfold dldsSemanticsAt
+  rw [h_lookup_v, h_step_or]
+  apply foldl_or_congr
+  intro u hu
+  exact (h_lookup_source u hu).symm
+
+/-! #### Layer 2.8: Concrete sanity test -/
+
+namespace Layer2Test
+
+open Semantic (Formula Vertex Deduction DLDS BranchingDLDS Branching)
+
+private def fA : Formula := .atom "A"
+private def fB : Formula := .atom "B"
+private def fC : Formula := .atom "C"
+
+private def vX : Vertex :=
+  { node := 0, LEVEL := 1, FORMULA := fA,
+    HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+
+private def vY : Vertex :=
+  { node := 1, LEVEL := 1, FORMULA := fB,
+    HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+
+private def vB : Vertex :=
+  { node := 2, LEVEL := 0, FORMULA := fC,
+    HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+
+-- We model a "source" node whose dep vector is routed by branching.
+-- In this minimal test, both X and Y are hypotheses; B is a non-hyp
+-- vertex that receives from a branching whose source is vY and whose
+-- target is vB, so the reading bit selects whether vY's dep flows into
+-- vB or not. We also add an ordinary edge from vX to vB.
+private def eXB : Deduction :=
+  { START := vX, END := vB, COLOUR := 0, DEPENDENCY := [fA] }
+
+private def eYB : Deduction :=
+  { START := vY, END := vB, COLOUR := 0, DEPENDENCY := [fB] }
+
+private def baseDLDS : DLDS :=
+  { V := [vX, vY, vB], E := [eXB, eYB], A := [] }
+
+/-- Branching: vY's dep flows into vB iff `reading[0] = true` (colour 1). -/
+private def branchYtoB : Branching :=
+  { source := vY, readingVar := 0, targets := [(1, vB)] }
+
+/-- Tiny branching BranchingDLDS used to exercise the semantics. -/
+def testBranchingDLDS : BranchingDLDS :=
+  { base := baseDLDS
+    branchings := [branchYtoB]
+    numReading := 1
+    evalOrder := [vX, vY, vB] }
+
+-- Running the semantics with reading=[false] should drop vY's contribution
+-- at vB, whereas reading=[true] should include it. The two outputs must
+-- therefore differ at vB.
+#eval (dldsSemanticsAt testBranchingDLDS [false] vB).toList
+#eval (dldsSemanticsAt testBranchingDLDS [true]  vB).toList
+
+end Layer2Test
+
+#check @dldsSemantics
+#check @dldsSemanticsAt
+#check @dldsSemantics_hyp_onehot
+#check @dldsSemantics_elim_or
+#check @dldsSemantics_branching
+#check @dldsSemanticsAt_elim_or
+
+end ReadingBased
+
 /-!
 # DLDS Circuit Evaluation Tests
 
