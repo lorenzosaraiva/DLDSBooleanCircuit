@@ -3191,6 +3191,276 @@ theorem dldsSemanticsAt_elim_or
   intro u hu
   exact (h_lookup_source u hu).symm
 
+/-! #### Layer 2.11: Branching correspondence
+
+This layer proves `dldsSemanticsAt_branching`, the global-level
+characterisation of the reading-based semantics at a vertex receiving
+from a branching. It uses the same proof infrastructure as
+`dldsSemanticsAt_elim_or` together with a stronger well-formedness
+predicate `WellFormedBranching` that ensures branching sources are
+processed before their targets. -/
+
+/-- A `BranchingDLDS` is **branching-well-formed** when it is
+    topologically well-formed (`WellFormedTopo`) and, additionally,
+    every branching source appears before every branching target in
+    `evalOrder`. -/
+def BranchingDLDS.WellFormedBranching (bd : BranchingDLDS) : Prop :=
+  bd.WellFormedTopo ∧
+  ∀ b ∈ bd.branchings,
+    ∀ c v, (c, v) ∈ b.targets →
+      ∀ pre post : List Vertex,
+        bd.evalOrder = pre ++ v :: post → b.source ∈ pre
+
+/-- Generic inversion for `List.findSome?`: if it returns `some b`,
+    then some element of the list maps to `some b`. -/
+private lemma list_findSome?_spec {α β : Type} (f : α → Option β)
+    (xs : List α) (b : β)
+    (h : xs.findSome? f = some b) :
+    ∃ a ∈ xs, f a = some b := by
+  induction xs with
+  | nil => simp at h
+  | cons x rest ih =>
+    unfold List.findSome? at h
+    split at h
+    · -- f x = some val: findSome? returns it
+      rename_i b' heq
+      -- heq : f x = some b', h : some b' = some b
+      have : b' = b := by injection h
+      subst this
+      exact ⟨x, by simp, heq⟩
+    · -- f x = none: findSome? recurses
+      obtain ⟨a, ha_mem, ha_eq⟩ := ih h
+      exact ⟨a, List.mem_cons_of_mem _ ha_mem, ha_eq⟩
+
+/-- Generic inversion for `List.find?`: if it returns `some a`,
+    then `a` is in the list and satisfies the predicate. -/
+private lemma list_find?_spec {α : Type} (p : α → Bool)
+    (xs : List α) (a : α)
+    (h : xs.find? p = some a) :
+    a ∈ xs ∧ p a = true := by
+  induction xs with
+  | nil => simp at h
+  | cons x rest ih =>
+    unfold List.find? at h
+    split at h
+    · -- p x = true: find? returns some x
+      have hxa : x = a := by injection h
+      subst hxa
+      simp_all
+    · -- p x = false: find? recurses
+      obtain ⟨ha_mem, ha_p⟩ := ih h
+      exact ⟨List.mem_cons_of_mem _ ha_mem, ha_p⟩
+
+/-- Inversion for `findBranchTarget`: if it returns
+    `some (src, rvar, colour)` for vertex `v`, there exists a branching
+    `b ∈ bd.branchings` with `b.source = src`, `b.readingVar = rvar`,
+    and `(colour, v) ∈ b.targets`. -/
+private lemma findBranchTarget_spec (bd : BranchingDLDS) (v : Vertex)
+    (src : Vertex) (rvar colour : Nat)
+    (h : findBranchTarget bd v = some (src, rvar, colour)) :
+    ∃ b ∈ bd.branchings,
+      b.source = src ∧ b.readingVar = rvar ∧ (colour, v) ∈ b.targets := by
+  unfold findBranchTarget at h
+  obtain ⟨b, hb_mem, hb_eq⟩ := list_findSome?_spec _ _ _ h
+  -- hb_eq : (b.targets.find? (fun p => p.2 = v)).map (...) = some (src, rvar, colour)
+  -- Invert Option.map
+  cases hfind : b.targets.find? (fun p => decide (p.2 = v)) with
+  | none =>
+    simp [hfind] at hb_eq
+  | some q =>
+    simp [hfind] at hb_eq
+    -- hb_eq should give us (b.source, b.readingVar, q.1) = (src, rvar, colour)
+    obtain ⟨h1, h2, h3⟩ := hb_eq
+    -- From find?: q ∈ b.targets and q.2 = v
+    obtain ⟨hq_mem, hq_pred⟩ := list_find?_spec _ _ _ hfind
+    have hq2 : q.2 = v := by
+      simp at hq_pred
+      exact hq_pred
+    -- q = (q.1, q.2) = (colour, v)
+    have hq_eq : q = (colour, v) := by
+      cases q with
+      | mk fst snd =>
+        simp at h3 hq2
+        exact Prod.ext h3 hq2
+    rw [hq_eq] at hq_mem
+    exact ⟨b, hb_mem, h1, h2, hq_mem⟩
+
+/-- Step-level branching characterisation: for a non-hypothesis vertex
+    `v` that is a branching target, `stepVertex` computes the OR of
+    ordinary sources conditionally joined with the branched source. -/
+private lemma stepVertex_branching_eq (bd : BranchingDLDS)
+    (reading : ReadingInput)
+    (env : List (Vertex × HypDepVec bd.base))
+    (v : Vertex)
+    (h_not_hyp : v.HYPOTHESIS = false)
+    (src : Vertex) (rvar colour : Nat)
+    (h_branch : findBranchTarget bd v = some (src, rvar, colour)) :
+    let ordinary := (incomingSources bd.base v).filter (fun u => decide (u ≠ src))
+    let base_val :=
+      ordinary.foldl
+        (fun acc u => HypDepVec.or acc (envLookup env u))
+        (HypDepVec.zero bd.base)
+    stepVertex bd reading env v =
+      (if readingColour reading rvar = some colour then
+        HypDepVec.or base_val (envLookup env src)
+      else
+        base_val) := by
+  unfold stepVertex
+  have h_h : ¬ (v.HYPOTHESIS = true) := by rw [h_not_hyp]; decide
+  rw [if_neg h_h]
+  simp only [h_branch]
+
+/-- **Layer 2 Branching Global Semantics.**
+    For a non-hypothesis vertex `v` in a branching-well-formed
+    `BranchingDLDS` that receives from a branching with source `src`,
+    reading variable `rvar`, and colour `colour`, the global semantics
+    `dldsSemanticsAt` at `v` equals the foldl-OR of `dldsSemanticsAt`
+    over the ordinary incoming sources, conditionally joined with
+    `dldsSemanticsAt` at `src` when the reading colour matches. -/
+theorem dldsSemanticsAt_branching
+    (bd : BranchingDLDS)
+    (h_wf : bd.WellFormedBranching)
+    (reading : ReadingInput)
+    (v : Vertex)
+    (h_mem : v ∈ bd.evalOrder)
+    (h_not_hyp : v.HYPOTHESIS = false)
+    (src : Vertex) (rvar colour : Nat)
+    (h_branch : findBranchTarget bd v = some (src, rvar, colour)) :
+    let sources := incomingSources bd.base v
+    let ordinary := sources.filter (fun u => decide (u ≠ src))
+    let base_or :=
+      ordinary.foldl
+        (fun acc u => HypDepVec.or acc (dldsSemanticsAt bd reading u))
+        (HypDepVec.zero bd.base)
+    dldsSemanticsAt bd reading v =
+      (if readingColour reading rvar = some colour then
+        HypDepVec.or base_or (dldsSemanticsAt bd reading src)
+      else
+        base_or) := by
+  -- Destructure well-formedness.
+  obtain ⟨h_topo, h_branch_topo⟩ := h_wf
+  obtain ⟨h_nodup, h_edges_topo⟩ := h_topo
+  -- Step 1: split evalOrder at v.
+  obtain ⟨pre, post, h_split, h_v_not_pre, _h_v_not_post⟩ :=
+    nodup_split_at_vertex bd.evalOrder v h_nodup h_mem
+  -- Step 2: define pre_env.
+  let pre_env : List (Vertex × HypDepVec bd.base) :=
+    pre.foldl (fun e u => e ++ [(u, stepVertex bd reading e u)]) []
+  -- Step 3: full semantics = post-foldl starting from pre_env ++ [(v, ...)].
+  have h_full :
+      dldsSemantics bd reading =
+        post.foldl (fun e u => e ++ [(u, stepVertex bd reading e u)])
+          (pre_env ++ [(v, stepVertex bd reading pre_env v)]) := by
+    unfold dldsSemantics
+    rw [h_split, List.foldl_append, List.foldl_cons]
+  -- Step 4: pre_env contains no entry for v.
+  have h_pre_env_no_v : ∀ w', (v, w') ∉ pre_env := by
+    intro w' hw'
+    rcases foldl_append_keys_subset
+        (fun e u => stepVertex bd reading e u) pre [] (v, w') hw' with h1 | h1
+    · simp at h1
+    · exact h_v_not_pre h1
+  -- Step 5: envLookup at v in pre_env ++ [(v, ...)] is the step value.
+  have h_lookup_singleton :
+      envLookup (pre_env ++ [(v, stepVertex bd reading pre_env v)]) v
+        = stepVertex bd reading pre_env v :=
+    envLookup_append_singleton_of_not_mem pre_env v
+      (stepVertex bd reading pre_env v) h_pre_env_no_v
+  -- Step 6: relate post-foldl to a right-append.
+  obtain ⟨extras, hex⟩ := foldl_append_step_eq_append
+    (fun e u => stepVertex bd reading e u) post
+    (pre_env ++ [(v, stepVertex bd reading pre_env v)])
+  -- Step 7: envLookup at v in full semantics = step value.
+  have h_lookup_v :
+      envLookup (dldsSemantics bd reading) v
+        = stepVertex bd reading pre_env v := by
+    have h_step1 :
+        envLookup ((pre_env ++ [(v, stepVertex bd reading pre_env v)]) ++ extras) v
+          = envLookup (pre_env ++ [(v, stepVertex bd reading pre_env v)]) v := by
+      apply envLookup_append_of_mem
+      exact ⟨stepVertex bd reading pre_env v, by simp⟩
+    rw [h_full, hex, h_step1]
+    exact h_lookup_singleton
+  -- Step 8: extract branching membership from findBranchTarget.
+  obtain ⟨branch, hb_mem, hb_src, _hb_rvar, hb_tgt⟩ :=
+    findBranchTarget_spec bd v src rvar colour h_branch
+  -- Step 9: src ∈ pre by branching well-formedness.
+  have h_src_pre : src ∈ pre := by
+    rw [← hb_src]
+    exact h_branch_topo branch hb_mem colour v hb_tgt pre post h_split
+  -- Step 10: for every ordinary source u of v, envLookup full = envLookup pre_env.
+  have h_lookup_ordinary :
+      ∀ u ∈ (incomingSources bd.base v).filter (fun u => decide (u ≠ src)),
+        envLookup (dldsSemantics bd reading) u = envLookup pre_env u := by
+    intro u hu
+    have hu_src : u ∈ incomingSources bd.base v :=
+      List.mem_of_mem_filter hu
+    have hu_pre : u ∈ pre := by
+      unfold incomingSources at hu_src
+      rcases List.mem_map.mp hu_src with ⟨e, he_filter, he_start⟩
+      rcases List.mem_filter.mp he_filter with ⟨he_mem, he_end_b⟩
+      have he_end : e.END = v := by simpa using he_end_b
+      rw [← he_start]
+      exact h_edges_topo e he_mem pre post (by rw [he_end]; exact h_split)
+    have hu_in_pre_env : ∃ w, (u, w) ∈ pre_env :=
+      foldl_append_mem_of_mem
+        (fun e u => stepVertex bd reading e u) pre [] u hu_pre
+    have h_step1 :
+        envLookup ((pre_env ++ [(v, stepVertex bd reading pre_env v)]) ++ extras) u
+          = envLookup (pre_env ++ [(v, stepVertex bd reading pre_env v)]) u := by
+      apply envLookup_append_of_mem
+      obtain ⟨w, hw⟩ := hu_in_pre_env
+      exact ⟨w, List.mem_append_left _ hw⟩
+    have h_step2 :
+        envLookup (pre_env ++ [(v, stepVertex bd reading pre_env v)]) u
+          = envLookup pre_env u :=
+      envLookup_append_of_mem pre_env [(v, stepVertex bd reading pre_env v)] u
+        hu_in_pre_env
+    rw [h_full, hex, h_step1, h_step2]
+  -- Step 11: envLookup full src = envLookup pre_env src.
+  have h_lookup_src :
+      envLookup (dldsSemantics bd reading) src = envLookup pre_env src := by
+    have hu_in_pre_env : ∃ w, (src, w) ∈ pre_env :=
+      foldl_append_mem_of_mem
+        (fun e u => stepVertex bd reading e u) pre [] src h_src_pre
+    have h_step1 :
+        envLookup ((pre_env ++ [(v, stepVertex bd reading pre_env v)]) ++ extras) src
+          = envLookup (pre_env ++ [(v, stepVertex bd reading pre_env v)]) src := by
+      apply envLookup_append_of_mem
+      obtain ⟨w, hw⟩ := hu_in_pre_env
+      exact ⟨w, List.mem_append_left _ hw⟩
+    have h_step2 :
+        envLookup (pre_env ++ [(v, stepVertex bd reading pre_env v)]) src
+          = envLookup pre_env src :=
+      envLookup_append_of_mem pre_env [(v, stepVertex bd reading pre_env v)] src
+        hu_in_pre_env
+    rw [h_full, hex, h_step1, h_step2]
+  -- Step 12: unfold stepVertex using the branching case.
+  have h_step_eq := stepVertex_branching_eq bd reading pre_env v h_not_hyp
+    src rvar colour h_branch
+  -- Step 13: combine.
+  unfold dldsSemanticsAt
+  rw [h_lookup_v, h_step_eq]
+  -- Goal: (if ... then HypDepVec.or (foldl ... envLookup pre_env ...) (envLookup pre_env src)
+  --        else foldl ... envLookup pre_env ...)
+  --       = (if ... then HypDepVec.or (foldl ... dldsSemanticsAt ...) (dldsSemanticsAt src)
+  --          else foldl ... dldsSemanticsAt ...)
+  by_cases h_col : readingColour reading rvar = some colour
+  · -- colour matches: both if-branches take the true path
+    simp only [if_pos h_col]
+    congr 1
+    · -- ordinary foldl equality
+      apply foldl_or_congr
+      intro u hu
+      exact (h_lookup_ordinary u hu).symm
+    · -- src lookup equality
+      exact h_lookup_src.symm
+  · -- colour doesn't match: both if-branches take the false path
+    simp only [if_neg h_col]
+    apply foldl_or_congr
+    intro u hu
+    exact (h_lookup_ordinary u hu).symm
+
 /-! #### Layer 2.8: Concrete sanity test -/
 
 namespace Layer2Test
@@ -3252,6 +3522,7 @@ end Layer2Test
 #check @dldsSemantics_elim_or
 #check @dldsSemantics_branching
 #check @dldsSemanticsAt_elim_or
+#check @dldsSemanticsAt_branching
 
 end ReadingBased
 
