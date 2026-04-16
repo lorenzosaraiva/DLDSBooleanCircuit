@@ -2679,15 +2679,25 @@ def findBranchTarget (bd : BranchingDLDS) (v : Vertex) :
 def readingColour (reading : ReadingInput) (i : Nat) : Option Nat :=
   (reading[i]?).map (fun b => if b then 1 else 0)
 
+/-- The hypothesis discharged by an introduction vertex, if any.
+    Decoded from `DLDS.A`: an entry `(w, h)` marks `w` as an introduction
+    vertex discharging the hypothesis vertex `h`. -/
+def findIntroDischarge (bd : BranchingDLDS) (v : Vertex) : Option Vertex :=
+  (bd.base.A.find? (fun p => p.1 = v)).map (·.2)
+
 /-- One step of the reading-based semantics: compute the dep vector
     for vertex `v` given the environment of already-processed vertices.
 
-    * Hypothesis vertex → `oneHot` at its hypothesis index.
-    * Vertex receiving from a branch → OR of the ordinary incoming
-      sources plus the branched source iff the reading colour matches.
-    * Plain (non-branching, non-hypothesis) vertex → OR of all
-      incoming sources.
--/
+    Cases are dispatched in priority order:
+    1. Hypothesis vertex → `oneHot` at its hypothesis index.
+    2. Vertex receiving from a branch → OR of the ordinary incoming
+       sources plus the branched source iff the reading colour matches.
+    3. Introduction vertex (discharging a hypothesis) → OR of all
+       incoming sources with the discharged bit cleared.
+    4. Plain ELIM vertex → OR of all incoming sources.
+
+    Note: if a vertex is both a branching target and an introduction,
+    branching wins (design choice, not a property of the DLDS type). -/
 def stepVertex (bd : BranchingDLDS) (reading : ReadingInput)
     (env : List (Vertex × HypDepVec bd.base)) (v : Vertex) :
     HypDepVec bd.base :=
@@ -2698,20 +2708,25 @@ def stepVertex (bd : BranchingDLDS) (reading : ReadingInput)
   else
     let sources := incomingSources bd.base v
     match findBranchTarget bd v with
-    | none =>
-        sources.foldl
-          (fun acc u => HypDepVec.or acc (envLookup env u))
-          (HypDepVec.zero bd.base)
     | some (src, rvar, colour) =>
         let ordinary := sources.filter (fun u => decide (u ≠ src))
-        let base :=
-          ordinary.foldl
-            (fun acc u => HypDepVec.or acc (envLookup env u))
-            (HypDepVec.zero bd.base)
+        let base := ordinary.foldl
+          (fun acc u => HypDepVec.or acc (envLookup env u))
+          (HypDepVec.zero bd.base)
         if readingColour reading rvar = some colour then
           HypDepVec.or base (envLookup env src)
         else
           base
+    | none =>
+        let or_all := sources.foldl
+          (fun acc u => HypDepVec.or acc (envLookup env u))
+          (HypDepVec.zero bd.base)
+        match findIntroDischarge bd v with
+        | some h =>
+            match hypIndex bd.base h with
+            | some ⟨k, _⟩ => HypDepVec.clearBit k or_all
+            | none => or_all
+        | none => or_all
 
 /-- **Reference reading-based semantics.** Walks `bd.evalOrder`,
     accumulating a per-vertex dep vector environment. Entries are
@@ -2894,6 +2909,7 @@ theorem dldsSemantics_elim_or
     (reading : ReadingInput)
     (env : List (Vertex × HypDepVec bd.base))
     (v : Vertex)
+    (h_not_intro : findIntroDischarge bd v = none)
     (h_not_hyp : v.HYPOTHESIS = false) :
     stepVertex bd reading env v =
       (incomingSources bd.base v).foldl
@@ -2907,7 +2923,7 @@ theorem dldsSemantics_elim_or
     unfold findBranchTarget
     rw [h_nb]
     simp
-  rw [h_br]
+  simp only [h_br, h_not_intro]
 
 /-! #### Layer 2.7: Branching theorem (future work) -/
 
@@ -3101,6 +3117,7 @@ theorem dldsSemanticsAt_elim_or
     (reading : ReadingInput)
     (v : Vertex)
     (h_mem : v ∈ bd.evalOrder)
+    (h_not_intro : findIntroDischarge bd v = none)
     (h_not_hyp : v.HYPOTHESIS = false) :
     dldsSemanticsAt bd reading v =
       (incomingSources bd.base v).foldl
@@ -3183,13 +3200,175 @@ theorem dldsSemanticsAt_elim_or
         (incomingSources bd.base v).foldl
           (fun acc u => HypDepVec.or acc (envLookup pre_env u))
           (HypDepVec.zero bd.base) :=
-    dldsSemantics_elim_or bd h_nb reading pre_env v h_not_hyp
+    dldsSemantics_elim_or bd h_nb reading pre_env v h_not_intro h_not_hyp
   -- Step 10: combine.
   unfold dldsSemanticsAt
   rw [h_lookup_v, h_step_or]
   apply foldl_or_congr
   intro u hu
   exact (h_lookup_source u hu).symm
+
+/-! #### Layer 2.10: Global introduction discharge
+
+Introduction vertices are handled directly by the unified `stepVertex`
+(Layer 2.4). Each entry `(w, h) ∈ d.A` marks `w` as an introduction
+vertex discharging the hypothesis vertex `h`; `findIntroDischarge`
+decodes this, and `stepVertex` dispatches to the intro arm in its
+four-case priority order (hypothesis, branching, intro, plain ELIM). -/
+
+/-- **Step-level INTRO characterisation.** For a non-hypothesis,
+    non-branching intro vertex `v` discharging hypothesis `h_discharge`
+    at index `k`, `stepVertex` computes `HypDepVec.clearBit k` of the
+    OR-fold of the incoming sources' environment lookups. -/
+theorem dldsSemantics_intro_clearbit
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (env : List (Vertex × HypDepVec bd.base))
+    (v h_discharge : Vertex) (k : Nat) (hk : k < numHyps bd.base)
+    (h_not_hyp : v.HYPOTHESIS = false)
+    (h_not_branch : findBranchTarget bd v = none)
+    (h_intro : findIntroDischarge bd v = some h_discharge)
+    (h_idx : hypIndex bd.base h_discharge = some ⟨k, hk⟩) :
+    stepVertex bd reading env v =
+      HypDepVec.clearBit k
+        ((incomingSources bd.base v).foldl
+          (fun acc u => HypDepVec.or acc (envLookup env u))
+          (HypDepVec.zero bd.base)) := by
+  unfold stepVertex
+  have h_h : ¬ (v.HYPOTHESIS = true) := by rw [h_not_hyp]; decide
+  rw [if_neg h_h]
+  simp only [h_not_branch, h_intro, h_idx]
+
+/-- **Global INTRO discharge theorem.** Under topological well-formedness,
+    `dldsSemanticsAt` at an introduction vertex `v` discharging hypothesis
+    `h_discharge` at index `k` equals the clearBit of the OR-fold of
+    `dldsSemanticsAt` over `v`'s incoming sources. Structurally mirrors
+    `dldsSemanticsAt_elim_or`. -/
+theorem dldsSemanticsAt_intro_clearbit
+    (bd : BranchingDLDS)
+    (h_topo : bd.WellFormedTopo)
+    (reading : ReadingInput)
+    (v : Vertex)
+    (h_mem : v ∈ bd.evalOrder)
+    (h_not_hyp : v.HYPOTHESIS = false)
+    (h_not_branch : findBranchTarget bd v = none)
+    (h_discharge : Vertex) (k : Nat) (hk : k < numHyps bd.base)
+    (h_intro : findIntroDischarge bd v = some h_discharge)
+    (h_idx : hypIndex bd.base h_discharge = some ⟨k, hk⟩) :
+    dldsSemanticsAt bd reading v =
+      HypDepVec.clearBit k
+        ((incomingSources bd.base v).foldl
+          (fun acc u => HypDepVec.or acc (dldsSemanticsAt bd reading u))
+          (HypDepVec.zero bd.base)) := by
+  obtain ⟨h_nodup, h_edges_topo⟩ := h_topo
+  obtain ⟨pre, post, h_split, h_v_not_pre, _h_v_not_post⟩ :=
+    nodup_split_at_vertex bd.evalOrder v h_nodup h_mem
+  let pre_env : List (Vertex × HypDepVec bd.base) :=
+    pre.foldl (fun e u => e ++ [(u, stepVertex bd reading e u)]) []
+  have h_full :
+      dldsSemantics bd reading =
+        post.foldl (fun e u => e ++ [(u, stepVertex bd reading e u)])
+          (pre_env ++ [(v, stepVertex bd reading pre_env v)]) := by
+    unfold dldsSemantics
+    rw [h_split, List.foldl_append, List.foldl_cons]
+  have h_pre_env_no_v : ∀ w', (v, w') ∉ pre_env := by
+    intro w' hw'
+    rcases foldl_append_keys_subset
+        (fun e u => stepVertex bd reading e u) pre [] (v, w') hw' with h1 | h1
+    · simp at h1
+    · exact h_v_not_pre h1
+  have h_lookup_singleton :
+      envLookup (pre_env ++ [(v, stepVertex bd reading pre_env v)]) v
+        = stepVertex bd reading pre_env v :=
+    envLookup_append_singleton_of_not_mem pre_env v
+      (stepVertex bd reading pre_env v) h_pre_env_no_v
+  obtain ⟨extras, hex⟩ := foldl_append_step_eq_append
+    (fun e u => stepVertex bd reading e u) post
+    (pre_env ++ [(v, stepVertex bd reading pre_env v)])
+  have h_lookup_v :
+      envLookup (dldsSemantics bd reading) v
+        = stepVertex bd reading pre_env v := by
+    have h_step1 :
+        envLookup ((pre_env ++ [(v, stepVertex bd reading pre_env v)]) ++ extras) v
+          = envLookup (pre_env ++ [(v, stepVertex bd reading pre_env v)]) v := by
+      apply envLookup_append_of_mem
+      exact ⟨stepVertex bd reading pre_env v, by simp⟩
+    rw [h_full, hex, h_step1]
+    exact h_lookup_singleton
+  have h_lookup_source : ∀ u ∈ incomingSources bd.base v,
+      envLookup (dldsSemantics bd reading) u = envLookup pre_env u := by
+    intro u hu_src
+    have hu_pre : u ∈ pre := by
+      unfold incomingSources at hu_src
+      rcases List.mem_map.mp hu_src with ⟨e, he_filter, he_start⟩
+      rcases List.mem_filter.mp he_filter with ⟨he_mem, he_end_b⟩
+      have he_end : e.END = v := by simpa using he_end_b
+      rw [← he_start]
+      exact h_edges_topo e he_mem pre post (by rw [he_end]; exact h_split)
+    have hu_in_pre_env : ∃ w, (u, w) ∈ pre_env :=
+      foldl_append_mem_of_mem
+        (fun e u => stepVertex bd reading e u) pre [] u hu_pre
+    have h_step1 :
+        envLookup ((pre_env ++ [(v, stepVertex bd reading pre_env v)]) ++ extras) u
+          = envLookup (pre_env ++ [(v, stepVertex bd reading pre_env v)]) u := by
+      apply envLookup_append_of_mem
+      obtain ⟨w, hw⟩ := hu_in_pre_env
+      exact ⟨w, List.mem_append_left _ hw⟩
+    have h_step2 :
+        envLookup (pre_env ++ [(v, stepVertex bd reading pre_env v)]) u
+          = envLookup pre_env u :=
+      envLookup_append_of_mem pre_env [(v, stepVertex bd reading pre_env v)] u
+        hu_in_pre_env
+    rw [h_full, hex, h_step1, h_step2]
+  have h_step_clear :
+      stepVertex bd reading pre_env v =
+        HypDepVec.clearBit k
+          ((incomingSources bd.base v).foldl
+            (fun acc u => HypDepVec.or acc (envLookup pre_env u))
+            (HypDepVec.zero bd.base)) :=
+    dldsSemantics_intro_clearbit bd reading pre_env v h_discharge k hk
+      h_not_hyp h_not_branch h_intro h_idx
+  unfold dldsSemanticsAt
+  rw [h_lookup_v, h_step_clear]
+  congr 1
+  apply foldl_or_congr
+  intro u hu
+  exact (h_lookup_source u hu).symm
+
+namespace Layer26Test
+
+open Semantic (Formula Vertex Deduction DLDS BranchingDLDS)
+
+private def fA : Formula := .atom "A"
+
+private def vA : Vertex :=
+  { node := 0, LEVEL := 1, FORMULA := fA,
+    HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+
+private def vIntro : Vertex :=
+  { node := 1, LEVEL := 0, FORMULA := .impl fA fA,
+    HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+
+private def eAtoIntro : Deduction :=
+  { START := vA, END := vIntro, COLOUR := 0, DEPENDENCY := [fA] }
+
+private def baseDLDS : DLDS :=
+  { V := [vA, vIntro], E := [eAtoIntro], A := [(vIntro, vA)] }
+
+def testIntroDLDS : BranchingDLDS :=
+  { base := baseDLDS
+    branchings := []
+    numReading := 0
+    evalOrder := [vA, vIntro] }
+
+-- Expected: [false]. vA contributes its one-hot [true] to the OR-fold at
+-- vIntro, and the introduction clears that bit.
+#eval (dldsSemanticsAt testIntroDLDS [] vIntro).toList
+
+end Layer26Test
+
+#check @findIntroDischarge
+#check @dldsSemantics_intro_clearbit
+#check @dldsSemanticsAt_intro_clearbit
 
 /-! #### Layer 2.11: Branching correspondence
 
@@ -3515,6 +3694,115 @@ def testBranchingDLDS : BranchingDLDS :=
 #eval (dldsSemanticsAt testBranchingDLDS [true]  vB).toList
 
 end Layer2Test
+
+/-! #### Layer 2.12: Medium-sized cross-case test
+
+A single branching DLDS that simultaneously exercises branching,
+introduction discharge, and plain ELIM, with four hypotheses so dep
+vectors have enough structure to distinguish per-vertex contributions.
+Used in the companion paper as the medium worked example. -/
+
+namespace BigTest
+
+open Semantic (Formula Vertex Deduction DLDS BranchingDLDS Branching)
+
+private def fA : Formula := .atom "A"
+private def fB : Formula := .atom "B"
+private def fC : Formula := .atom "C"
+private def fD : Formula := .atom "D"
+private def fE : Formula := .atom "E"
+private def fF : Formula := .atom "F"
+private def fG : Formula := .atom "G"
+private def fH : Formula := .atom "H"
+
+private def vH1 : Vertex :=
+  { node := 0, LEVEL := 2, FORMULA := fA,
+    HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+private def vH2 : Vertex :=
+  { node := 1, LEVEL := 2, FORMULA := fB,
+    HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+private def vH3 : Vertex :=
+  { node := 2, LEVEL := 2, FORMULA := fC,
+    HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+private def vH4 : Vertex :=
+  { node := 3, LEVEL := 2, FORMULA := fD,
+    HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+
+private def vE1 : Vertex :=
+  { node := 4, LEVEL := 1, FORMULA := fE,
+    HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+private def vE2 : Vertex :=
+  { node := 5, LEVEL := 1, FORMULA := fF,
+    HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+private def vI : Vertex :=
+  { node := 6, LEVEL := 1, FORMULA := fG,
+    HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+private def vRoot : Vertex :=
+  { node := 7, LEVEL := 0, FORMULA := fH,
+    HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+
+private def e_H1_E1 : Deduction :=
+  { START := vH1, END := vE1, COLOUR := 0, DEPENDENCY := [fA] }
+private def e_H2_E1 : Deduction :=
+  { START := vH2, END := vE1, COLOUR := 0, DEPENDENCY := [fB] }
+private def e_H2_E2 : Deduction :=
+  { START := vH2, END := vE2, COLOUR := 0, DEPENDENCY := [fB] }
+private def e_H3_E2 : Deduction :=
+  { START := vH3, END := vE2, COLOUR := 0, DEPENDENCY := [fC] }
+private def e_E1_I : Deduction :=
+  { START := vE1, END := vI, COLOUR := 0, DEPENDENCY := [fE] }
+private def e_I_Root : Deduction :=
+  { START := vI, END := vRoot, COLOUR := 0, DEPENDENCY := [fG] }
+private def e_E2_Root : Deduction :=
+  { START := vE2, END := vRoot, COLOUR := 0, DEPENDENCY := [fF] }
+private def e_H4_Root : Deduction :=
+  { START := vH4, END := vRoot, COLOUR := 0, DEPENDENCY := [fD] }
+
+private def baseDLDS : DLDS :=
+  { V := [vH1, vH2, vH3, vH4, vE1, vE2, vI, vRoot]
+    E := [e_H1_E1, e_H2_E1, e_H2_E2, e_H3_E2,
+          e_E1_I, e_I_Root, e_E2_Root, e_H4_Root]
+    A := [(vI, vH1)] }
+
+/-- Branching: vH3's dep flows into vE2 iff `reading[0] = true`
+    (colour 1). -/
+private def branchH3toE2 : Branching :=
+  { source := vH3, readingVar := 0, targets := [(1, vE2)] }
+
+/-- Eight-vertex branching DLDS exercising branching, introduction
+    discharge, and plain ELIM in a single object. Four hypotheses
+    vH1..vH4 with indices 0..3; vE1 plain-ORs vH1 and vH2; vE2 ORs
+    vH2 with vH3 conditionally on the reading bit; vI discharges
+    vH1 from vE1 (clearing bit 0); vRoot plain-ORs vI, vE2, and vH4. -/
+def bigTestDLDS : BranchingDLDS :=
+  { base := baseDLDS
+    branchings := [branchH3toE2]
+    numReading := 1
+    evalOrder := [vH1, vH2, vH3, vH4, vE1, vE2, vI, vRoot] }
+
+-- Reading [false]: the branching drops vH3's contribution at vE2.
+-- Expected dep vectors (bit order: vH1, vH2, vH3, vH4):
+--   vE1   = [true,  true,  false, false]
+--   vE2   = [false, true,  false, false]
+--   vI    = [false, true,  false, false]
+--   vRoot = [false, true,  false, true ]
+#eval (dldsSemanticsAt bigTestDLDS [false] vE1).toList
+#eval (dldsSemanticsAt bigTestDLDS [false] vE2).toList
+#eval (dldsSemanticsAt bigTestDLDS [false] vI).toList
+#eval (dldsSemanticsAt bigTestDLDS [false] vRoot).toList
+
+-- Reading [true]: colour 1 matches, so vH3 flows into vE2 and on into
+-- vRoot. Expected dep vectors:
+--   vE1   = [true,  true,  false, false]
+--   vE2   = [false, true,  true,  false]
+--   vI    = [false, true,  false, false]
+--   vRoot = [false, true,  true,  true ]
+#eval (dldsSemanticsAt bigTestDLDS [true] vE1).toList
+#eval (dldsSemanticsAt bigTestDLDS [true] vE2).toList
+#eval (dldsSemanticsAt bigTestDLDS [true] vI).toList
+#eval (dldsSemanticsAt bigTestDLDS [true] vRoot).toList
+
+end BigTest
 
 #check @dldsSemantics
 #check @dldsSemanticsAt
