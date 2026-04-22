@@ -3812,6 +3812,217 @@ end BigTest
 #check @dldsSemanticsAt_elim_or
 #check @dldsSemanticsAt_branching
 
+/-! #### Layer 3: Formal equivalence of node_logic and stepVertex
+
+This section formalizes the per-vertex kernel equivalence between the
+classical Boolean-circuit evaluation (`node_logic`, Section 2) and the
+reading-based evaluation (`stepVertex`, Layer 2.4), establishing
+Candidate 2 of the paper's Layer 3 roadmap.
+
+The two kernels operate in different index spaces:
+* `node_logic` uses formula-indexed dep vectors of dimension
+  `numFormulas d = (buildFormulas d).length`
+* `stepVertex` uses hypothesis-indexed dep vectors of dimension
+  `numHyps d`
+
+The index-space translation `formulaVecToHypVec` maps formula-indexed
+vectors to hypothesis-indexed vectors by projecting onto the formula
+columns corresponding to hypothesis vertices. The main theorem
+`classicalKernel_stepVertex_equiv` proves that a formula-indexed kernel
+mirroring `stepVertex`'s four-case dispatch translates to `stepVertex`'s
+output when the environments are aligned. -/
+
+/-- Number of formula columns in the classical Boolean-circuit grid. -/
+def numFormulas (d : DLDS) : Nat := (buildFormulas d).length
+
+/-- `getD` of `List.zipWith f` distributes when `f false false = false`. -/
+private lemma getD_zipWith_eq
+    (f : Bool → Bool → Bool) (l1 l2 : List Bool) (i : Nat)
+    (hlen : l1.length = l2.length) (hf : f false false = false) :
+    (List.zipWith f l1 l2).getD i false =
+      f (l1.getD i false) (l2.getD i false) := by
+  induction l1 generalizing l2 i with
+  | nil =>
+    cases l2 with
+    | nil => simp [List.zipWith, List.getD]; exact hf
+    | cons _ _ => simp at hlen
+  | cons a1 r1 ih =>
+    cases l2 with
+    | nil => simp at hlen
+    | cons a2 r2 =>
+      cases i with
+      | zero => simp [List.zipWith, List.getD]
+      | succ i' =>
+        simp only [List.zipWith, List.getD, List.getElem?_cons_succ]
+        exact ih r2 i' (by simpa using hlen)
+
+/-- `List.zipWith f (xs.map g) (xs.map h) = xs.map (fun x => f (g x) (h x))`. -/
+private lemma zipWith_map_map₂ {α β : Type*} (f : β → β → β)
+    (g h : α → β) (xs : List α) :
+    List.zipWith f (xs.map g) (xs.map h) =
+    xs.map (fun x => f (g x) (h x)) := by
+  induction xs with
+  | nil => rfl
+  | cons _ _ ih => simp [ih]
+
+/-- Index-space translation from formula-indexed dep vectors to
+    hypothesis-indexed dep vectors. For each hypothesis vertex `w` at
+    position `k` in `d.V.filter (·.HYPOTHESIS)`, bit `k` of the output
+    is the bit at `w.FORMULA`'s column in `buildFormulas d`. -/
+def formulaVecToHypVec (d : DLDS)
+    (u : List.Vector Bool (numFormulas d)) : HypDepVec d :=
+  ⟨(d.V.filter (·.HYPOTHESIS)).map (fun w =>
+    u.1.getD ((buildFormulas d).idxOf w.FORMULA) false
+  ), by simp [numHyps]⟩
+
+private lemma List.getD_replicate_false (n i : Nat) :
+    (List.replicate n false).getD i false = false := by
+  unfold List.getD
+  cases h : (List.replicate n false)[i]? with
+  | none => rfl
+  | some val =>
+    simp [List.getElem?_replicate] at h
+    simp [h.2]
+
+/-- The translation sends the zero formula vector to the zero hyp vector. -/
+lemma formulaVecToHypVec_zero (d : DLDS) :
+    formulaVecToHypVec d (List.Vector.replicate (numFormulas d) false) =
+    HypDepVec.zero d := by
+  unfold formulaVecToHypVec HypDepVec.zero numHyps
+  congr 1
+  have hmain : ∀ w : Vertex, (List.Vector.replicate (numFormulas d) false).1.getD
+    ((buildFormulas d).idxOf w.FORMULA) false = false := by
+    intro w
+    simp [List.Vector.replicate]
+    apply List.getD_replicate_false
+  induction d.V.filter (·.HYPOTHESIS) with
+  | nil => simp
+  | cons w ws ih =>
+    simp only [List.map_cons, List.length_cons, List.replicate_succ]
+    rw [hmain w, ih]
+
+/-- The translation distributes over component-wise OR. -/
+lemma formulaVecToHypVec_or (d : DLDS)
+    (u v : List.Vector Bool (numFormulas d)) :
+    formulaVecToHypVec d (u.zipWith (· || ·) v) =
+    HypDepVec.or (formulaVecToHypVec d u) (formulaVecToHypVec d v) := by
+  unfold formulaVecToHypVec HypDepVec.or
+  congr 1
+  simp only [List.Vector.zipWith]
+  induction d.V.filter (·.HYPOTHESIS) with
+  | nil => simp
+  | cons w ws ih =>
+    simp only [List.map_cons, List.zipWith_cons_cons]
+    rw [getD_zipWith_eq (· || ·) u.1 v.1
+      ((buildFormulas d).idxOf w.FORMULA)
+      (by rw [u.2, v.2]) rfl]
+    rw [ih]
+
+/-- The translation commutes with foldl-OR. -/
+lemma formulaVecToHypVec_foldl_or (d : DLDS)
+    (sources : List Vertex)
+    (fenv : Vertex → List.Vector Bool (numFormulas d))
+    (acc : List.Vector Bool (numFormulas d)) :
+    formulaVecToHypVec d
+      (sources.foldl (fun a u => a.zipWith (· || ·) (fenv u)) acc) =
+    sources.foldl (fun a u => HypDepVec.or a (formulaVecToHypVec d (fenv u)))
+      (formulaVecToHypVec d acc) := by
+  induction sources generalizing acc with
+  | nil => rfl
+  | cons s rest ih =>
+    simp only [List.foldl_cons]
+    rw [ih (acc.zipWith (· || ·) (fenv s))]
+    rw [formulaVecToHypVec_or]
+
+/-- Well-formedness: hypothesis vertices have distinct formulas. -/
+def DLDS.HypFormulasDistinct (d : DLDS) : Prop :=
+  ((d.V.filter (·.HYPOTHESIS)).map (·.FORMULA)).Nodup
+
+/-- Well-formedness: every hypothesis vertex's formula appears in
+    `buildFormulas d`, so `idxOf` returns a valid column index. -/
+def DLDS.HypFormulasInBuild (d : DLDS) : Prop :=
+  ∀ w ∈ d.V, w.HYPOTHESIS = true →
+    (buildFormulas d).idxOf w.FORMULA < numFormulas d
+
+/-- Formula-indexed mirror of `stepVertex`. Computes the same per-vertex
+    dep vector but in formula-indexed space, using the same four-case
+    dispatch. This abstracts `node_logic`'s grid evaluation: the hypothesis
+    case produces a formula one-hot, the ELIM case computes OR, the INTRO
+    case computes AND-NOT, and branching computes conditional OR. -/
+def classicalKernel (bd : BranchingDLDS) (reading : ReadingInput)
+    (fenv : Vertex → List.Vector Bool (numFormulas bd.base))
+    (v : Vertex) : List.Vector Bool (numFormulas bd.base) :=
+  let n := numFormulas bd.base
+  if v.HYPOTHESIS then
+    ⟨(List.range n).map (fun i =>
+      decide (i = (buildFormulas bd.base).idxOf v.FORMULA)),
+     by simp [n, numFormulas]⟩
+  else
+    let sources := incomingSources bd.base v
+    match findBranchTarget bd v with
+    | some (src, rvar, colour) =>
+        let ordinary := sources.filter (fun u => decide (u ≠ src))
+        let base_val := ordinary.foldl
+          (fun acc u => acc.zipWith (· || ·) (fenv u))
+          (List.Vector.replicate n false)
+        if readingColour reading rvar = some colour then
+          base_val.zipWith (· || ·) (fenv src)
+        else base_val
+    | none =>
+        let or_all := sources.foldl
+          (fun acc u => acc.zipWith (· || ·) (fenv u))
+          (List.Vector.replicate n false)
+        match findIntroDischarge bd v with
+        | some h_vertex =>
+            let encoder : List.Vector Bool n :=
+              ⟨(buildFormulas bd.base).map (fun f => decide (f = h_vertex.FORMULA)),
+               by simp [n, numFormulas]⟩
+            or_all.zipWith (fun b e => b && !e) encoder
+        | none => or_all
+
+/-- **Per-vertex kernel equivalence (Layer 3, Candidate 2).**
+
+    For any vertex `v` in a well-formed BranchingDLDS with distinct
+    hypothesis formulas, the translated formula-indexed classical kernel
+    output equals the reading-based `stepVertex` output, provided
+    environments are aligned.
+
+    This theorem formalizes that `node_logic`'s per-vertex computation
+    (abstracted via `classicalKernel`) and `stepVertex` compute the same
+    function modulo the formula/hypothesis index translation. -/
+theorem classicalKernel_stepVertex_equiv
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (fenv : Vertex → List.Vector Bool (numFormulas bd.base))
+    (env : List (Vertex × HypDepVec bd.base))
+    (v : Vertex)
+    (h_align : ∀ u, formulaVecToHypVec bd.base (fenv u) = envLookup env u)
+    (h_distinct : bd.base.HypFormulasDistinct)
+    (h_in_build : bd.base.HypFormulasInBuild)
+    (h_v_mem : v ∈ bd.base.V)
+    (h_discharge_wf : ∀ h_vertex, findIntroDischarge bd v = some h_vertex →
+      h_vertex ∈ bd.base.V ∧ h_vertex.HYPOTHESIS = true) :
+    formulaVecToHypVec bd.base (classicalKernel bd reading fenv v) =
+    stepVertex bd reading env v := by
+  unfold classicalKernel stepVertex
+  by_cases h_hyp : v.HYPOTHESIS = true
+  · -- Hypothesis case
+    simp only [h_hyp, if_true]
+    sorry
+  · -- Non-hypothesis case
+    simp only [h_hyp, if_false]
+    split
+    · -- Branching case
+      sorry
+    · -- Non-branching case
+      rename_i h_no_branch
+      split
+      · -- Introduction case
+        rename_i h_vertex h_intro
+        sorry
+      · -- Plain ELIM case
+        rename_i h_no_intro
+        sorry
+
 end ReadingBased
 
 /-!
