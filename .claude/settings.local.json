@@ -5,7 +5,11 @@
       "Bash(elan show:*)",
       "Bash(elan override:*)",
       "Bash(npm --version)",
-      "Bash(lake build:*)"
+      "Bash(lake build:*)",
+      "Read(//c/Users/Lorenzo/.elan/toolchains/**)",
+      "Read(//c/Users/Lorenzo/.elan/**)",
+      "Bash(grep -rn \"theorem getElem_idxOf\\\\|theorem mem_eraseDups\\\\|getElem_idxOf$\" \"C:/Users/Lorenzo/Documents/Workspace/Doutorado/DLDSBooleanCircuit/.lake/packages/\")",
+      "Bash(grep -rn \"@\\\\[simp\\\\].*eraseDups\\\\|theorem.*eraseDups\\\\|theorem mem_eraseDups\\\\b\\\\|mem_eraseDups$\\\\|eraseDups_eq_dedup\\\\|@\\\\[simp\\\\] theorem mem_\" \"C:/Users/Lorenzo/.elan/toolchains/leanprover--lean4---v4.12.0/src/lean/Init/Data/List/\")"
     ]
   }
 }

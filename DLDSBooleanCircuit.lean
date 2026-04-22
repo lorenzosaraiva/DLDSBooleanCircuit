@@ -6,6 +6,7 @@ import Mathlib.Data.List.Duplicate
 import Mathlib.Data.Vector.Defs
 import Mathlib.Data.Vector.Zip
 import Mathlib.Data.Fin.Basic
+import Mathlib.Data.List.GetD
 
 
 /-!
@@ -3894,7 +3895,6 @@ lemma formulaVecToHypVec_zero (d : DLDS) :
     ((buildFormulas d).idxOf w.FORMULA) false = false := by
     intro w
     simp [List.Vector.replicate]
-    apply List.getD_replicate_false
   induction d.V.filter (·.HYPOTHESIS) with
   | nil => simp
   | cons w ws ih =>
@@ -3980,6 +3980,208 @@ def classicalKernel (bd : BranchingDLDS) (reading : ReadingInput)
             or_all.zipWith (fun b e => b && !e) encoder
         | none => or_all
 
+/-- Foldl congruence: foldl with two step functions agreeing on every
+    list element produces the same result. -/
+private lemma foldl_congr_on_list {α β : Type*}
+    (f g : α → β → α) (xs : List β) (acc : α)
+    (h : ∀ a b, b ∈ xs → f a b = g a b) :
+    xs.foldl f acc = xs.foldl g acc := by
+  induction xs generalizing acc with
+  | nil => rfl
+  | cons b rest ih =>
+    simp only [List.foldl_cons]
+    rw [h acc b List.mem_cons_self]
+    apply ih
+    intro a' b' hb'
+    exact h a' b' (List.mem_cons_of_mem _ hb')
+
+/-- The hypothesis list `d.V.filter (·.HYPOTHESIS)` is `Nodup` whenever
+    its formula projection is. -/
+private lemma hyps_nodup_of_distinct (d : DLDS) (h_distinct : d.HypFormulasDistinct) :
+    (d.V.filter (·.HYPOTHESIS)).Nodup :=
+  List.Nodup.of_map _ h_distinct
+
+/-- Two hypothesis vertices have the same formula iff they are equal. -/
+private lemma hyp_formula_eq_iff_eq
+    (d : DLDS) (h_distinct : d.HypFormulasDistinct)
+    {w v : Vertex}
+    (hw_in : w ∈ d.V.filter (·.HYPOTHESIS))
+    (hv_in : v ∈ d.V.filter (·.HYPOTHESIS)) :
+    w.FORMULA = v.FORMULA ↔ w = v := by
+  refine ⟨fun h => ?_, fun h => h ▸ rfl⟩
+  exact List.inj_on_of_nodup_map h_distinct hw_in hv_in h
+
+/-- Pointwise translation of the formula-one-hot at `v.FORMULA` to the
+    hypothesis-one-hot at `v`'s position in the hypothesis list. -/
+private lemma formulaVecToHypVec_formula_oneHot
+    (d : DLDS) (v : Vertex)
+    (h_distinct : d.HypFormulasDistinct)
+    (h_in_build : d.HypFormulasInBuild)
+    (h_v_mem : v ∈ d.V) (h_v_hyp : v.HYPOTHESIS = true)
+    (h_idx_lt : (d.V.filter (·.HYPOTHESIS)).idxOf v < numHyps d) :
+    formulaVecToHypVec d
+      ⟨(List.range (numFormulas d)).map (fun i =>
+          decide (i = (buildFormulas d).idxOf v.FORMULA)),
+        by simp [numFormulas]⟩ =
+    HypDepVec.oneHot d ((d.V.filter (·.HYPOTHESIS)).idxOf v) h_idx_lt := by
+  apply Subtype.ext
+  unfold formulaVecToHypVec HypDepVec.oneHot
+  dsimp only
+  set hyps := d.V.filter (·.HYPOTHESIS) with hhyp
+  have hv_in : v ∈ hyps :=
+    List.mem_filter.mpr ⟨h_v_mem, by simp [h_v_hyp]⟩
+  have hyps_nodup : hyps.Nodup := hyps_nodup_of_distinct d h_distinct
+  have hlen_hyps : hyps.length = numHyps d := rfl
+  apply List.ext_getElem
+  · simp [List.length_map, List.length_range, hlen_hyps]
+  · intro i hi1 hi2
+    rw [List.getElem_map, List.getElem_map, List.getElem_range]
+    have hi_lt_hyps : i < hyps.length := by
+      simpa [List.length_map] using hi1
+    have hwi_mem : hyps[i] ∈ hyps := List.getElem_mem _
+    have hwi_in_dV : hyps[i] ∈ d.V := (List.mem_filter.mp hwi_mem).1
+    have hwi_hyp : hyps[i].HYPOTHESIS = true := by
+      have := (List.mem_filter.mp hwi_mem).2; simpa using this
+    have h_idx_w_lt : (buildFormulas d).idxOf hyps[i].FORMULA < numFormulas d :=
+      h_in_build _ hwi_in_dV hwi_hyp
+    have h_lhs_get :
+        ((List.range (numFormulas d)).map
+          (fun j => decide (j = (buildFormulas d).idxOf v.FORMULA))).getD
+          ((buildFormulas d).idxOf hyps[i].FORMULA) false
+        = decide ((buildFormulas d).idxOf hyps[i].FORMULA
+            = (buildFormulas d).idxOf v.FORMULA) := by
+      rw [List.getD_eq_getElem _ _ (by simp [List.length_map, List.length_range, h_idx_w_lt])]
+      simp
+    rw [h_lhs_get]
+    have h_eq_iff :
+        ((buildFormulas d).idxOf hyps[i].FORMULA = (buildFormulas d).idxOf v.FORMULA)
+        ↔ (i = hyps.idxOf v) := by
+      constructor
+      · intro hidx
+        have h_idx_v_lt : (buildFormulas d).idxOf v.FORMULA < (buildFormulas d).length :=
+          h_in_build _ h_v_mem h_v_hyp
+        have h_idx_w_lt' : (buildFormulas d).idxOf hyps[i].FORMULA <
+            (buildFormulas d).length := h_idx_w_lt
+        have hwi_form_in : hyps[i].FORMULA ∈ buildFormulas d :=
+          List.idxOf_lt_length_iff.mp h_idx_w_lt'
+        have hv_form_in : v.FORMULA ∈ buildFormulas d :=
+          List.idxOf_lt_length_iff.mp h_idx_v_lt
+        have h1 := List.getElem?_idxOf hwi_form_in
+        have h2 := List.getElem?_idxOf hv_form_in
+        rw [hidx] at h1
+        have h_form_eq : hyps[i].FORMULA = v.FORMULA :=
+          Option.some.inj (h1.symm.trans h2)
+        have h_w_eq : hyps[i] = v :=
+          (hyp_formula_eq_iff_eq d h_distinct hwi_mem hv_in).mp h_form_eq
+        have := hyps_nodup.idxOf_getElem i hi_lt_hyps
+        rw [h_w_eq] at this
+        exact this.symm
+      · intro hi_eq
+        have h_w_eq : hyps[i] = v := by
+          subst hi_eq
+          exact List.getElem_idxOf (List.idxOf_lt_length_of_mem hv_in)
+        rw [h_w_eq]
+    by_cases h : i = hyps.idxOf v
+    · simp [h]
+    · have hne : ¬ ((buildFormulas d).idxOf hyps[i].FORMULA
+          = (buildFormulas d).idxOf v.FORMULA) := fun heq => h (h_eq_iff.mp heq)
+      simp [hne, h]
+
+/-- Pointwise translation of the AND-NOT (clear-bit) operation: applying
+    `formulaVecToHypVec` to `u.zipWith (b && !e)` for an `e` that marks
+    only `h_vertex.FORMULA`'s column equals clearing bit `k` of the
+    translated `u`, where `k` is `h_vertex`'s hypothesis index. -/
+private lemma formulaVecToHypVec_clearBit
+    (d : DLDS) (u : List.Vector Bool (numFormulas d))
+    (h_vertex : Vertex)
+    (h_distinct : d.HypFormulasDistinct)
+    (h_in_build : d.HypFormulasInBuild)
+    (h_h_mem : h_vertex ∈ d.V) (h_h_hyp : h_vertex.HYPOTHESIS = true)
+    (h_idx_lt : (d.V.filter (·.HYPOTHESIS)).idxOf h_vertex < numHyps d) :
+    formulaVecToHypVec d
+      (u.zipWith (fun b e => b && !e)
+        ⟨(buildFormulas d).map (fun f => decide (f = h_vertex.FORMULA)),
+         by simp [numFormulas]⟩) =
+    HypDepVec.clearBit ((d.V.filter (·.HYPOTHESIS)).idxOf h_vertex)
+      (formulaVecToHypVec d u) := by
+  apply Subtype.ext
+  unfold formulaVecToHypVec HypDepVec.clearBit
+  dsimp only
+  set hyps := d.V.filter (·.HYPOTHESIS) with hhyp
+  have hh_in : h_vertex ∈ hyps :=
+    List.mem_filter.mpr ⟨h_h_mem, by simp [h_h_hyp]⟩
+  have hyps_nodup : hyps.Nodup := hyps_nodup_of_distinct d h_distinct
+  have hlen_hyps : hyps.length = numHyps d := rfl
+  -- Show two lists of length numHyps are pointwise equal.
+  apply List.ext_getElem
+  · simp [List.length_map, List.length_zipIdx, hlen_hyps]
+  · intro i hi1 hi2
+    rw [List.getElem_map]
+    simp only [List.getElem_map, List.getElem_zipIdx]
+    have hi_lt_hyps : i < hyps.length := by
+      simpa [List.length_map] using hi1
+    have hwi_mem : hyps[i] ∈ hyps := List.getElem_mem _
+    have hwi_in_dV : hyps[i] ∈ d.V := (List.mem_filter.mp hwi_mem).1
+    have hwi_hyp : hyps[i].HYPOTHESIS = true := by
+      have := (List.mem_filter.mp hwi_mem).2; simpa using this
+    have h_idx_w_lt : (buildFormulas d).idxOf hyps[i].FORMULA < numFormulas d :=
+      h_in_build _ hwi_in_dV hwi_hyp
+    -- LHS: zipWith result at position idxOf hyps[i].FORMULA
+    have hlen_u : u.1.length = numFormulas d := u.2
+    have hlen_enc : ((buildFormulas d).map
+      (fun f => decide (f = h_vertex.FORMULA))).length = numFormulas d := by
+      simp [numFormulas]
+    simp only [List.Vector.zipWith]
+    rw [getD_zipWith_eq (fun b e => b && !e) u.1
+      ((buildFormulas d).map (fun f => decide (f = h_vertex.FORMULA)))
+      ((buildFormulas d).idxOf hyps[i].FORMULA)
+      (by rw [hlen_u, hlen_enc]) rfl]
+    -- Evaluate the encoder getD
+    have h_idx_form_lt : (buildFormulas d).idxOf hyps[i].FORMULA <
+        (buildFormulas d).length := h_idx_w_lt
+    have hwi_form_in : hyps[i].FORMULA ∈ buildFormulas d :=
+      List.idxOf_lt_length_iff.mp h_idx_form_lt
+    have h_enc_get :
+        ((buildFormulas d).map (fun f => decide (f = h_vertex.FORMULA))).getD
+          ((buildFormulas d).idxOf hyps[i].FORMULA) false
+        = decide (hyps[i].FORMULA = h_vertex.FORMULA) := by
+      rw [List.getD_eq_getElem _ _ (by simp [List.length_map, h_idx_form_lt])]
+      rw [List.getElem_map]
+      rw [List.getElem_idxOf h_idx_form_lt]
+    rw [h_enc_get]
+    -- RHS: clearBit at position i. Since hyps[i] corresponds to position i in the map,
+    -- the map's i-th entry has index i.
+    -- Goal RHS reduces to: if i = idxOf h_vertex then false else (formulaVecToHypVec u).1[i]
+    -- with (formulaVecToHypVec u).1[i] = u.1.getD (idxOf hyps[i].FORMULA) false.
+    -- The propositional condition `hyps[i].FORMULA = h_vertex.FORMULA ↔ i = idxOf h_vertex`.
+    have h_eq_iff :
+        (hyps[i].FORMULA = h_vertex.FORMULA) ↔ (i = hyps.idxOf h_vertex) := by
+      constructor
+      · intro h_form_eq
+        have h_w_eq : hyps[i] = h_vertex :=
+          (hyp_formula_eq_iff_eq d h_distinct hwi_mem hh_in).mp h_form_eq
+        have := hyps_nodup.idxOf_getElem i hi_lt_hyps
+        rw [h_w_eq] at this
+        exact this.symm
+      · intro hi_eq
+        have h_w_eq : hyps[i] = h_vertex := by
+          have h_idx_lt' : hyps.idxOf h_vertex < hyps.length :=
+            List.idxOf_lt_length_of_mem hh_in
+          have key : hyps[hyps.idxOf h_vertex]'h_idx_lt' = h_vertex :=
+            List.getElem_idxOf h_idx_lt'
+          -- Bridge from i to idxOf h_vertex hyps using hi_eq
+          have : hyps[i]'hi_lt_hyps = hyps[hyps.idxOf h_vertex]'h_idx_lt' := by
+            congr 1
+          rw [this]
+          exact key
+        rw [h_w_eq]
+    by_cases h : i = hyps.idxOf h_vertex
+    · have h_form := h_eq_iff.mpr h
+      simp [h]
+    · have h_form_ne : ¬ (hyps[i].FORMULA = h_vertex.FORMULA) :=
+        fun heq => h (h_eq_iff.mp heq)
+      simp [h, h_form_ne]
+
 /-- **Per-vertex kernel equivalence (Layer 3, Candidate 2).**
 
     For any vertex `v` in a well-formed BranchingDLDS with distinct
@@ -4006,22 +4208,82 @@ theorem classicalKernel_stepVertex_equiv
   unfold classicalKernel stepVertex
   by_cases h_hyp : v.HYPOTHESIS = true
   · -- Hypothesis case
-    simp only [h_hyp, if_true]
-    sorry
+    rw [if_pos h_hyp, if_pos h_hyp]
+    have hv_in_hyps : v ∈ bd.base.V.filter (·.HYPOTHESIS) :=
+      List.mem_filter.mpr ⟨h_v_mem, by simp [h_hyp]⟩
+    have h_idx_lt : (bd.base.V.filter (·.HYPOTHESIS)).idxOf v < numHyps bd.base :=
+      List.idxOf_lt_length_of_mem hv_in_hyps
+    have h_hypIndex : hypIndex bd.base v =
+        some ⟨(bd.base.V.filter (·.HYPOTHESIS)).idxOf v, h_idx_lt⟩ := by
+      unfold hypIndex
+      simp [h_idx_lt]
+    rw [h_hypIndex]
+    exact formulaVecToHypVec_formula_oneHot bd.base v h_distinct h_in_build
+      h_v_mem h_hyp h_idx_lt
   · -- Non-hypothesis case
-    simp only [h_hyp, if_false]
-    split
-    · -- Branching case
-      sorry
-    · -- Non-branching case
-      rename_i h_no_branch
-      split
-      · -- Introduction case
-        rename_i h_vertex h_intro
-        sorry
-      · -- Plain ELIM case
-        rename_i h_no_intro
-        sorry
+    rw [if_neg h_hyp, if_neg h_hyp]
+    -- Both sides match on findBranchTarget bd v
+    cases h_branch : findBranchTarget bd v with
+    | some triple =>
+      obtain ⟨src, rvar, colour⟩ := triple
+      simp only
+      -- Both branches have a conditional on readingColour
+      set ordinary := (incomingSources bd.base v).filter
+        (fun u => decide (u ≠ src)) with hord
+      -- Translate the ordinary foldl
+      have h_foldl_translate :
+          formulaVecToHypVec bd.base
+            (ordinary.foldl
+              (fun acc u => acc.zipWith (· || ·) (fenv u))
+              (List.Vector.replicate (numFormulas bd.base) false)) =
+          ordinary.foldl
+            (fun acc u => HypDepVec.or acc (envLookup env u))
+            (HypDepVec.zero bd.base) := by
+        rw [formulaVecToHypVec_foldl_or, formulaVecToHypVec_zero]
+        apply foldl_congr_on_list
+        intro a u _
+        rw [h_align]
+      by_cases h_col : readingColour reading rvar = some colour
+      · simp only [h_col, if_true]
+        rw [formulaVecToHypVec_or]
+        rw [h_foldl_translate, h_align]
+      · simp only [h_col, if_false]
+        exact h_foldl_translate
+    | none =>
+      simp only
+      -- Translate the foldl over all incoming sources
+      have h_foldl_translate :
+          formulaVecToHypVec bd.base
+            ((incomingSources bd.base v).foldl
+              (fun acc u => acc.zipWith (· || ·) (fenv u))
+              (List.Vector.replicate (numFormulas bd.base) false)) =
+          (incomingSources bd.base v).foldl
+            (fun acc u => HypDepVec.or acc (envLookup env u))
+            (HypDepVec.zero bd.base) := by
+        rw [formulaVecToHypVec_foldl_or, formulaVecToHypVec_zero]
+        apply foldl_congr_on_list
+        intro a u _
+        rw [h_align]
+      cases h_intro : findIntroDischarge bd v with
+      | some h_vertex =>
+        simp only
+        obtain ⟨hh_mem, hh_hyp⟩ := h_discharge_wf h_vertex h_intro
+        have hh_in_hyps : h_vertex ∈ bd.base.V.filter (·.HYPOTHESIS) :=
+          List.mem_filter.mpr ⟨hh_mem, by simp [hh_hyp]⟩
+        have h_idx_lt : (bd.base.V.filter (·.HYPOTHESIS)).idxOf h_vertex
+            < numHyps bd.base :=
+          List.idxOf_lt_length_of_mem hh_in_hyps
+        have h_hypIndex : hypIndex bd.base h_vertex =
+            some ⟨(bd.base.V.filter (·.HYPOTHESIS)).idxOf h_vertex, h_idx_lt⟩ := by
+          unfold hypIndex
+          simp [h_idx_lt]
+        rw [h_hypIndex]
+        rw [formulaVecToHypVec_clearBit bd.base _ h_vertex h_distinct h_in_build
+          hh_mem hh_hyp h_idx_lt]
+        rw [h_foldl_translate]
+      | none =>
+        simp only
+        exact h_foldl_translate
 
 end ReadingBased
 
