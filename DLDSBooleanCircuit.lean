@@ -2938,7 +2938,7 @@ theorem dldsSemantics_elim_or
     branching; its proof is deferred to Layer 3, where the necessary
     topological-ordering invariant will be established. For now the
     placeholder body is `True := by trivial` so the theorem name
-    exists without introducing a `sorry` in the main file. -/
+    exists without introducing an unproved proof term in the main file. -/
 theorem dldsSemantics_branching
     (_bd : BranchingDLDS)
     (_reading : ReadingInput)
@@ -4284,6 +4284,991 @@ theorem classicalKernel_stepVertex_equiv
       | none =>
         simp only
         exact h_foldl_translate
+
+/-! #### Layer 3 Candidate 1: grid bridge infrastructure
+
+The definitions below connect reading inputs to the existing path-based
+grid evaluator without changing the earlier APIs. The bridge theorem is
+proved under `BranchingDLDS.GridCompatible`, an explicit semantic invariant
+that says the extracted grid environment is closed under `classicalKernel`.
+The counterexample at the end records why that invariant is necessary. -/
+
+/-- Maximum DLDS level. This is the top level used by `buildLayers`. -/
+def dldsMaxLevel (d : DLDS) : Nat :=
+  (d.V.map (fun v => v.LEVEL)).foldl max 0
+
+/-- Number of path transitions used by the constructed grid. -/
+def gridTransitionCount (d : DLDS) : Nat :=
+  (buildGridFromDLDS d).length - 1
+
+lemma gridTransitionCount_eq_dldsMaxLevel (d : DLDS) :
+    gridTransitionCount d = dldsMaxLevel d := by
+  unfold gridTransitionCount buildGridFromDLDS buildLayers dldsMaxLevel
+  simp
+
+/-- First top-level vertex carrying a formula, if one exists. -/
+def topVertexForFormula (bd : BranchingDLDS) (formula : Formula) : Option Vertex :=
+  let top := dldsMaxLevel bd.base
+  bd.base.V.find? fun v => decide (v.FORMULA = formula ∧ v.LEVEL = top)
+
+/-- Branching metadata whose source is the current vertex, if any. -/
+def branchingFromSource (bd : BranchingDLDS) (u : Vertex) : Option Branching :=
+  bd.branchings.find? fun b => decide (b.source = u)
+
+/-- Keep only one-level-down targets, since the grid advances one layer per step. -/
+def oneLevelDownTarget (u w : Vertex) : Option Vertex :=
+  if w.LEVEL + 1 = u.LEVEL then some w else none
+
+/-- Target chosen by a reading bit for one branching source. -/
+def branchTargetForReading (reading : ReadingInput) (b : Branching) :
+    Option Vertex :=
+  match readingColour reading b.readingVar with
+  | none => none
+  | some colour =>
+      match b.targets.find? (fun p => decide (p.1 = colour)) with
+      | none => none
+      | some target => oneLevelDownTarget b.source target.2
+
+/-- Ordinary DLDS edge target followed by the path converter. -/
+def ordinaryTargetForPath (bd : BranchingDLDS) (u : Vertex) : Option Vertex :=
+  match bd.base.E.find? (fun e =>
+      decide (e.START = u ∧ e.END.LEVEL + 1 = u.LEVEL)) with
+  | none => none
+  | some e => some e.END
+
+/-- Next vertex selected by the reading-induced path. Branching metadata has
+    priority over ordinary edges, matching `stepVertex`'s branch-target case. -/
+def nextVertexForReading (bd : BranchingDLDS) (reading : ReadingInput)
+    (u : Vertex) : Option Vertex :=
+  match branchingFromSource bd u with
+  | some b => branchTargetForReading reading b
+  | none => ordinaryTargetForPath bd u
+
+/-- Build one token trajectory. The output length is exactly `steps`. -/
+def readingPathFromVertex (bd : BranchingDLDS) (reading : ReadingInput) :
+    Option Vertex -> Nat -> List Nat
+  | _, 0 => []
+  | none, steps + 1 => 0 :: readingPathFromVertex bd reading none steps
+  | some u, steps + 1 =>
+      match nextVertexForReading bd reading u with
+      | none => 0 :: readingPathFromVertex bd reading none steps
+      | some w =>
+          ((buildFormulas bd.base).idxOf w.FORMULA + 1) ::
+            readingPathFromVertex bd reading (some w) steps
+
+lemma readingPathFromVertex_length
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (start : Option Vertex) (steps : Nat) :
+    (readingPathFromVertex bd reading start steps).length = steps := by
+  induction steps generalizing start with
+  | zero =>
+      cases start <;> rfl
+  | succ steps ih =>
+      cases start with
+      | none =>
+          simp [readingPathFromVertex, ih]
+      | some u =>
+          simp [readingPathFromVertex]
+          split <;> simp [ih]
+
+/-- Convert a reading assignment into complete grid paths.
+
+Each formula column starts at the first top-level vertex carrying that
+formula. At each level transition it follows either the reading-selected
+branching target or the first one-level ordinary edge. Missing edges, missing
+top vertices, and unmatched branch colours emit stop entries. -/
+def readingToPathFull (bd : BranchingDLDS) (reading : ReadingInput) :
+    PathInput :=
+  let steps := dldsMaxLevel bd.base
+  (buildFormulas bd.base).map fun formula =>
+    readingPathFromVertex bd reading (topVertexForFormula bd formula) steps
+
+/-- `readingToPathFull` produces one path per formula and one entry per
+    grid transition in each path. -/
+theorem readingToPathFull_wellformed
+    (bd : BranchingDLDS) (reading : ReadingInput) :
+    (readingToPathFull bd reading).length = numFormulas bd.base ∧
+      ∀ path ∈ readingToPathFull bd reading,
+        path.length = gridTransitionCount bd.base := by
+  constructor
+  · simp [readingToPathFull, numFormulas]
+  · intro path h_mem
+    unfold readingToPathFull at h_mem
+    rcases List.mem_map.mp h_mem with ⟨formula, _h_formula, h_path⟩
+    rw [← h_path, readingPathFromVertex_length,
+      gridTransitionCount_eq_dldsMaxLevel]
+
+lemma readingPathFromVertex_routes_first
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (u v : Vertex) (steps : Nat)
+    (h_next : nextVertexForReading bd reading u = some v) :
+    (readingPathFromVertex bd reading (some u) (steps + 1)).head? =
+      some ((buildFormulas bd.base).idxOf v.FORMULA + 1) := by
+  simp [readingPathFromVertex, h_next]
+
+lemma readingPathFromVertex_stops_first
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (u : Vertex) (steps : Nat)
+    (h_next : nextVertexForReading bd reading u = none) :
+    (readingPathFromVertex bd reading (some u) (steps + 1)).head? =
+      some 0 := by
+  simp [readingPathFromVertex, h_next]
+
+/-- Formula column lookup used by trace extraction. -/
+def formulaColumn (d : DLDS) (formula : Formula) : Nat :=
+  (buildFormulas d).idxOf formula
+
+/-- Zero formula-indexed vector. -/
+def formulaVecZero (d : DLDS) : List.Vector Bool (numFormulas d) :=
+  List.Vector.replicate (numFormulas d) false
+
+/-- Read a formula column from a layer output, returning zero out of bounds. -/
+def outputAtFormula (d : DLDS)
+    (outputs : List (List.Vector Bool (numFormulas d)))
+    (formula : Formula) : List.Vector Bool (numFormulas d) :=
+  if h : formulaColumn d formula < outputs.length then
+    outputs.get ⟨formulaColumn d formula, h⟩
+  else
+    formulaVecZero d
+
+/-- Trace layer outputs while running the same evaluator as `get_eval_result`. -/
+def evalTraceFromLevel {n : Nat}
+    (paths : PathInput)
+    (level : Nat)
+    (tokens : List (Token n))
+    (remainingLayers : List (GridLayer n))
+    (numLevels : Nat) :
+    List (Prod Nat (List (List.Vector Bool n))) :=
+  match remainingLayers with
+  | [] => []
+  | layer :: rest =>
+      let result := evaluate_layer layer tokens
+      let outputs := result.1
+      let here := (level, outputs)
+      match rest with
+      | [] => [here]
+      | _ =>
+          let newTokens := propagate_tokens tokens paths level numLevels outputs
+          here :: evalTraceFromLevel paths (level - 1) newTokens rest numLevels
+
+/-- Full evaluation trace from the initial grid tokens. -/
+def get_eval_trace {n : Nat}
+    (layers : List (GridLayer n))
+    (initialVectors : List (List.Vector Bool n))
+    (paths : PathInput) :
+    List (Prod Nat (List (List.Vector Bool n))) :=
+  let numLevels := layers.length
+  let initialTokens := initialize_tokens initialVectors numLevels
+  evalTraceFromLevel paths (numLevels - 1) initialTokens layers numLevels
+
+/-- Find the layer outputs recorded for a DLDS level. -/
+def traceOutputsAtLevel {n : Nat}
+    (trace : List (Prod Nat (List (List.Vector Bool n))))
+    (level : Nat) : Option (List (List.Vector Bool n)) :=
+  (trace.find? (fun entry => decide (entry.1 = level))).map Prod.snd
+
+/-- Extract the grid-computed formula-indexed vector at a vertex's level
+    and formula column. This reads actual `evaluate_layer` outputs. -/
+def extract_grid_result_at_vertex
+    (bd : BranchingDLDS)
+    (grid : List (GridLayer (numFormulas bd.base)))
+    (initialVecs : List (List.Vector Bool (numFormulas bd.base)))
+    (paths : PathInput)
+    (v : Vertex) : List.Vector Bool (numFormulas bd.base) :=
+  match traceOutputsAtLevel (get_eval_trace grid initialVecs paths) v.LEVEL with
+  | none => formulaVecZero bd.base
+  | some outputs => outputAtFormula bd.base outputs v.FORMULA
+
+theorem extract_grid_result_at_vertex_of_trace_hit
+    (bd : BranchingDLDS)
+    (grid : List (GridLayer (numFormulas bd.base)))
+    (initialVecs : List (List.Vector Bool (numFormulas bd.base)))
+    (paths : PathInput)
+    (v : Vertex)
+    (outputs : List (List.Vector Bool (numFormulas bd.base)))
+    (h_trace :
+      traceOutputsAtLevel (get_eval_trace grid initialVecs paths) v.LEVEL =
+        some outputs) :
+    extract_grid_result_at_vertex bd grid initialVecs paths v =
+      outputAtFormula bd.base outputs v.FORMULA := by
+  unfold extract_grid_result_at_vertex
+  rw [h_trace]
+
+/-- Vertex-indexed environment extracted from a concrete grid run. -/
+def gridFEnvFromPath
+    (bd : BranchingDLDS)
+    (grid : List (GridLayer (numFormulas bd.base)))
+    (initialVecs : List (List.Vector Bool (numFormulas bd.base)))
+    (paths : PathInput) :
+    Vertex → List.Vector Bool (numFormulas bd.base) :=
+  fun u => extract_grid_result_at_vertex bd grid initialVecs paths u
+
+/-- Vertex-indexed environment extracted from the reading-induced grid run. -/
+def gridFEnvFromReading
+    (bd : BranchingDLDS) (reading : ReadingInput) :
+    Vertex → List.Vector Bool (numFormulas bd.base) :=
+  let grid := buildGridFromDLDS bd.base
+  let initialVecs := initialVectorsFromDLDS bd.base
+  let paths := readingToPathFull bd reading
+  gridFEnvFromPath bd grid initialVecs paths
+
+/-- Semantic compatibility between the current formula-rule grid and the
+    DLDS-edge-based classical kernel for one reading.
+
+This is the explicit trust boundary needed by the bridge: after running the
+actual `node_logic` grid with `readingToPathFull`, every evaluation-order
+vertex must already satisfy the same per-vertex equation as
+`classicalKernel`. A later structural version should derive this predicate
+from edge-rule shape constraints on `DLDS.E`. -/
+def BranchingDLDS.GridCompatibleForReading
+    (bd : BranchingDLDS) (reading : ReadingInput) : Prop :=
+  ∀ v ∈ bd.evalOrder,
+    gridFEnvFromReading bd reading v =
+      classicalKernel bd reading (gridFEnvFromReading bd reading) v
+
+/-- Grid compatibility for all readings. -/
+def BranchingDLDS.GridCompatible (bd : BranchingDLDS) : Prop :=
+  ∀ reading, bd.GridCompatibleForReading reading
+
+/-- Candidate 1 bridge under the explicit grid-compatibility invariant. -/
+theorem node_logic_equals_classicalKernel_under_GridCompatible
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (v : Vertex)
+    (h_mem : v ∈ bd.evalOrder)
+    (h_compat : bd.GridCompatible) :
+    let grid := buildGridFromDLDS bd.base
+    let initialVecs := initialVectorsFromDLDS bd.base
+    let paths := readingToPathFull bd reading
+    let fenvFromGrid : Vertex → List.Vector Bool (numFormulas bd.base) :=
+      gridFEnvFromPath bd grid initialVecs paths
+    fenvFromGrid v = classicalKernel bd reading fenvFromGrid v := by
+  simpa [BranchingDLDS.GridCompatible, BranchingDLDS.GridCompatibleForReading,
+    gridFEnvFromReading, gridFEnvFromPath] using h_compat reading v h_mem
+
+theorem node_logic_equals_classicalKernel_for_reading
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (v : Vertex)
+    (h_mem : v ∈ bd.evalOrder)
+    (h_compat : bd.GridCompatibleForReading reading) :
+    let grid := buildGridFromDLDS bd.base
+    let initialVecs := initialVectorsFromDLDS bd.base
+    let paths := readingToPathFull bd reading
+    let fenvFromGrid : Vertex → List.Vector Bool (numFormulas bd.base) :=
+      gridFEnvFromPath bd grid initialVecs paths
+    fenvFromGrid v = classicalKernel bd reading fenvFromGrid v := by
+  simpa [BranchingDLDS.GridCompatibleForReading, gridFEnvFromReading,
+    gridFEnvFromPath] using h_compat v h_mem
+
+/-! ##### Structural compatibility, non-branching fragment
+
+This is the first structural approximation to `GridCompatible`. It is local
+and executable: each evaluation-order vertex must have one of the formula-rule
+shapes that `buildIncomingMapForFormula` can represent. The theorem deriving
+the full semantic `GridCompatible` from this structural predicate is the next
+large proof obligation; the lemmas here record the shape facts needed for it. -/
+
+/-- A source vertex is exactly one grid level above its target. -/
+def sourceOneLevelAbove (source target : Vertex) : Bool :=
+  decide (source.LEVEL = target.LEVEL + 1)
+
+/-- A formula pair can be the major and minor premise of an elimination whose
+    conclusion formula is `target`. -/
+def elimPremiseFormulasMatch
+    (target major minor : Formula) : Bool :=
+  match major with
+  | Formula.impl A B => decide (B = target ∧ A = minor)
+  | _ => false
+
+/-- Two source vertices form a proper implication-elimination pair for `v`. -/
+def elimSourcePairMatches (v major minor : Vertex) : Bool :=
+  elimPremiseFormulasMatch v.FORMULA major.FORMULA minor.FORMULA &&
+    sourceOneLevelAbove major v &&
+    sourceOneLevelAbove minor v
+
+/-- Hypothesis shape accepted by the current grid initialization model. -/
+def isHypothesisShapeForGrid (bd : BranchingDLDS) (v : Vertex) : Bool :=
+  decide (v.HYPOTHESIS = true ∧ v.LEVEL = dldsMaxLevel bd.base ∧
+    topVertexForFormula bd v.FORMULA = some v)
+
+/-- Repetition shape: a single source with the same formula one level above. -/
+def isRepetitionShapeForGrid (bd : BranchingDLDS) (v : Vertex) : Bool :=
+  match incomingSources bd.base v with
+  | [u] =>
+      decide (v.HYPOTHESIS = false ∧ findBranchTarget bd v = none ∧
+        findIntroDischarge bd v = none ∧ u.FORMULA = v.FORMULA) &&
+        sourceOneLevelAbove u v
+  | _ => false
+
+/-- Introduction shape: target `A -> B`, one source `B`, discharging `A`. -/
+def isIntroShapeForGrid (bd : BranchingDLDS) (v : Vertex) : Bool :=
+  match v.FORMULA, incomingSources bd.base v, findIntroDischarge bd v with
+  | Formula.impl A B, [u], some h =>
+      decide (v.HYPOTHESIS = false ∧ findBranchTarget bd v = none ∧
+        h.HYPOTHESIS = true ∧ h.FORMULA = A ∧ u.FORMULA = B) &&
+        sourceOneLevelAbove u v
+  | _, _, _ => false
+
+/-- Elimination shape: exactly two sources, one major `A -> B` and one minor
+    `A`, both one level above target `B`. Either source order is accepted. -/
+def isElimShapeForGrid (bd : BranchingDLDS) (v : Vertex) : Bool :=
+  match incomingSources bd.base v with
+  | [u, w] =>
+      decide (v.HYPOTHESIS = false ∧ findBranchTarget bd v = none ∧
+        findIntroDischarge bd v = none) &&
+        (elimSourcePairMatches v u w || elimSourcePairMatches v w u)
+  | _ => false
+
+/-- Local structural shape accepted by the current non-branching grid. -/
+def vertexGridRuleShapeBool (bd : BranchingDLDS) (v : Vertex) : Bool :=
+  isHypothesisShapeForGrid bd v ||
+    isRepetitionShapeForGrid bd v ||
+    isIntroShapeForGrid bd v ||
+    isElimShapeForGrid bd v
+
+/-- Every concrete edge endpoint is represented as a DLDS vertex. -/
+def DLDS.EdgeEndpointsInV (d : DLDS) : Prop :=
+  ∀ e ∈ d.E, e.START ∈ d.V ∧ e.END ∈ d.V
+
+/-- A source vertex has at most one one-level-down outgoing edge. This is
+    needed because the path-grid carries one token per formula column and
+    cannot split a token across several targets in the same reading. -/
+def DLDS.UniqueOneLevelOutgoing (d : DLDS) : Prop :=
+  ∀ e₁ ∈ d.E, ∀ e₂ ∈ d.E,
+    e₁.START = e₂.START →
+    e₁.END.LEVEL + 1 = e₁.START.LEVEL →
+    e₂.END.LEVEL + 1 = e₂.START.LEVEL →
+    e₁.END = e₂.END
+
+/-- Executable non-branching structural compatibility predicate, plus the
+    ownership/topological facts needed to turn local shape facts into a grid
+    simulation theorem. -/
+structure BranchingDLDS.StructuralGridCompatibleNonBranching
+    (bd : BranchingDLDS) : Prop where
+  nonbranching : bd.IsNonBranching
+  wellformed : bd.WellFormed
+  topo : bd.WellFormedTopo
+  edges_in_vertices : bd.base.EdgeEndpointsInV
+  unique_one_level_outgoing : bd.base.UniqueOneLevelOutgoing
+  vertex_shapes : bd.evalOrder.all (fun v => vertexGridRuleShapeBool bd v) = true
+
+theorem structuralGridCompatibleNonBranching_vertex_shape
+    (bd : BranchingDLDS)
+    (h_struct : bd.StructuralGridCompatibleNonBranching)
+    (v : Vertex)
+    (h_mem : v ∈ bd.evalOrder) :
+    vertexGridRuleShapeBool bd v = true := by
+  exact (List.all_eq_true.mp h_struct.vertex_shapes) v h_mem
+
+theorem structuralGridCompatibleNonBranching_isNonBranching
+    (bd : BranchingDLDS)
+    (h_struct : bd.StructuralGridCompatibleNonBranching) :
+    bd.IsNonBranching :=
+  h_struct.nonbranching
+
+theorem structuralGridCompatibleNonBranching_wellformed
+    (bd : BranchingDLDS)
+    (h_struct : bd.StructuralGridCompatibleNonBranching) :
+    bd.WellFormed :=
+  h_struct.wellformed
+
+theorem structuralGridCompatibleNonBranching_topo
+    (bd : BranchingDLDS)
+    (h_struct : bd.StructuralGridCompatibleNonBranching) :
+    bd.WellFormedTopo :=
+  h_struct.topo
+
+theorem structuralGridCompatibleNonBranching_edges_in_vertices
+    (bd : BranchingDLDS)
+    (h_struct : bd.StructuralGridCompatibleNonBranching) :
+    bd.base.EdgeEndpointsInV :=
+  h_struct.edges_in_vertices
+
+theorem structuralGridCompatibleNonBranching_unique_one_level_outgoing
+    (bd : BranchingDLDS)
+    (h_struct : bd.StructuralGridCompatibleNonBranching) :
+    bd.base.UniqueOneLevelOutgoing :=
+  h_struct.unique_one_level_outgoing
+
+lemma list_find?_some_mem {α : Type*} (p : α → Bool)
+    {xs : List α} {a : α}
+    (h : xs.find? p = some a) :
+    a ∈ xs := by
+  induction xs with
+  | nil => simp at h
+  | cons x rest ih =>
+      unfold List.find? at h
+      split at h
+      · injection h with hx
+        subst hx
+        simp
+      · exact List.mem_cons_of_mem _ (ih h)
+
+theorem ordinaryTargetForPath_eq_some_of_unique_edge
+    (bd : BranchingDLDS) (u v : Vertex) (e : Deduction)
+    (h_edge_mem : e ∈ bd.base.E)
+    (h_start : e.START = u)
+    (h_end : e.END = v)
+    (h_level : v.LEVEL + 1 = u.LEVEL)
+    (h_unique : bd.base.UniqueOneLevelOutgoing) :
+    ordinaryTargetForPath bd u = some v := by
+  unfold ordinaryTargetForPath
+  cases h_find : bd.base.E.find? (fun e =>
+      decide (e.START = u ∧ e.END.LEVEL + 1 = u.LEVEL)) with
+  | none =>
+      have h_not := (List.find?_eq_none.mp h_find) e h_edge_mem
+      have h_pred :
+          (fun e : Deduction =>
+            decide (e.START = u ∧ e.END.LEVEL + 1 = u.LEVEL)) e = true := by
+        simp [h_start, h_end, h_level]
+      exact False.elim (h_not h_pred)
+  | some e' =>
+      have h_found_mem :
+          e' ∈ bd.base.E := by
+        exact list_find?_some_mem _ h_find
+      have h_found_pred :
+          (fun e : Deduction =>
+            decide (e.START = u ∧ e.END.LEVEL + 1 = u.LEVEL)) e' = true := by
+        exact @List.find?_some Deduction
+          (fun e => decide (e.START = u ∧ e.END.LEVEL + 1 = u.LEVEL))
+          e' bd.base.E h_find
+      simp at h_found_pred
+      have h_end_eq : e'.END = v := by
+        have h_e_end : e.END = e'.END := by
+          exact h_unique e h_edge_mem e' h_found_mem
+            (by rw [h_start, h_found_pred.1])
+            (by rw [h_start, h_end]; exact h_level)
+            (by rw [h_found_pred.1]; exact h_found_pred.2)
+        rw [← h_e_end, h_end]
+      simp [h_end_eq]
+
+theorem nextVertexForReading_eq_some_of_unique_nonbranching_edge
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (u v : Vertex) (e : Deduction)
+    (h_nb : bd.IsNonBranching)
+    (h_edge_mem : e ∈ bd.base.E)
+    (h_start : e.START = u)
+    (h_end : e.END = v)
+    (h_level : v.LEVEL + 1 = u.LEVEL)
+    (h_unique : bd.base.UniqueOneLevelOutgoing) :
+    nextVertexForReading bd reading u = some v := by
+  unfold nextVertexForReading branchingFromSource
+  have h_no_branch : bd.branchings.find? (fun b => decide (b.source = u)) = none := by
+    rw [h_nb]
+    rfl
+  rw [h_no_branch]
+  exact ordinaryTargetForPath_eq_some_of_unique_edge bd u v e
+    h_edge_mem h_start h_end h_level h_unique
+
+theorem incomingSources_mem_iff_edge
+    (d : DLDS) (u v : Vertex) :
+    u ∈ incomingSources d v ↔
+      ∃ e ∈ d.E, e.START = u ∧ e.END = v := by
+  unfold incomingSources
+  constructor
+  · intro h
+    rcases List.mem_map.mp h with ⟨e, he_filter, he_start⟩
+    rcases List.mem_filter.mp he_filter with ⟨he_mem, he_end_bool⟩
+    have he_end : e.END = v := by simpa using he_end_bool
+    exact ⟨e, he_mem, by simpa using he_start, he_end⟩
+  · intro h
+    rcases h with ⟨e, he_mem, he_start, he_end⟩
+    apply List.mem_map.mpr
+    refine ⟨e, ?_, ?_⟩
+    · apply List.mem_filter.mpr
+      exact ⟨he_mem, by simp [he_end]⟩
+    · exact he_start
+
+theorem nextVertexForReading_eq_some_of_incoming_source
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (u v : Vertex)
+    (h_nb : bd.IsNonBranching)
+    (h_source : u ∈ incomingSources bd.base v)
+    (h_level : u.LEVEL = v.LEVEL + 1)
+    (h_unique : bd.base.UniqueOneLevelOutgoing) :
+    nextVertexForReading bd reading u = some v := by
+  obtain ⟨e, he_mem, he_start, he_end⟩ :=
+    (incomingSources_mem_iff_edge bd.base u v).mp h_source
+  exact nextVertexForReading_eq_some_of_unique_nonbranching_edge bd reading
+    u v e h_nb he_mem he_start he_end h_level.symm
+    h_unique
+
+theorem readingPathFromVertex_routes_first_of_incoming_source
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (u v : Vertex) (steps : Nat)
+    (h_nb : bd.IsNonBranching)
+    (h_source : u ∈ incomingSources bd.base v)
+    (h_level : u.LEVEL = v.LEVEL + 1)
+    (h_unique : bd.base.UniqueOneLevelOutgoing) :
+    (readingPathFromVertex bd reading (some u) (steps + 1)).head? =
+      some ((buildFormulas bd.base).idxOf v.FORMULA + 1) := by
+  apply readingPathFromVertex_routes_first
+  exact nextVertexForReading_eq_some_of_incoming_source bd reading u v
+    h_nb h_source h_level h_unique
+
+theorem repetition_shape_sources
+    (bd : BranchingDLDS) (v : Vertex)
+    (h_rep : isRepetitionShapeForGrid bd v = true) :
+    ∃ u,
+      incomingSources bd.base v = [u] ∧
+      v.HYPOTHESIS = false ∧
+      findBranchTarget bd v = none ∧
+      findIntroDischarge bd v = none ∧
+      u.FORMULA = v.FORMULA ∧
+      u.LEVEL = v.LEVEL + 1 := by
+  unfold isRepetitionShapeForGrid sourceOneLevelAbove at h_rep
+  cases hs : incomingSources bd.base v with
+  | nil => simp [hs] at h_rep
+  | cons u rest =>
+      cases rest with
+      | nil =>
+          simp [hs] at h_rep
+          exact ⟨u, rfl, h_rep.1.1, h_rep.1.2.1, h_rep.1.2.2.1,
+            h_rep.1.2.2.2, h_rep.2⟩
+      | cons w rest' => simp [hs] at h_rep
+
+theorem intro_shape_sources
+    (bd : BranchingDLDS) (v : Vertex)
+    (h_intro_shape : isIntroShapeForGrid bd v = true) :
+    ∃ A B u h_vertex,
+      v.FORMULA = Formula.impl A B ∧
+      incomingSources bd.base v = [u] ∧
+      findIntroDischarge bd v = some h_vertex ∧
+      v.HYPOTHESIS = false ∧
+      findBranchTarget bd v = none ∧
+      h_vertex.HYPOTHESIS = true ∧
+      h_vertex.FORMULA = A ∧
+      u.FORMULA = B ∧
+      u.LEVEL = v.LEVEL + 1 := by
+  unfold isIntroShapeForGrid sourceOneLevelAbove at h_intro_shape
+  cases hf : v.FORMULA with
+  | atom name => simp [hf] at h_intro_shape
+  | impl A B =>
+      cases hs : incomingSources bd.base v with
+      | nil => simp [hf, hs] at h_intro_shape
+      | cons u rest =>
+          cases rest with
+          | nil =>
+              cases hd : findIntroDischarge bd v with
+              | none => simp [hf, hs, hd] at h_intro_shape
+              | some h_vertex =>
+                  simp [hf, hs, hd] at h_intro_shape
+                  exact ⟨A, B, u, h_vertex, rfl, rfl, rfl,
+                    h_intro_shape.1.1, h_intro_shape.1.2.1,
+                    h_intro_shape.1.2.2.1, h_intro_shape.1.2.2.2.1,
+                    h_intro_shape.1.2.2.2.2,
+                    h_intro_shape.2⟩
+          | cons w rest' => simp [hf, hs] at h_intro_shape
+
+theorem elimSourcePairMatches_formula
+    (v major minor : Vertex)
+    (h_pair : elimSourcePairMatches v major minor = true) :
+    ∃ A,
+      major.FORMULA = Formula.impl A v.FORMULA ∧
+      minor.FORMULA = A ∧
+      major.LEVEL = v.LEVEL + 1 ∧
+      minor.LEVEL = v.LEVEL + 1 := by
+  unfold elimSourcePairMatches elimPremiseFormulasMatch sourceOneLevelAbove at h_pair
+  cases hm : major.FORMULA with
+  | atom name => simp [hm] at h_pair
+  | impl A B =>
+      simp [hm] at h_pair
+      refine ⟨A, ?_, ?_, ?_, ?_⟩ <;> aesop
+
+theorem elim_shape_sources
+    (bd : BranchingDLDS) (v : Vertex)
+    (h_elim : isElimShapeForGrid bd v = true) :
+    ∃ u w,
+      incomingSources bd.base v = [u, w] ∧
+      v.HYPOTHESIS = false ∧
+      findBranchTarget bd v = none ∧
+      findIntroDischarge bd v = none ∧
+      (elimSourcePairMatches v u w = true ∨
+        elimSourcePairMatches v w u = true) := by
+  unfold isElimShapeForGrid at h_elim
+  cases hs : incomingSources bd.base v with
+  | nil => simp [hs] at h_elim
+  | cons u rest =>
+      cases rest with
+      | nil => simp [hs] at h_elim
+      | cons w rest' =>
+          cases rest' with
+          | nil =>
+              simp [hs] at h_elim
+              exact ⟨u, w, rfl, h_elim.1.1, h_elim.1.2.1,
+                h_elim.1.2.2, h_elim.2⟩
+          | cons z zs => simp [hs] at h_elim
+
+theorem repetition_shape_routes_to_target_column
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (v : Vertex) (steps : Nat)
+    (h_struct : bd.StructuralGridCompatibleNonBranching)
+    (h_rep : isRepetitionShapeForGrid bd v = true) :
+    ∃ u,
+      incomingSources bd.base v = [u] ∧
+      (readingPathFromVertex bd reading (some u) (steps + 1)).head? =
+        some ((buildFormulas bd.base).idxOf v.FORMULA + 1) := by
+  obtain ⟨u, h_sources, _h_not_hyp, _h_no_branch, _h_no_intro,
+    _h_formula, h_level⟩ := repetition_shape_sources bd v h_rep
+  refine ⟨u, h_sources, ?_⟩
+  apply readingPathFromVertex_routes_first_of_incoming_source
+  · exact h_struct.nonbranching
+  · simp [h_sources]
+  · exact h_level
+  · exact h_struct.unique_one_level_outgoing
+
+theorem intro_shape_routes_to_target_column
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (v : Vertex) (steps : Nat)
+    (h_struct : bd.StructuralGridCompatibleNonBranching)
+    (h_intro_shape : isIntroShapeForGrid bd v = true) :
+    ∃ A B u h_vertex,
+      v.FORMULA = Formula.impl A B ∧
+      incomingSources bd.base v = [u] ∧
+      findIntroDischarge bd v = some h_vertex ∧
+      (readingPathFromVertex bd reading (some u) (steps + 1)).head? =
+        some ((buildFormulas bd.base).idxOf v.FORMULA + 1) := by
+  obtain ⟨A, B, u, h_vertex, h_formula, h_sources, h_discharge,
+    _h_not_hyp, _h_no_branch, _hhyp, _hform, _huform, h_level⟩ :=
+    intro_shape_sources bd v h_intro_shape
+  refine ⟨A, B, u, h_vertex, h_formula, h_sources, h_discharge, ?_⟩
+  apply readingPathFromVertex_routes_first_of_incoming_source
+  · exact h_struct.nonbranching
+  · simp [h_sources]
+  · exact h_level
+  · exact h_struct.unique_one_level_outgoing
+
+theorem elim_shape_routes_to_target_column
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (v : Vertex) (steps : Nat)
+    (h_struct : bd.StructuralGridCompatibleNonBranching)
+    (h_elim : isElimShapeForGrid bd v = true) :
+    ∃ u w,
+      incomingSources bd.base v = [u, w] ∧
+      (readingPathFromVertex bd reading (some u) (steps + 1)).head? =
+        some ((buildFormulas bd.base).idxOf v.FORMULA + 1) ∧
+      (readingPathFromVertex bd reading (some w) (steps + 1)).head? =
+        some ((buildFormulas bd.base).idxOf v.FORMULA + 1) := by
+  obtain ⟨u, w, h_sources, _h_not_hyp, _h_no_branch, _h_no_intro, h_pair⟩ :=
+    elim_shape_sources bd v h_elim
+  have h_u_level : u.LEVEL = v.LEVEL + 1 := by
+    cases h_pair with
+    | inl hp =>
+        obtain ⟨A, _hmajor, _hminor, hulevel, _hwlevel⟩ :=
+          elimSourcePairMatches_formula v u w hp
+        exact hulevel
+    | inr hp =>
+        obtain ⟨A, _hmajor, _hminor, hwlevel, hulevel⟩ :=
+          elimSourcePairMatches_formula v w u hp
+        exact hulevel
+  have h_w_level : w.LEVEL = v.LEVEL + 1 := by
+    cases h_pair with
+    | inl hp =>
+        obtain ⟨A, _hmajor, _hminor, _hulevel, hwlevel⟩ :=
+          elimSourcePairMatches_formula v u w hp
+        exact hwlevel
+    | inr hp =>
+        obtain ⟨A, _hmajor, _hminor, hwlevel, _hulevel⟩ :=
+          elimSourcePairMatches_formula v w u hp
+        exact hwlevel
+  refine ⟨u, w, h_sources, ?_, ?_⟩
+  · apply readingPathFromVertex_routes_first_of_incoming_source
+    · exact h_struct.nonbranching
+    · simp [h_sources]
+    · exact h_u_level
+    · exact h_struct.unique_one_level_outgoing
+  · apply readingPathFromVertex_routes_first_of_incoming_source
+    · exact h_struct.nonbranching
+    · simp [h_sources]
+    · exact h_w_level
+    · exact h_struct.unique_one_level_outgoing
+
+lemma Vector.zipWith_or_comm {n : Nat}
+    (u v : List.Vector Bool n) :
+    u.zipWith (· || ·) v = v.zipWith (· || ·) u := by
+  apply List.Vector.ext
+  intro i
+  simp [Bool.or_comm]
+
+theorem classicalKernel_hypothesis_shape_eq_onehot
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (fenv : Vertex → List.Vector Bool (numFormulas bd.base))
+    (v : Vertex)
+    (h_hyp_shape : isHypothesisShapeForGrid bd v = true) :
+    classicalKernel bd reading fenv v =
+      ⟨(List.range (numFormulas bd.base)).map (fun i =>
+          decide (i = (buildFormulas bd.base).idxOf v.FORMULA)),
+        by simp [numFormulas]⟩ := by
+  unfold isHypothesisShapeForGrid at h_hyp_shape
+  simp at h_hyp_shape
+  unfold classicalKernel
+  simp [h_hyp_shape.1]
+
+theorem classicalKernel_repetition_shape_eq_source
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (fenv : Vertex → List.Vector Bool (numFormulas bd.base))
+    (v : Vertex)
+    (h_rep : isRepetitionShapeForGrid bd v = true) :
+    ∃ u,
+      incomingSources bd.base v = [u] ∧
+      classicalKernel bd reading fenv v = fenv u := by
+  obtain ⟨u, h_sources, h_not_hyp, h_no_branch, h_no_intro,
+    _h_formula, _h_level⟩ := repetition_shape_sources bd v h_rep
+  refine ⟨u, h_sources, ?_⟩
+  unfold classicalKernel
+  simp [h_not_hyp, h_sources, h_no_branch, h_no_intro]
+  rw [Vector.zipWith_or_replicate_false_right]
+
+theorem classicalKernel_intro_shape_eq_grid_intro
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (fenv : Vertex → List.Vector Bool (numFormulas bd.base))
+    (v : Vertex)
+    (h_intro_shape : isIntroShapeForGrid bd v = true) :
+    ∃ A B u h_vertex,
+      v.FORMULA = Formula.impl A B ∧
+      incomingSources bd.base v = [u] ∧
+      findIntroDischarge bd v = some h_vertex ∧
+      classicalKernel bd reading fenv v =
+        (fenv u).zipWith (fun b e => b && !e)
+          ⟨(buildFormulas bd.base).map
+              (fun f => decide (f = h_vertex.FORMULA)),
+            by simp [numFormulas]⟩ := by
+  obtain ⟨A, B, u, h_vertex, h_formula, h_sources, h_discharge,
+    h_not_hyp, h_no_branch, _hhyp, _hform, _huform, _hlevel⟩ :=
+    intro_shape_sources bd v h_intro_shape
+  refine ⟨A, B, u, h_vertex, h_formula, h_sources, h_discharge, ?_⟩
+  unfold classicalKernel
+  simp [h_not_hyp, h_sources, h_no_branch, h_discharge]
+  rw [Vector.zipWith_or_replicate_false_right]
+
+theorem classicalKernel_elim_shape_eq_source_or
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (fenv : Vertex → List.Vector Bool (numFormulas bd.base))
+    (v : Vertex)
+    (h_elim : isElimShapeForGrid bd v = true) :
+    ∃ u w,
+      incomingSources bd.base v = [u, w] ∧
+      (elimSourcePairMatches v u w = true ∨
+        elimSourcePairMatches v w u = true) ∧
+      classicalKernel bd reading fenv v =
+        (fenv u).zipWith (· || ·) (fenv w) := by
+  obtain ⟨u, w, h_sources, h_not_hyp, h_no_branch, h_no_intro, h_pair⟩ :=
+    elim_shape_sources bd v h_elim
+  refine ⟨u, w, h_sources, h_pair, ?_⟩
+  unfold classicalKernel
+  simp [h_not_hyp, h_sources, h_no_branch, h_no_intro]
+  rw [Vector.zipWith_or_replicate_false_right]
+  exact Vector.zipWith_or_comm (fenv w) (fenv u)
+
+/-- In the non-branching structural fragment, a non-hypothesis atom with one
+    incoming source and no intro annotation can only be a repetition node.
+    This rules out the malformed direct `A -> B` atom edge as a compatible
+    grid vertex. -/
+theorem atom_single_source_shape_forces_repetition_formula
+    (bd : BranchingDLDS) (v u : Vertex) (name : String)
+    (h_shape : vertexGridRuleShapeBool bd v = true)
+    (h_formula : v.FORMULA = Formula.atom name)
+    (h_not_hyp : v.HYPOTHESIS = false)
+    (h_no_branch : findBranchTarget bd v = none)
+    (h_no_intro : findIntroDischarge bd v = none)
+    (h_sources : incomingSources bd.base v = [u]) :
+    u.FORMULA = v.FORMULA := by
+  unfold vertexGridRuleShapeBool isHypothesisShapeForGrid
+    isRepetitionShapeForGrid isIntroShapeForGrid isElimShapeForGrid
+    elimSourcePairMatches elimPremiseFormulasMatch sourceOneLevelAbove at h_shape
+  rw [h_formula] at h_shape
+  rw [h_formula]
+  simp [h_not_hyp, h_no_branch, h_no_intro, h_sources] at h_shape
+  exact h_shape.1
+
+/-! A checked obstruction to the requested bridge.
+
+This tiny DLDS has an arbitrary atom-to-atom edge `A -> B`. The
+reading-based kernel follows `DLDS.E`, so `B` depends on `A`. The grid
+node for atom `B` has no elimination rule for an arbitrary atom source, so
+the actual grid output at `B` is zero. Thus the unrestricted bridge theorem
+is false for the current grid construction. -/
+
+namespace GridBridgeCounterexample
+
+private def fA : Formula := .atom "A"
+private def fB : Formula := .atom "B"
+
+private def vA : Vertex :=
+  { node := 0, LEVEL := 1, FORMULA := fA,
+    HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+
+private def vB : Vertex :=
+  { node := 1, LEVEL := 0, FORMULA := fB,
+    HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+
+private def eAB : Deduction :=
+  { START := vA, END := vB, COLOUR := 0, DEPENDENCY := [fA] }
+
+private def base : DLDS :=
+  { V := [vA, vB], E := [eAB], A := [] }
+
+private def bd : BranchingDLDS :=
+  { base := base, branchings := [], numReading := 0, evalOrder := [vA, vB] }
+
+theorem atom_edge_grid_not_classicalKernel :
+    gridFEnvFromReading bd [] vB ≠
+      classicalKernel bd [] (gridFEnvFromReading bd []) vB := by
+  native_decide
+
+theorem atom_edge_not_GridCompatibleForReading :
+    ¬ bd.GridCompatibleForReading [] := by
+  intro h
+  have hv : vB ∈ bd.evalOrder := by
+    simp [bd]
+  exact atom_edge_grid_not_classicalKernel (h vB hv)
+
+theorem atom_edge_not_StructuralGridCompatibleNonBranching :
+    ¬ bd.StructuralGridCompatibleNonBranching := by
+  intro h
+  have h_shape : vertexGridRuleShapeBool bd vB = true :=
+    structuralGridCompatibleNonBranching_vertex_shape bd h vB (by simp [bd])
+  have h_forced : vA.FORMULA = vB.FORMULA :=
+    atom_single_source_shape_forces_repetition_formula bd vB vA "B"
+      h_shape
+      (by simp [vB, fB])
+      (by simp [vB])
+      (by simp [findBranchTarget, bd])
+      (by simp [findIntroDischarge, bd, base])
+      (by simp [incomingSources, bd, base, eAB])
+  simp [vA, vB, fA, fB] at h_forced
+
+end GridBridgeCounterexample
+
+/-! A second checked obstruction to the structural non-branching bridge.
+
+The executable shape predicate accepts this DLDS as an implication-elimination
+vertex, but the formula-grid node has both the elimination rule and the
+repetition rule active at the conclusion column `A`. This exposes the next
+needed invariant: structural compatibility must rule out rule-activation
+overlap, not only malformed edge formulas. -/
+
+namespace GridBridgeElimOverlapCounterexample
+
+private def fA : Formula := .atom "A"
+private def fAA : Formula := .impl fA fA
+
+private def vMajor : Vertex :=
+  { node := 0, LEVEL := 1, FORMULA := fAA,
+    HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+
+private def vMinor : Vertex :=
+  { node := 1, LEVEL := 1, FORMULA := fA,
+    HYPOTHESIS := true, COLLAPSED := false, PAST := [] }
+
+private def vTarget : Vertex :=
+  { node := 2, LEVEL := 0, FORMULA := fA,
+    HYPOTHESIS := false, COLLAPSED := false, PAST := [] }
+
+private def eMajor : Deduction :=
+  { START := vMajor, END := vTarget, COLOUR := 0, DEPENDENCY := [fAA] }
+
+private def eMinor : Deduction :=
+  { START := vMinor, END := vTarget, COLOUR := 0, DEPENDENCY := [fA] }
+
+private def base : DLDS :=
+  { V := [vMajor, vMinor, vTarget], E := [eMajor, eMinor], A := [] }
+
+private def bd : BranchingDLDS :=
+  { base := base, branchings := [], numReading := 0,
+    evalOrder := [vMajor, vMinor, vTarget] }
+
+theorem elim_overlap_grid_not_classicalKernel :
+    gridFEnvFromReading bd [] vTarget ≠
+      classicalKernel bd [] (gridFEnvFromReading bd []) vTarget := by
+  native_decide
+
+theorem elim_overlap_not_GridCompatibleForReading :
+    ¬ bd.GridCompatibleForReading [] := by
+  intro h
+  have hv : vTarget ∈ bd.evalOrder := by
+    simp [bd]
+  exact elim_overlap_grid_not_classicalKernel (h vTarget hv)
+
+private lemma vMajor_mem_pre_of_target_split
+    (pre post : List Vertex)
+    (h : bd.evalOrder = pre ++ vTarget :: post) :
+    vMajor ∈ pre := by
+  cases pre with
+  | nil =>
+      simp [bd, vMajor, vTarget] at h
+  | cons p ps =>
+      simp [bd] at h
+      simpa [List.mem_cons] using (Or.inl h.1 : vMajor = p ∨ vMajor ∈ ps)
+
+private lemma vMinor_mem_pre_of_target_split
+    (pre post : List Vertex)
+    (h : bd.evalOrder = pre ++ vTarget :: post) :
+    vMinor ∈ pre := by
+  cases pre with
+  | nil =>
+      simp [bd, vMajor, vMinor, vTarget] at h
+  | cons p ps =>
+      cases ps with
+      | nil =>
+          simp [bd, vMajor, vMinor, vTarget] at h
+      | cons q qs =>
+          simp [bd] at h
+          simpa [List.mem_cons] using
+            (Or.inr (Or.inl h.2.1) :
+              vMinor = p ∨ vMinor = q ∨ vMinor ∈ qs)
+
+theorem elim_overlap_is_StructuralGridCompatibleNonBranching :
+    bd.StructuralGridCompatibleNonBranching := by
+  refine
+    { nonbranching := by rfl
+      wellformed := by
+        unfold BranchingDLDS.WellFormed bd base
+        exact List.Perm.refl _
+      topo := ?_
+      edges_in_vertices := ?_
+      unique_one_level_outgoing := ?_
+      vertex_shapes := by native_decide }
+  · unfold BranchingDLDS.WellFormedTopo
+    constructor
+    · native_decide
+    · intro e he pre post hsplit
+      simp [bd, base] at he
+      rcases he with rfl | rfl
+      · exact vMajor_mem_pre_of_target_split pre post hsplit
+      · exact vMinor_mem_pre_of_target_split pre post hsplit
+  · intro e he
+    change e ∈ [eMajor, eMinor] at he
+    simp at he
+    rcases he with rfl | rfl
+    ·
+      simp [bd, base, eMajor, vMajor, vMinor, vTarget]
+    ·
+      simp [bd, base, eMinor, vMajor, vMinor, vTarget]
+  · intro e₁ he₁ e₂ he₂ h_start h_level₁ h_level₂
+    change e₁ ∈ [eMajor, eMinor] at he₁
+    change e₂ ∈ [eMajor, eMinor] at he₂
+    simp at he₁ he₂
+    rcases he₁ with rfl | rfl
+    · rcases he₂ with rfl | rfl
+      · rfl
+      · have : False := by
+          simpa [eMajor, eMinor, vMajor, vMinor] using h_start
+        exact False.elim this
+    · rcases he₂ with rfl | rfl
+      · have : False := by
+          simpa [eMajor, eMinor, vMajor, vMinor] using h_start
+        exact False.elim this
+      · rfl
+
+theorem structuralGridCompatibleNonBranching_not_sufficient :
+    ¬ (∀ (bd : BranchingDLDS) reading,
+        bd.StructuralGridCompatibleNonBranching →
+          bd.GridCompatibleForReading reading) := by
+  intro h
+  exact elim_overlap_not_GridCompatibleForReading
+    (h bd [] elim_overlap_is_StructuralGridCompatibleNonBranching)
+
+end GridBridgeElimOverlapCounterexample
 
 end ReadingBased
 
