@@ -4285,6 +4285,270 @@ theorem classicalKernel_stepVertex_equiv
         simp only
         exact h_foldl_translate
 
+/-! #### Layer 3.5: Global kernel equivalence
+
+This subsection lifts the per-vertex kernel equivalence to the full
+evaluation-order semantics. We run the formula-indexed `classicalKernel`
+in lockstep with `dldsSemantics`, and show that the two accumulated
+environments remain pointwise aligned under `formulaVecToHypVec`. -/
+
+/-- Formula-indexed lookup mirroring `envLookup`. Missing vertices map to
+    the zero formula vector. -/
+def formulaEnvLookup {d : DLDS} :
+    List (Vertex × List.Vector Bool (numFormulas d)) →
+      Vertex → List.Vector Bool (numFormulas d)
+  | [], _ => List.Vector.replicate (numFormulas d) false
+  | (u, w) :: rest, v => if u = v then w else formulaEnvLookup rest v
+
+/-- One step of the accumulating formula-indexed kernel semantics. -/
+private def classicalKernelSemanticsStep (bd : BranchingDLDS)
+    (reading : ReadingInput)
+    (env : List (Vertex × List.Vector Bool (numFormulas bd.base)))
+    (v : Vertex) :
+    List (Vertex × List.Vector Bool (numFormulas bd.base)) :=
+  env ++ [(v, classicalKernel bd reading (formulaEnvLookup env) v)]
+
+/-- One step of the accumulating hypothesis-indexed semantics. -/
+private def dldsSemanticsStep (bd : BranchingDLDS)
+    (reading : ReadingInput)
+    (env : List (Vertex × HypDepVec bd.base))
+    (v : Vertex) :
+    List (Vertex × HypDepVec bd.base) :=
+  env ++ [(v, stepVertex bd reading env v)]
+
+/-- Formula-indexed semantics accumulated along `evalOrder`. -/
+def classicalKernelSemantics (bd : BranchingDLDS) (reading : ReadingInput) :
+    List (Vertex × List.Vector Bool (numFormulas bd.base)) :=
+  bd.evalOrder.foldl (classicalKernelSemanticsStep bd reading) []
+
+/-- Formula-indexed lookup in the accumulated kernel semantics. -/
+def classicalKernelSemanticsAt (bd : BranchingDLDS) (reading : ReadingInput)
+    (v : Vertex) : List.Vector Bool (numFormulas bd.base) :=
+  formulaEnvLookup (classicalKernelSemantics bd reading) v
+
+private lemma formulaEnvLookup_append_singleton_of_not_mem {d : DLDS}
+    (env : List (Vertex × List.Vector Bool (numFormulas d)))
+    (v : Vertex) (w : List.Vector Bool (numFormulas d))
+    (h : ∀ w', (v, w') ∉ env) :
+    formulaEnvLookup (env ++ [(v, w)]) v = w := by
+  induction env with
+  | nil =>
+      simp [formulaEnvLookup]
+  | cons hd tl ih =>
+      obtain ⟨u, wu⟩ := hd
+      have hne : ¬ (u = v) := by
+        intro heq
+        subst heq
+        exact h wu (by simp)
+      have hstep :
+          formulaEnvLookup (((u, wu) :: tl) ++ [(v, w)]) v =
+            formulaEnvLookup (tl ++ [(v, w)]) v := by
+        simp [formulaEnvLookup, hne]
+      rw [hstep]
+      apply ih
+      intro w' hw'
+      exact h w' (List.mem_cons_of_mem _ hw')
+
+private lemma formulaEnvLookup_append_singleton_ne {d : DLDS}
+    (env : List (Vertex × List.Vector Bool (numFormulas d)))
+    (u v : Vertex) (w : List.Vector Bool (numFormulas d))
+    (h : v ≠ u) :
+    formulaEnvLookup (env ++ [(u, w)]) v = formulaEnvLookup env v := by
+  induction env generalizing v with
+  | nil =>
+      have huv : ¬ (u = v) := by
+        intro h'
+        exact h h'.symm
+      simp [formulaEnvLookup, huv]
+  | cons hd tl ih =>
+      obtain ⟨x, wx⟩ := hd
+      by_cases hx : x = v
+      · subst hx
+        simp [formulaEnvLookup]
+      · have hstep :
+          formulaEnvLookup (((x, wx) :: tl) ++ [(u, w)]) v =
+            formulaEnvLookup (tl ++ [(u, w)]) v := by
+          simp [formulaEnvLookup, hx]
+        have hbase :
+            formulaEnvLookup ((x, wx) :: tl) v = formulaEnvLookup tl v := by
+          simp [formulaEnvLookup, hx]
+        rw [hstep, hbase, ih (v := v) h]
+
+private lemma envLookup_append_singleton_ne {d : DLDS}
+    (env : List (Vertex × HypDepVec d))
+    (u v : Vertex) (w : HypDepVec d)
+    (h : v ≠ u) :
+    envLookup (env ++ [(u, w)]) v = envLookup env v := by
+  induction env generalizing v with
+  | nil =>
+      have huv : ¬ (u = v) := by
+        intro h'
+        exact h h'.symm
+      simp [envLookup, huv]
+  | cons hd tl ih =>
+      obtain ⟨x, wx⟩ := hd
+      by_cases hx : x = v
+      · subst hx
+        simp [envLookup]
+      · have hstep :
+          envLookup (((x, wx) :: tl) ++ [(u, w)]) v =
+            envLookup (tl ++ [(u, w)]) v := by
+          simp [envLookup, hx]
+        have hbase :
+            envLookup ((x, wx) :: tl) v = envLookup tl v := by
+          simp [envLookup, hx]
+        rw [hstep, hbase, ih (v := v) h]
+
+/-- Parallel fold invariant: if the initial formula and hypothesis
+    environments are pointwise aligned, then processing the same vertex
+    list with `classicalKernel` and `stepVertex` preserves that
+    alignment. -/
+private theorem classicalKernelSemantics_align_from
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (h_distinct : bd.base.HypFormulasDistinct)
+    (h_in_build : bd.base.HypFormulasInBuild)
+    (xs : List Vertex)
+    (hypEnv : List (Vertex × HypDepVec bd.base))
+    (formEnv : List (Vertex × List.Vector Bool (numFormulas bd.base)))
+    (h_align :
+      ∀ u, formulaVecToHypVec bd.base (formulaEnvLookup formEnv u) =
+        envLookup hypEnv u)
+    (h_xs_nodup : xs.Nodup)
+    (h_hyp_fresh : ∀ v ∈ xs, ∀ w, (v, w) ∉ hypEnv)
+    (h_form_fresh : ∀ v ∈ xs, ∀ w, (v, w) ∉ formEnv)
+    (h_memV : ∀ v ∈ xs, v ∈ bd.base.V)
+    (h_discharge_wf :
+      ∀ v ∈ xs, ∀ h_vertex,
+        findIntroDischarge bd v = some h_vertex →
+          h_vertex ∈ bd.base.V ∧ h_vertex.HYPOTHESIS = true) :
+    ∀ u,
+      formulaVecToHypVec bd.base
+        (formulaEnvLookup
+          (xs.foldl (classicalKernelSemanticsStep bd reading) formEnv) u) =
+      envLookup (xs.foldl (dldsSemanticsStep bd reading) hypEnv) u := by
+  induction xs generalizing hypEnv formEnv with
+  | nil =>
+      intro u
+      simpa using h_align u
+  | cons x rest ih =>
+      let hypVal := stepVertex bd reading hypEnv x
+      let formVal := classicalKernel bd reading (formulaEnvLookup formEnv) x
+      have h_rest_nodup : rest.Nodup := (List.nodup_cons.mp h_xs_nodup).2
+      have h_x_not_mem_rest : x ∉ rest := (List.nodup_cons.mp h_xs_nodup).1
+      have h_align_step :
+          ∀ u,
+            formulaVecToHypVec bd.base
+              (formulaEnvLookup (formEnv ++ [(x, formVal)]) u) =
+            envLookup (hypEnv ++ [(x, hypVal)]) u := by
+        intro u
+        by_cases hu : u = x
+        · subst u
+          rw [formulaEnvLookup_append_singleton_of_not_mem formEnv x formVal]
+          rw [envLookup_append_singleton_of_not_mem hypEnv x hypVal]
+          · simpa [formVal, hypVal] using
+              classicalKernel_stepVertex_equiv bd reading
+                (formulaEnvLookup formEnv) hypEnv x h_align
+                h_distinct h_in_build
+                (h_memV x (by simp))
+                (fun h_vertex h_find =>
+                  h_discharge_wf x (by simp) h_vertex h_find)
+          · intro w
+            exact h_hyp_fresh x (by simp) w
+          · intro w
+            exact h_form_fresh x (by simp) w
+        · rw [formulaEnvLookup_append_singleton_ne formEnv x u formVal hu]
+          rw [envLookup_append_singleton_ne hypEnv x u hypVal hu]
+          exact h_align u
+      have h_hyp_fresh_rest :
+          ∀ v ∈ rest, ∀ w, (v, w) ∉ (hypEnv ++ [(x, hypVal)]) := by
+        intro v hv w
+        have hv_ne : v ≠ x := by
+          intro h_eq
+          subst h_eq
+          exact h_x_not_mem_rest hv
+        simp [h_hyp_fresh v (List.mem_cons_of_mem _ hv) w, hv_ne]
+      have h_form_fresh_rest :
+          ∀ v ∈ rest, ∀ w, (v, w) ∉ (formEnv ++ [(x, formVal)]) := by
+        intro v hv w
+        have hv_ne : v ≠ x := by
+          intro h_eq
+          subst h_eq
+          exact h_x_not_mem_rest hv
+        simp [h_form_fresh v (List.mem_cons_of_mem _ hv) w, hv_ne]
+      have h_memV_rest : ∀ v ∈ rest, v ∈ bd.base.V := by
+        intro v hv
+        exact h_memV v (List.mem_cons_of_mem _ hv)
+      have h_discharge_wf_rest :
+          ∀ v ∈ rest, ∀ h_vertex,
+            findIntroDischarge bd v = some h_vertex →
+              h_vertex ∈ bd.base.V ∧ h_vertex.HYPOTHESIS = true := by
+        intro v
+        intro hv
+        intro h_vertex
+        intro h_find
+        exact h_discharge_wf v (List.mem_cons_of_mem _ hv) h_vertex h_find
+      intro u
+      simpa [List.foldl_cons, classicalKernelSemanticsStep, dldsSemanticsStep,
+        hypVal, formVal] using
+        ih
+          (hypEnv := hypEnv ++ [(x, hypVal)])
+          (formEnv := formEnv ++ [(x, formVal)])
+          h_align_step
+          h_rest_nodup
+          h_hyp_fresh_rest
+          h_form_fresh_rest
+          h_memV_rest
+          h_discharge_wf_rest
+          u
+
+/-- **Layer 3 global kernel equivalence.** The formula-indexed
+    `classicalKernel` semantics and the hypothesis-indexed
+    `dldsSemantics` agree pointwise after translating with
+    `formulaVecToHypVec`. -/
+theorem classicalKernel_dldsSemantics_global_equiv
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (h_topo : bd.WellFormedTopo)
+    (h_distinct : bd.base.HypFormulasDistinct)
+    (h_in_build : bd.base.HypFormulasInBuild)
+    (h_eval_in_V : ∀ v ∈ bd.evalOrder, v ∈ bd.base.V)
+    (h_discharge_wf :
+      ∀ v ∈ bd.evalOrder, ∀ h_vertex,
+        findIntroDischarge bd v = some h_vertex →
+          h_vertex ∈ bd.base.V ∧ h_vertex.HYPOTHESIS = true) :
+    ∀ v ∈ bd.evalOrder,
+      formulaVecToHypVec bd.base (classicalKernelSemanticsAt bd reading v) =
+        dldsSemanticsAt bd reading v := by
+  intro v h_mem
+  let _ := h_mem
+  have h_nodup : bd.evalOrder.Nodup := h_topo.1
+  have h_align0 :
+      ∀ u,
+        formulaVecToHypVec bd.base
+          (formulaEnvLookup
+            ([] : List (Vertex × List.Vector Bool (numFormulas bd.base))) u) =
+        envLookup ([] : List (Vertex × HypDepVec bd.base)) u := by
+    intro u
+    simpa [formulaEnvLookup, envLookup] using
+      (formulaVecToHypVec_zero bd.base)
+  have h_align_all :
+      ∀ u,
+        formulaVecToHypVec bd.base
+          (formulaEnvLookup
+            (bd.evalOrder.foldl (classicalKernelSemanticsStep bd reading) []) u) =
+        envLookup (bd.evalOrder.foldl (dldsSemanticsStep bd reading) []) u := by
+    simpa using
+      (classicalKernelSemantics_align_from bd reading h_distinct h_in_build
+        bd.evalOrder [] []
+        h_align0
+        h_nodup
+        (by intro v hv w; simp)
+        (by intro v hv w; simp)
+        h_eval_in_V
+        h_discharge_wf)
+  simpa [classicalKernelSemanticsAt, classicalKernelSemantics,
+    dldsSemanticsAt, dldsSemantics, classicalKernelSemanticsStep,
+    dldsSemanticsStep] using h_align_all v
+
 /-! #### Layer 3 Candidate 1: grid bridge infrastructure
 
 The definitions below connect reading inputs to the existing path-based
