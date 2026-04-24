@@ -4559,6 +4559,1464 @@ theorem node_logic_equals_classicalKernel_for_reading
   simpa [BranchingDLDS.GridCompatibleForReading, gridFEnvFromReading,
     gridFEnvFromPath] using h_compat v h_mem
 
+/-! ##### Edge-aware grid semantics
+
+The original grid routes tokens by formula column. That loses the proof-role
+information needed to distinguish, for example, `A` used as the minor premise
+of an elimination from `A` used as a repetition input. The edge-aware evaluator
+below keeps the existing grid semantics intact and adds a refined variant where
+the second component of `RuleIncoming` is treated as a real input tag. -/
+
+def gridTagIntro : Nat := 0
+def gridTagElimMajor : Nat := 1
+def gridTagElimMinor : Nat := 2
+def gridTagRepetition : Nat := 3
+
+/-- Edge-aware incoming map. It has the same rule order as `nodeForFormula`,
+    but tags each expected source by its proof role. -/
+def buildTaggedIncomingMapForFormula
+    (formulas : List Formula)
+    (formula : Formula) : NodeIncoming :=
+  let introMap := match formula with
+    | .impl _ B =>
+        let bIdx := formulas.idxOf B
+        [[(bIdx, gridTagIntro)]]
+    | _ => []
+  let elimMaps := formulas.zipIdx.filterMap fun (f, idx) =>
+    match f with
+    | .impl A B =>
+        if B = formula then
+          let aIdx := formulas.idxOf A
+          some [(idx, gridTagElimMajor), (aIdx, gridTagElimMinor)]
+        else none
+    | _ => none
+  let selfIdx := formulas.idxOf formula
+  let repMap := [[(selfIdx, gridTagRepetition)]]
+  introMap ++ elimMaps ++ repMap
+
+def buildTaggedIncomingMap (formulas : List Formula) : LayerIncoming :=
+  formulas.map (buildTaggedIncomingMapForFormula formulas)
+
+def buildTaggedLayers (d : DLDS) :
+    List (GridLayer (buildFormulas d).length) :=
+  let formulas := buildFormulas d
+  let maxLvl := (d.V.map (·.LEVEL)).foldl max 0
+  List.replicate (maxLvl + 1)
+    { nodes := formulas.map (nodeForFormula formulas)
+      incoming := buildTaggedIncomingMap formulas }
+
+def buildTaggedGridFromDLDS (d : DLDS) :
+    List (GridLayer (buildFormulas d).length) :=
+  buildTaggedLayers d
+
+lemma List.length_filterMap_eq_of_isSome
+    {α β γ : Type}
+    (xs : List α)
+    (f : α → Option β)
+    (g : α → Option γ)
+    (h : ∀ x, (f x).isSome = (g x).isSome) :
+    (xs.filterMap f).length = (xs.filterMap g).length := by
+  induction xs with
+  | nil =>
+      simp
+  | cons x xs ih =>
+      simp only [List.filterMap_cons]
+      specialize h x
+      cases hfx : f x <;> cases hgx : g x <;>
+        simp [Option.isSome, hfx, hgx] at h ⊢ <;> try exact ih
+
+lemma buildTaggedIncomingMapForFormula_length_eq
+    (formulas : List Formula) (formula : Formula) :
+    (buildTaggedIncomingMapForFormula formulas formula).length =
+      (nodeForFormula formulas formula).rules.length := by
+  cases formula with
+  | atom name =>
+      unfold buildTaggedIncomingMapForFormula
+      conv_rhs => unfold nodeForFormula
+      simp only [List.length_append, List.length_map, List.length_zipIdx,
+        List.length_cons, List.length_nil]
+      have h_eq :
+          (List.filterMap
+              (fun x =>
+                match x.1 with
+                | .impl A B =>
+                    if B = Formula.atom name then
+                      some [(x.2, gridTagElimMajor), (List.idxOf A formulas, gridTagElimMinor)]
+                    else none
+                | _ => none)
+              formulas.zipIdx).length =
+            (List.filterMap
+              (fun x =>
+                match x.1 with
+                | .impl A B => if B = Formula.atom name then some x.2 else none
+                | _ => none)
+              formulas.zipIdx).length :=
+        List.length_filterMap_eq_of_isSome _ _ _ (by
+          intro x
+          cases x with
+          | mk f idx =>
+              cases f with
+              | atom s =>
+                  simp [Option.isSome]
+              | impl A B =>
+                  by_cases hB : B = Formula.atom name <;> simp [hB, Option.isSome])
+      omega
+  | impl A B =>
+      unfold buildTaggedIncomingMapForFormula
+      conv_rhs => unfold nodeForFormula
+      simp only [List.length_append, List.length_map, List.length_zipIdx,
+        List.length_cons, List.length_nil]
+      have h_intro :
+          (match encoderForIntro formulas (Formula.impl A B) with
+            | some encoder => [encoder]
+            | none => []).length = 1 := by
+        simp [encoderForIntro]
+      have h_eq :
+          (List.filterMap
+              (fun x =>
+                match x.1 with
+                | .impl A_1 B_1 =>
+                    if B_1 = Formula.impl A B then
+                      some [(x.2, gridTagElimMajor), (List.idxOf A_1 formulas, gridTagElimMinor)]
+                    else none
+                | _ => none)
+              formulas.zipIdx).length =
+            (List.filterMap
+              (fun x =>
+                match x.1 with
+                | .impl A_1 B_1 => if B_1 = Formula.impl A B then some x.2 else none
+                | _ => none)
+              formulas.zipIdx).length :=
+        List.length_filterMap_eq_of_isSome _ _ _ (by
+          intro x
+          cases x with
+          | mk f idx =>
+              cases f with
+              | atom s =>
+                  simp [Option.isSome]
+              | impl A_1 B_1 =>
+                  by_cases hB : B_1 = Formula.impl A B <;> simp [hB, Option.isSome])
+      rw [h_intro]
+      omega
+
+/-- Tokens whose source input is tagged by proof role. -/
+structure TaggedToken (n : Nat) where
+  origin_column : Nat
+  source_column : Nat
+  source_tag : Nat
+  current_level : Nat
+  current_column : Nat
+  dep_vector : List.Vector Bool n
+  deriving Inhabited
+
+def taggedInputToken {n : Nat}
+    (sourceColumn sourceTag : Nat)
+    (dep : List.Vector Bool n) : TaggedToken n :=
+  { origin_column := sourceColumn
+    source_column := sourceColumn
+    source_tag := sourceTag
+    current_level := 0
+    current_column := 0
+    dep_vector := dep }
+
+abbrev TaggedPathInput := List (List (Nat × Nat))
+
+def initialize_tagged_tokens {n : Nat}
+    (initialVectors : List (List.Vector Bool n))
+    (topLevel : Nat) : List (TaggedToken n) :=
+  initialVectors.zipIdx.map fun (vec, col) =>
+    { origin_column := col
+      source_column := col
+      source_tag := gridTagRepetition
+      current_level := topLevel
+      current_column := col
+      dep_vector := vec }
+
+def gather_rule_inputs_tagged {n : Nat}
+    (ruleIncoming : RuleIncoming)
+    (availableInputs : List ((Nat × Nat) × List.Vector Bool n)) :
+    List (List.Vector Bool n) :=
+  ruleIncoming.filterMap fun required =>
+    availableInputs.find? (fun (tag, _) => tag = required) |>.map Prod.snd
+
+def set_rule_activation_tagged {n : Nat}
+    (rule : Rule n)
+    (ruleIncoming : RuleIncoming)
+    (availableInputs : List ((Nat × Nat) × List.Vector Bool n)) :
+    Rule n :=
+  let availableTags := availableInputs.map Prod.fst
+  let hasAll := ruleIncoming.all fun req => availableTags.contains req
+  let newActivation := match rule.activation with
+    | ActivationBits.intro _ => ActivationBits.intro hasAll
+    | ActivationBits.elim _ _ =>
+        if ruleIncoming.length = 2 then
+          let hasFirst := availableTags.contains (ruleIncoming[0]!)
+          let hasSecond := availableTags.contains (ruleIncoming[1]!)
+          ActivationBits.elim hasFirst hasSecond
+        else
+          ActivationBits.elim false false
+    | ActivationBits.repetition _ => ActivationBits.repetition hasAll
+  { rule with activation := newActivation }
+
+def activateTaggedRulesAux {n : Nat}
+    (nodeIncoming : NodeIncoming)
+    (availableInputs : List ((Nat × Nat) × List.Vector Bool n)) :
+    Nat → List (Rule n) → List (Rule n)
+  | _, [] => []
+  | idx, r :: rs =>
+      let ruleInc := nodeIncoming[idx]!
+      let r' := set_rule_activation_tagged r ruleInc availableInputs
+      r' :: activateTaggedRulesAux nodeIncoming availableInputs (idx + 1) rs
+
+lemma activateTaggedRulesAux_ids {n : Nat}
+    (nodeIncoming : NodeIncoming)
+    (availableInputs : List ((Nat × Nat) × List.Vector Bool n)) :
+    ∀ idx (rs : List (Rule n)),
+      (activateTaggedRulesAux nodeIncoming availableInputs idx rs).map
+          (·.ruleId) = rs.map (·.ruleId)
+  | idx, [] => by simp [activateTaggedRulesAux]
+  | idx, r :: rs => by
+      have ih := activateTaggedRulesAux_ids nodeIncoming availableInputs
+        (idx + 1) rs
+      simp [activateTaggedRulesAux, set_rule_activation_tagged, ih]
+
+lemma activateTaggedRulesAux_eq_zipIdx_map {n : Nat}
+    (nodeIncoming : NodeIncoming)
+    (availableInputs : List ((Nat × Nat) × List.Vector Bool n))
+    (rules : List (Rule n))
+    (start : Nat) :
+    activateTaggedRulesAux nodeIncoming availableInputs start rules =
+      (rules.zipIdx start).map fun x =>
+        let ruleInc := nodeIncoming[x.2]!
+        set_rule_activation_tagged x.1 ruleInc availableInputs := by
+  induction rules generalizing start with
+  | nil =>
+      simp [activateTaggedRulesAux, List.zipIdx]
+  | cons r rs ih =>
+      simp [activateTaggedRulesAux, List.zipIdx_cons, ih]
+
+lemma activateTaggedRulesAux_eq_zipIdx_map_zero {n : Nat}
+    (nodeIncoming : NodeIncoming)
+    (availableInputs : List ((Nat × Nat) × List.Vector Bool n))
+    (rules : List (Rule n)) :
+    activateTaggedRulesAux nodeIncoming availableInputs 0 rules =
+      rules.zipIdx.map fun x =>
+        let ruleInc := nodeIncoming[x.2]!
+        set_rule_activation_tagged x.1 ruleInc availableInputs := by
+  simpa using activateTaggedRulesAux_eq_zipIdx_map nodeIncoming
+    availableInputs rules 0
+
+def activate_node_from_tagged_tokens {n : Nat}
+    (node : CircuitNode n)
+    (nodeIncoming : NodeIncoming)
+    (availableInputs : List ((Nat × Nat) × List.Vector Bool n)) :
+    CircuitNode n :=
+  let activatedRules := activateTaggedRulesAux nodeIncoming availableInputs
+    0 node.rules
+  { rules := activatedRules
+    nodupIds := by
+      classical
+      have hIds : activatedRules.map (·.ruleId) = node.rules.map (·.ruleId) :=
+        activateTaggedRulesAux_ids nodeIncoming availableInputs 0 node.rules
+      simpa [activatedRules, hIds] using node.nodupIds }
+
+def node_logic_with_tagged_routing {n : Nat}
+    (rules : List (Rule n))
+    (nodeIncoming : NodeIncoming)
+    (availableInputs : List ((Nat × Nat) × List.Vector Bool n)) :
+    (List.Vector Bool n) × Bool :=
+  let acts := extract_activations rules
+  let xor := multiple_xor acts
+  let masks := and_bool_list xor acts
+  let hasConflict := !xor && acts.any (· = true)
+  let perRuleInputs := rules.zipIdx.map fun (_rule, ruleIdx) =>
+    let ruleInc := nodeIncoming[ruleIdx]!
+    gather_rule_inputs_tagged ruleInc availableInputs
+  let outs := apply_activations_with_routing rules masks perRuleInputs
+  (list_or outs, hasConflict)
+
+def evaluate_node_tagged {n : Nat}
+    (node : CircuitNode n)
+    (nodeIncoming : NodeIncoming)
+    (tokensAtNode : List (TaggedToken n)) :
+    (List.Vector Bool n) × Bool :=
+  if tokensAtNode.isEmpty then
+    (List.Vector.replicate n false, false)
+  else
+    let availableInputs := tokensAtNode.map fun t =>
+      ((t.source_column, t.source_tag), t.dep_vector)
+    let activatedNode :=
+      activate_node_from_tagged_tokens node nodeIncoming availableInputs
+    node_logic_with_tagged_routing activatedNode.rules nodeIncoming
+      availableInputs
+
+def evaluate_layer_tagged {n : Nat}
+    (layer : GridLayer n)
+    (tokens : List (TaggedToken n)) :
+    (List (List.Vector Bool n)) × Bool :=
+  let results := layer.nodes.zipIdx.map fun (node, colIdx) =>
+    let tokensHere := tokens.filter (·.current_column = colIdx)
+    let nodeIncoming := layer.incoming[colIdx]!
+    evaluate_node_tagged node nodeIncoming tokensHere
+  let outputs := results.map Prod.fst
+  let errors := results.map Prod.snd
+  (outputs, errors.any id)
+
+def propagate_tagged_tokens {n : Nat}
+    (tokens : List (TaggedToken n))
+    (paths : TaggedPathInput)
+    (currentLevel : Nat)
+    (numLevels : Nat)
+    (outputs : List (List.Vector Bool n)) : List (TaggedToken n) :=
+  tokens.filterMap fun token =>
+    if hPath : token.origin_column < paths.length then
+      let path := paths.get ⟨token.origin_column, hPath⟩
+      if hLevel : currentLevel > 0 ∧ numLevels - currentLevel - 1 < path.length then
+        let stepIndex := numLevels - currentLevel - 1
+        let step := path.get ⟨stepIndex, hLevel.2⟩
+        if step.1 = 0 then
+          none
+        else
+          let targetColumn := step.1 - 1
+          if hOut : token.current_column < outputs.length then
+            some { origin_column := token.origin_column
+                   source_column := token.current_column
+                   source_tag := step.2
+                   current_level := currentLevel - 1
+                   current_column := targetColumn
+                   dep_vector := outputs.get ⟨token.current_column, hOut⟩ }
+          else
+            none
+      else
+        none
+    else
+      none
+
+def eval_tagged_from_level {n : Nat}
+    (paths : TaggedPathInput)
+    (level : Nat)
+    (tokens : List (TaggedToken n))
+    (remainingLayers : List (GridLayer n))
+    (accumulatedError : Bool)
+    (numLevels : Nat) :
+    (List (List.Vector Bool n)) × Bool :=
+  match remainingLayers with
+  | [] =>
+      let finalOutputs := (List.range n).map fun _ =>
+        List.Vector.replicate n false
+      (finalOutputs, accumulatedError)
+  | layer :: rest =>
+      let result := evaluate_layer_tagged layer tokens
+      match rest with
+      | [] => (result.1, accumulatedError || result.2)
+      | _ =>
+          let newTokens := propagate_tagged_tokens tokens paths level
+            numLevels result.1
+          eval_tagged_from_level paths (level - 1) newTokens rest
+            (accumulatedError || result.2) numLevels
+
+def get_tagged_eval_result {n : Nat}
+    (layers : List (GridLayer n))
+    (initialVectors : List (List.Vector Bool n))
+    (paths : TaggedPathInput) : (List (List.Vector Bool n)) × Bool :=
+  let numLevels := layers.length
+  let initialTokens := initialize_tagged_tokens initialVectors numLevels
+  eval_tagged_from_level paths (numLevels - 1) initialTokens layers false
+    numLevels
+
+def evalTaggedTraceFromLevel {n : Nat}
+    (paths : TaggedPathInput)
+    (level : Nat)
+    (tokens : List (TaggedToken n))
+    (remainingLayers : List (GridLayer n))
+    (numLevels : Nat) :
+    List (Prod Nat (List (List.Vector Bool n))) :=
+  match remainingLayers with
+  | [] => []
+  | layer :: rest =>
+      let result := evaluate_layer_tagged layer tokens
+      let here := (level, result.1)
+      match rest with
+      | [] => [here]
+      | _ =>
+          let newTokens := propagate_tagged_tokens tokens paths level
+            numLevels result.1
+          here :: evalTaggedTraceFromLevel paths (level - 1) newTokens
+            rest numLevels
+
+def get_tagged_eval_trace {n : Nat}
+    (layers : List (GridLayer n))
+    (initialVectors : List (List.Vector Bool n))
+    (paths : TaggedPathInput) :
+    List (Prod Nat (List (List.Vector Bool n))) :=
+  let numLevels := layers.length
+  let initialTokens := initialize_tagged_tokens initialVectors numLevels
+  evalTaggedTraceFromLevel paths (numLevels - 1) initialTokens layers
+    numLevels
+
+lemma node_logic_with_tagged_routing_correct
+  {n : Nat}
+  (rules : List (Rule n))
+  (nodeIncoming : NodeIncoming)
+  (availableInputs : List ((Nat × Nat) × List.Vector Bool n))
+  (h_one : exactlyOneActive rules)
+  (h_nodup : rules.Nodup)
+  (hlen : nodeIncoming.length = rules.length) :
+  ∃ (r : Rule n) (i : Nat) (hi : i < rules.length),
+    r ∈ rules ∧
+    rules.get ⟨i, hi⟩ = r ∧
+    node_logic_with_tagged_routing rules nodeIncoming availableInputs =
+      (let ruleInc := nodeIncoming[i]!
+       let inputs := gather_rule_inputs_tagged ruleInc availableInputs
+       r.combine inputs, false) := by
+  classical
+  rcases h_one with ⟨r₀, hr₀_mem, hr₀_act, hr₀_unique⟩
+
+  let acts := extract_activations rules
+  have h_xor : multiple_xor acts = true := by
+    have := (multiple_xor_bool_iff_exactlyOneActive rules h_nodup).mpr
+      ⟨r₀, hr₀_mem, hr₀_act, hr₀_unique⟩
+    simpa [acts, extract_activations] using this
+
+  have h_masks : and_bool_list (multiple_xor acts) acts = acts := by
+    simp [and_bool_list, h_xor]
+
+  let perRuleInputs :=
+    (List.range rules.length).map (fun idx =>
+      let ruleInc := nodeIncoming[idx]!
+      gather_rule_inputs_tagged ruleInc availableInputs)
+
+  have h_len_per : perRuleInputs.length = rules.length := by
+    simp [perRuleInputs]
+
+  let masks := and_bool_list (multiple_xor acts) acts
+  have hmasks_eq : masks = acts := h_masks
+
+  let outs := apply_activations_with_routing rules masks perRuleInputs
+
+  have ⟨i₀_fin, hi₀_get⟩ :
+    ∃ i₀ : Fin rules.length, rules.get i₀ = r₀ :=
+    exists_fin_of_mem (l := rules) hr₀_mem
+
+  let i₀ : Nat := i₀_fin
+  have hi₀_lt : i₀ < rules.length := i₀_fin.isLt
+
+  have h_len_masks : masks.length = rules.length := by
+    simp [masks, hmasks_eq, acts, extract_activations]
+
+  have h_len_outs : outs.length = rules.length := by
+    simp only [outs, apply_activations_with_routing, List.length_zipWith3,
+      h_len_masks, h_len_per]
+    omega
+
+  have hi₀_outs : i₀ < outs.length := by
+    simpa [h_len_outs] using hi₀_lt
+
+  have hi₀_per : i₀ < perRuleInputs.length := by
+    simpa [h_len_per] using hi₀_lt
+
+  have h_act_i₀ :
+    acts.get ⟨i₀, by simpa [acts, extract_activations] using hi₀_lt⟩ =
+      true := by
+    have h_r₀ : rules.get ⟨i₀, hi₀_lt⟩ = r₀ := hi₀_get
+    have h_active : is_rule_active (rules.get ⟨i₀, hi₀_lt⟩) = true := by
+      rw [h_r₀]
+      exact hr₀_act
+    simpa [acts, extract_activations] using h_active
+
+  have h_mask_i₀ :
+    masks.get ⟨i₀,
+      by
+        have : masks.length = rules.length := by
+          simp [masks, hmasks_eq, acts, extract_activations]
+        simpa [this] using hi₀_lt⟩ = true := by
+    simpa [masks, hmasks_eq] using h_act_i₀
+
+  have hi₀_get' : rules.get ⟨i₀, hi₀_lt⟩ = r₀ := by
+    simpa [i₀] using hi₀_get
+
+  have hi₀_masks : i₀ < masks.length := by
+    rw [h_len_masks]
+    exact hi₀_lt
+
+  have h_outs_i₀ :
+    outs.get ⟨i₀, hi₀_outs⟩ =
+      r₀.combine (perRuleInputs.get ⟨i₀, hi₀_per⟩) := by
+    show (apply_activations_with_routing rules masks perRuleInputs).get
+        ⟨i₀, hi₀_outs⟩ = _
+    simp only [apply_activations_with_routing]
+    conv_lhs =>
+      rw [List.get_zipWith3
+        (fun r m ins =>
+          if m = true then r.combine ins
+          else List.Vector.replicate n false)
+        rules masks perRuleInputs i₀ hi₀_lt hi₀_masks hi₀_per]
+    rw [hi₀_get', h_mask_i₀]
+    simp
+
+  have h_only_i₀_active :
+      ∀ j (hj : j < rules.length), j ≠ i₀ →
+        is_rule_active (rules.get ⟨j, hj⟩) = false := by
+    intro j hj hne
+    by_contra h_not_false
+    push_neg at h_not_false
+    have h_true :
+        is_rule_active (rules.get ⟨j, hj⟩) = true :=
+      Bool.eq_true_of_not_eq_false h_not_false
+    have h_eq_r₀ :
+        rules.get ⟨j, hj⟩ = r₀ :=
+      hr₀_unique _ (List.get_mem rules ⟨j, hj⟩) h_true
+    have h_also_r₀ : rules.get ⟨i₀, hi₀_lt⟩ = r₀ := hi₀_get'
+    have h_same :
+        rules.get ⟨j, hj⟩ = rules.get ⟨i₀, hi₀_lt⟩ := by
+      rw [h_eq_r₀, h_also_r₀]
+    have h_idx_eq : j = i₀ := by
+      have h_fin_eq : (⟨j, hj⟩ : Fin rules.length) = ⟨i₀, hi₀_lt⟩ :=
+        (List.Nodup.get_inj_iff h_nodup).mp h_same
+      simp only [Fin.mk.injEq] at h_fin_eq
+      exact h_fin_eq
+    exact hne h_idx_eq
+
+  have h_outs_zero :
+      ∀ j (hj : j < outs.length), j ≠ i₀ →
+        outs.get ⟨j, hj⟩ = List.Vector.replicate n false := by
+    intro j hj hne
+    simp only [outs, apply_activations_with_routing]
+    have hj_rules : j < rules.length := by
+      simpa [h_len_outs] using hj
+    have hj_masks : j < masks.length := by
+      rw [h_len_masks]
+      exact hj_rules
+    have hj_per : j < perRuleInputs.length := by
+      rw [h_len_per]
+      exact hj_rules
+    rw [List.get_zipWith3 _ rules masks perRuleInputs j hj_rules hj_masks
+      hj_per]
+    have h_mask_j : masks.get ⟨j, hj_masks⟩ = false := by
+      have h_inactive := h_only_i₀_active j hj_rules hne
+      have hj_acts : j < acts.length := by
+        simp [acts, extract_activations]
+        exact hj_rules
+      have h_eq1 :
+          masks.get ⟨j, hj_masks⟩ = acts.get ⟨j, hj_acts⟩ := by
+        have h : masks[j]'hj_masks = acts[j]'hj_acts := by
+          simp only [hmasks_eq]
+        simp only [List.get_eq_getElem] at h ⊢
+        exact h
+      have h_eq2 :
+          acts.get ⟨j, hj_acts⟩ =
+            is_rule_active (rules.get ⟨j, hj_rules⟩) := by
+        simp only [acts, extract_activations]
+        exact list_map_get is_rule_active rules j hj_rules
+          (by simp; exact hj_rules)
+      rw [h_eq1, h_eq2, h_inactive]
+    simp only [h_mask_j, Bool.false_eq_true, ↓reduceIte]
+
+  have h_per_rule_i₀ :
+      perRuleInputs.get ⟨i₀, hi₀_per⟩ =
+        gather_rule_inputs_tagged (nodeIncoming[i₀]!) availableInputs := by
+    simp [perRuleInputs]
+
+  refine ⟨r₀, i₀, hi₀_lt, hr₀_mem, hi₀_get', ?_⟩
+  unfold node_logic_with_tagged_routing
+  simp [extract_activations, and_bool_list]
+  have h_enum_per :
+      (rules.zipIdx.map fun (_, ruleIdx) =>
+        gather_rule_inputs_tagged
+          (nodeIncoming[ruleIdx]?.getD default) availableInputs) =
+        perRuleInputs := by
+    simp only [perRuleInputs]
+    apply List.ext_get
+    · simp only [List.length_map, List.length_zipIdx, List.length_range]
+    · intro i hi₁ hi₂
+      have hi_zipIdx : i < rules.zipIdx.length := by
+        simpa [List.length_map] using hi₁
+      have hi_rules : i < rules.length := by
+        rw [List.length_zipIdx] at hi_zipIdx
+        exact hi_zipIdx
+      rw [list_map_get _ _ _ hi_zipIdx hi₁]
+      rw [list_map_get _ _ _ (by simp; exact hi_rules) hi₂]
+      congr 1
+      have h1 : (rules.zipIdx.get ⟨i, hi_zipIdx⟩).2 = 0 + i := by
+        rw [← List.getElem_eq_get]
+        simp [List.getElem_zipIdx]
+      have h2 :
+          (List.range rules.length).get ⟨i, by simp; exact hi_rules⟩ = i := by
+        rw [← List.getElem_eq_get]
+        simp [List.getElem_range]
+      simp only [h1, h2, Nat.zero_add]
+      have hiIncoming : i < nodeIncoming.length := by
+        rw [hlen]
+        exact hi_rules
+      rw [List.getElem?_eq_getElem hiIncoming, Option.getD_some]
+      simp only [List.getElem!_eq_getElem?_getD,
+        List.getElem?_eq_getElem hiIncoming, Option.getD_some]
+
+  constructor
+  ·
+    have h_list_or_eq : list_or outs = outs.get ⟨i₀, hi₀_outs⟩ := by
+      unfold list_or
+      exact list_or_single_nonzero outs i₀ hi₀_outs h_outs_zero
+    have h_masks_eq_acts :
+        List.map
+          ((fun b => multiple_xor (List.map is_rule_active rules) && b) ∘
+            is_rule_active) rules =
+        List.map is_rule_active rules := by
+      congr 1
+      funext r
+      simpa [acts, extract_activations, h_xor] using
+        (show (multiple_xor (List.map is_rule_active rules) &&
+            is_rule_active r) = is_rule_active r by
+          rw [show multiple_xor (List.map is_rule_active rules) = true by
+            simpa [acts, extract_activations] using h_xor]
+          simp)
+    rw [h_enum_per, h_masks_eq_acts]
+    have h_goal_eq_outs :
+        apply_activations_with_routing rules (List.map is_rule_active rules)
+          perRuleInputs = outs := by
+      simp only [outs]
+      congr 1
+      simp only [masks, hmasks_eq, acts, extract_activations]
+    rw [h_goal_eq_outs, h_list_or_eq, h_outs_i₀, h_per_rule_i₀]
+    congr 2
+    have hiIncoming : i₀ < nodeIncoming.length := by
+      rw [hlen]
+      exact hi₀_lt
+    rw [List.getElem!_eq_getElem?_getD (α := _),
+      List.getElem?_eq_getElem hiIncoming]
+  ·
+    intro h_xor_false
+    simp only [acts, extract_activations] at h_xor
+    rw [h_xor] at h_xor_false
+    simp at h_xor_false
+
+theorem evaluate_node_tagged_uses_proven_node_logic
+  {n : Nat}
+  (node : CircuitNode n)
+  (nodeIncoming : NodeIncoming)
+  (tokens : List (TaggedToken n))
+  (h_nonempty : tokens.length > 0) :
+  let availableInputs := tokens.map fun t =>
+    ((t.source_column, t.source_tag), t.dep_vector)
+  let activatedNode := activate_node_from_tagged_tokens node nodeIncoming
+    availableInputs
+  evaluate_node_tagged node nodeIncoming tokens =
+    node_logic_with_tagged_routing activatedNode.rules nodeIncoming
+      availableInputs := by
+  intro availableInputs activatedNode
+  cases tokens with
+  | nil =>
+      simp at h_nonempty
+  | cons head tail =>
+      simp [evaluate_node_tagged, availableInputs, activatedNode,
+        activate_node_from_tagged_tokens]
+
+theorem evaluate_node_tagged_error_iff_not_unique
+  {n : Nat}
+  (node : CircuitNode n)
+  (nodeIncoming : NodeIncoming)
+  (tokens : List (TaggedToken n))
+  (h_nonempty : tokens.length > 0) :
+  let availableInputs := tokens.map fun t =>
+    ((t.source_column, t.source_tag), t.dep_vector)
+  let activatedNode := activate_node_from_tagged_tokens node nodeIncoming
+    availableInputs
+  let acts := extract_activations activatedNode.rules
+  ((evaluate_node_tagged node nodeIncoming tokens).snd = false ∧
+    acts.any (· = true))
+    ↔ exactlyOneActive activatedNode.rules := by
+  intro availableInputs activatedNode acts
+  have h_nodup : activatedNode.rules.Nodup :=
+    nodup_of_map (·.ruleId) activatedNode.nodupIds
+  have h_xor_iff :
+      multiple_xor (extract_activations activatedNode.rules) = true ↔
+        exactlyOneActive activatedNode.rules :=
+    multiple_xor_bool_iff_exactlyOneActive activatedNode.rules h_nodup
+  have h_eval :
+      evaluate_node_tagged node nodeIncoming tokens =
+        node_logic_with_tagged_routing activatedNode.rules nodeIncoming
+          availableInputs :=
+    evaluate_node_tagged_uses_proven_node_logic node nodeIncoming tokens
+      h_nonempty
+  rw [h_eval]
+  unfold node_logic_with_tagged_routing
+  simp only
+  constructor
+  ·
+    intro ⟨h_no_err, h_any⟩
+    rw [← h_xor_iff]
+    simp only [acts, extract_activations] at h_no_err h_any
+    cases h_xor : multiple_xor (List.map is_rule_active activatedNode.rules)
+    ·
+      exfalso
+      simp only [h_xor, Bool.not_false, Bool.true_and] at h_no_err
+      rw [h_any] at h_no_err
+      contradiction
+    ·
+      simp only [extract_activations]
+      exact h_xor
+  ·
+    intro h_one
+    have h_xor :
+        multiple_xor (extract_activations activatedNode.rules) = true :=
+      h_xor_iff.mpr h_one
+    constructor
+    · simp only [extract_activations] at h_xor ⊢
+      simp [h_xor]
+    ·
+      obtain ⟨r, hr_mem, hr_act, _⟩ := h_one
+      simp only [acts, extract_activations]
+      rw [List.any_eq_true]
+      use true
+      constructor
+      ·
+        rw [List.mem_map]
+        exact ⟨r, hr_mem, hr_act⟩
+      · rfl
+
+theorem evaluate_node_tagged_correct
+  {n : Nat}
+  (node : CircuitNode n)
+  (nodeIncoming : NodeIncoming)
+  (tokens : List (TaggedToken n))
+  (h_nonempty : tokens.length > 0)
+  (h_incoming_len : nodeIncoming.length = node.rules.length)
+  (h_no_error : (evaluate_node_tagged node nodeIncoming tokens).snd = false)
+  (h_some_active :
+    (extract_activations
+      (activate_node_from_tagged_tokens node nodeIncoming
+        (tokens.map fun t =>
+          ((t.source_column, t.source_tag), t.dep_vector))).rules).any
+      (· = true)) :
+  let availableInputs := tokens.map fun t =>
+    ((t.source_column, t.source_tag), t.dep_vector)
+  let activatedNode := activate_node_from_tagged_tokens node nodeIncoming
+    availableInputs
+  ∃ r ∈ activatedNode.rules,
+    let ruleIdx := activatedNode.rules.idxOf r
+    let ruleInc := nodeIncoming[ruleIdx]!
+    let inputs := gather_rule_inputs_tagged ruleInc availableInputs
+    (evaluate_node_tagged node nodeIncoming tokens).fst =
+      r.combine inputs := by
+  intro availableInputs activatedNode
+  have h_one : exactlyOneActive activatedNode.rules := by
+    have h_iff :=
+      evaluate_node_tagged_error_iff_not_unique node nodeIncoming tokens
+        h_nonempty
+    simp only at h_iff
+    exact h_iff.mp ⟨h_no_error, h_some_active⟩
+  have h_nodup : activatedNode.rules.Nodup :=
+    nodup_of_map (·.ruleId) activatedNode.nodupIds
+  have h_activated_len : activatedNode.rules.length = node.rules.length := by
+    simp only [activatedNode, activate_node_from_tagged_tokens]
+    have h :
+        ∀ idx,
+          (activateTaggedRulesAux nodeIncoming availableInputs idx node.rules).length =
+            node.rules.length := by
+      intro idx
+      induction node.rules generalizing idx with
+      | nil => simp [activateTaggedRulesAux]
+      | cons r rs ih =>
+          simp only [activateTaggedRulesAux, List.length_cons]
+          rw [ih]
+    exact h 0
+  have h_len : nodeIncoming.length = activatedNode.rules.length := by
+    rw [h_incoming_len, h_activated_len]
+  have h_routing :=
+    node_logic_with_tagged_routing_correct activatedNode.rules nodeIncoming
+      availableInputs h_one h_nodup h_len
+  obtain ⟨r, i, hi, hr_mem, hr_get, hr_eq⟩ := h_routing
+  rw [evaluate_node_tagged_uses_proven_node_logic node nodeIncoming tokens
+    h_nonempty]
+  have h_fst :
+      (node_logic_with_tagged_routing activatedNode.rules nodeIncoming
+          availableInputs).fst =
+        r.combine (gather_rule_inputs_tagged (nodeIncoming[i]!)
+          availableInputs) := by
+    rw [hr_eq]
+  use r, hr_mem
+  simp only [availableInputs, activatedNode]
+  rw [h_fst]
+  congr 1
+  congr 1
+  have h_indexOf : activatedNode.rules.idxOf r = i := by
+    exact indexOf_eq_of_get hi h_nodup hr_get
+  simp only [activatedNode, availableInputs] at h_indexOf ⊢
+  rw [h_indexOf]
+
+lemma multiple_xor_replicate_false_append_true
+    (k : Nat) :
+    multiple_xor (List.replicate k false ++ [true]) = true := by
+  induction k with
+  | zero =>
+      simp [multiple_xor]
+  | succ k ih =>
+      simp [List.replicate_succ, multiple_xor, ih]
+
+lemma list_or_replicate_zero_append_singleton
+    {n : Nat} (k : Nat)
+    (v : List.Vector Bool n) :
+    list_or (List.replicate k (List.Vector.replicate n false) ++ [v]) = v := by
+  induction k with
+  | zero =>
+      simp [list_or, Vector.zipWith_or_replicate_false_right]
+  | succ k ih =>
+      simp [List.replicate_succ, list_or, List.foldl,
+        Vector.zipWith_or_replicate_false_left]
+      have hfold :
+          List.foldl
+              (fun acc v =>
+                List.Vector.zipWith (fun x1 x2 => x1 || x2) acc v)
+              (List.Vector.replicate n false)
+              (List.replicate k (List.Vector.replicate n false)) =
+            List.Vector.replicate n false := by
+        apply foldl_zipWith_or_all_zeros
+        intro j hj
+        simp
+      rw [hfold, Vector.zipWith_or_replicate_false_right]
+
+lemma gather_rule_inputs_tagged_singleton_repetition
+    {n : Nat}
+    (selfIdx : Nat)
+    (dep : List.Vector Bool n) :
+    gather_rule_inputs_tagged
+      [(selfIdx, gridTagRepetition)]
+      [((selfIdx, gridTagRepetition), dep)] = [dep] := by
+  simp [gather_rule_inputs_tagged]
+
+lemma gather_rule_inputs_tagged_intro_of_singleton_repetition
+    {n : Nat}
+    (requiredCol selfIdx : Nat)
+    (dep : List.Vector Bool n) :
+    gather_rule_inputs_tagged
+      [(requiredCol, gridTagIntro)]
+      [((selfIdx, gridTagRepetition), dep)] = [] := by
+  simp [gather_rule_inputs_tagged, gridTagIntro, gridTagRepetition]
+
+lemma gather_rule_inputs_tagged_elim_of_singleton_repetition
+    {n : Nat}
+    (majorCol minorCol selfIdx : Nat)
+    (dep : List.Vector Bool n) :
+    gather_rule_inputs_tagged
+      [(majorCol, gridTagElimMajor), (minorCol, gridTagElimMinor)]
+      [((selfIdx, gridTagRepetition), dep)] = [] := by
+  simp [gather_rule_inputs_tagged, gridTagElimMajor,
+    gridTagElimMinor, gridTagRepetition]
+
+lemma set_rule_activation_tagged_intro_of_singleton_repetition
+    {n : Nat}
+    (rid requiredCol selfIdx : Nat)
+    (encoder : List.Vector Bool n)
+    (dep : List.Vector Bool n) :
+    set_rule_activation_tagged
+      (mkIntroRule rid encoder false)
+      [(requiredCol, gridTagIntro)]
+      [((selfIdx, gridTagRepetition), dep)]
+      = mkIntroRule rid encoder false := by
+  simp [set_rule_activation_tagged, mkIntroRule,
+    gridTagIntro, gridTagRepetition]
+
+lemma set_rule_activation_tagged_elim_of_singleton_repetition
+    {n : Nat}
+    (rid majorCol minorCol selfIdx : Nat)
+    (dep : List.Vector Bool n) :
+    set_rule_activation_tagged
+      (mkElimRule rid false false)
+      [(majorCol, gridTagElimMajor), (minorCol, gridTagElimMinor)]
+      [((selfIdx, gridTagRepetition), dep)]
+      = mkElimRule rid false false := by
+  simp [set_rule_activation_tagged, mkElimRule,
+    gridTagElimMajor, gridTagElimMinor, gridTagRepetition]
+
+lemma set_rule_activation_tagged_repetition_of_singleton_repetition
+    {n : Nat}
+    (rid selfIdx : Nat)
+    (dep : List.Vector Bool n) :
+    set_rule_activation_tagged
+      (mkRepetitionRule rid false)
+      [(selfIdx, gridTagRepetition)]
+      [((selfIdx, gridTagRepetition), dep)]
+      = mkRepetitionRule rid true := by
+  simp [set_rule_activation_tagged, mkRepetitionRule]
+
+lemma apply_activations_with_routing_false_prefix_true_last
+    {n : Nat}
+    (preRules : List (Rule n))
+    (preInputs : List (List (List.Vector Bool n)))
+    (rid : Nat)
+    (dep : List.Vector Bool n)
+    (h_len : preInputs.length = preRules.length) :
+    apply_activations_with_routing
+      (preRules ++ [mkRepetitionRule rid true])
+      (List.replicate preRules.length false ++ [true])
+      (preInputs ++ [[dep]])
+      =
+    List.replicate preRules.length (List.Vector.replicate n false) ++ [dep] := by
+  induction preRules generalizing preInputs with
+  | nil =>
+      cases preInputs with
+      | nil =>
+          simp [apply_activations_with_routing, List.zipWith3, mkRepetitionRule]
+      | cons x xs =>
+          simp at h_len
+  | cons r rs ih =>
+      cases preInputs with
+      | nil =>
+          simp at h_len
+      | cons ins rest =>
+          simp at h_len
+          simp [apply_activations_with_routing, List.replicate_succ,
+            List.zipWith3]
+          exact ih rest h_len
+
+theorem node_logic_with_tagged_routing_false_prefix_true_last_of_perInputs
+    {n : Nat}
+    (preRules : List (Rule n))
+    (nodeIncoming : NodeIncoming)
+    (preInputs : List (List (List.Vector Bool n)))
+    (rid selfIdx : Nat)
+    (dep : List.Vector Bool n)
+    (h_prefix_false :
+      extract_activations preRules = List.replicate preRules.length false)
+    (h_per :
+      ((preRules ++ [mkRepetitionRule rid true]).zipIdx.map fun (x : Rule n × Nat) =>
+        let ruleInc := nodeIncoming[x.2]!
+        gather_rule_inputs_tagged ruleInc
+          [((selfIdx, gridTagRepetition), dep)])
+        = preInputs ++ [[dep]])
+    (h_len : preInputs.length = preRules.length) :
+    node_logic_with_tagged_routing
+      (preRules ++ [mkRepetitionRule rid true])
+      nodeIncoming
+      [((selfIdx, gridTagRepetition), dep)] = (dep, false) := by
+  unfold node_logic_with_tagged_routing
+  have h_acts :
+      extract_activations (preRules ++ [mkRepetitionRule rid true]) =
+        List.replicate preRules.length false ++ [true] := by
+    simpa [extract_activations, mkRepetitionRule, is_rule_active] using
+      congrArg (fun bs => bs ++ [true]) h_prefix_false
+  rw [h_acts, h_per]
+  simp [multiple_xor_replicate_false_append_true, and_bool_list]
+  rw [apply_activations_with_routing_false_prefix_true_last
+    preRules preInputs rid dep h_len]
+  simp [list_or_replicate_zero_append_singleton]
+
+lemma extract_activations_introRules_false_from
+    {n : Nat} (start : Nat) (introData : List (List.Vector Bool n)) :
+    extract_activations
+      ((introData.zipIdx start).map fun (encoder, pos) => mkIntroRule pos encoder false) =
+      List.replicate introData.length false := by
+  induction introData generalizing start with
+  | nil =>
+      simp [extract_activations]
+  | cons encoder rest ih =>
+      have htail := ih (start + 1)
+      simp [extract_activations, mkIntroRule, is_rule_active] at htail ⊢
+      simpa [List.replicate_succ] using congrArg (List.cons false) htail
+
+lemma extract_activations_introRules_false
+    {n : Nat} (introData : List (List.Vector Bool n)) :
+    extract_activations
+      (introData.zipIdx.map fun (encoder, pos) => mkIntroRule pos encoder false) =
+      List.replicate introData.length false := by
+  simpa using extract_activations_introRules_false_from 0 introData
+
+lemma extract_activations_elimRules_false_from
+    {n : Nat} (offset start : Nat) (elimData : List Nat) :
+    extract_activations
+      (((elimData.zipIdx start).map fun (_x, pos) => mkElimRule (offset + pos) false false)
+        : List (Rule n)) =
+      List.replicate elimData.length false := by
+  induction elimData generalizing offset start with
+  | nil =>
+      simp [extract_activations]
+  | cons x xs ih =>
+      have htail := ih offset (start + 1)
+      simp [extract_activations, mkElimRule, is_rule_active] at htail ⊢
+      simpa [List.replicate_succ] using congrArg (List.cons false) htail
+
+lemma extract_activations_elimRules_false
+    {n : Nat} (offset : Nat) (elimData : List Nat) :
+    extract_activations
+      ((elimData.zipIdx.map fun (_x, pos) => mkElimRule (offset + pos) false false)
+        : List (Rule n)) =
+      List.replicate elimData.length false := by
+  simpa using extract_activations_elimRules_false_from offset 0 elimData
+
+lemma zipIdx_map_append_singleton
+    {α β : Type*} (xs : List α) (a : α) (start : Nat) (f : α × Nat → β) :
+    ((xs ++ [a]).zipIdx start).map f =
+      (xs.zipIdx start).map f ++ [f (a, start + xs.length)] := by
+  induction xs generalizing start with
+  | nil =>
+      simp [List.zipIdx]
+  | cons x rest ih =>
+      simp [List.zipIdx_cons, ih]
+      congr 1
+      simp [Nat.add_assoc, Nat.add_left_comm, Nat.add_comm]
+
+@[simp] lemma List.getElem?_append_singleton_length
+    {α : Type*} (xs : List α) (a : α) :
+    (xs ++ [a])[xs.length]? = some a := by
+  induction xs with
+  | nil =>
+      simp
+  | cons x rest ih =>
+      simp [ih]
+
+@[simp] lemma List.getElem?_cons_succ'
+    {α : Type*} (x : α) (xs : List α) (n : Nat) :
+    (x :: xs)[n + 1]? = xs[n]? := by
+  simp
+
+@[simp] lemma List.getElem?_append_cons_length
+    {α : Type*} (xs : List α) (y : α) (ys : List α) :
+    (xs ++ y :: ys)[xs.length]? = some y := by
+  induction xs with
+  | nil =>
+      simp
+  | cons x rest ih =>
+      simp [ih]
+
+lemma buildTaggedIncomingMapForFormula_repetition_slot_getD
+    (formulas : List Formula) (formula : Formula) :
+    let introData := match formula with
+      | .impl _ _ =>
+          match encoderForIntro formulas formula with
+          | some encoder => [encoder]
+          | none => []
+      | _ => []
+    let elimData := formulas.zipIdx.filterMap fun (f, idx) =>
+      match f with
+      | .impl _ B => if B = formula then some idx else none
+      | _ => none
+    (buildTaggedIncomingMapForFormula formulas formula)[introData.length + elimData.length]?.getD default =
+      [(formulas.idxOf formula, gridTagRepetition)] := by
+  cases formula with
+  | atom name =>
+      dsimp
+      let elimIdxs := formulas.zipIdx.filterMap fun (f, idx) =>
+        match f with
+        | .impl _ B => if B = Formula.atom name then some idx else none
+        | _ => none
+      let elimMaps := formulas.zipIdx.filterMap fun (f, idx) =>
+        match f with
+        | .impl A B =>
+            if B = Formula.atom name then
+              some [(idx, gridTagElimMajor), (formulas.idxOf A, gridTagElimMinor)]
+            else none
+        | _ => none
+      have h_len : elimMaps.length = elimIdxs.length := by
+        exact List.length_filterMap_eq_of_isSome _ _ _ (by
+          intro x
+          cases x with
+          | mk f idx =>
+              cases f with
+              | atom s =>
+                  simp [Option.isSome]
+              | impl A B =>
+                  by_cases hB : B = Formula.atom name <;> simp [hB, Option.isSome])
+      unfold buildTaggedIncomingMapForFormula
+      rw [← h_len]
+      simp [elimMaps, List.getElem?_append_singleton_length]
+  | impl A B =>
+      dsimp
+      let elimIdxs := formulas.zipIdx.filterMap fun (f, idx) =>
+        match f with
+        | .impl _ B' => if B' = Formula.impl A B then some idx else none
+        | _ => none
+      let elimMaps := formulas.zipIdx.filterMap fun (f, idx) =>
+        match f with
+        | .impl A' B' =>
+            if B' = Formula.impl A B then
+              some [(idx, gridTagElimMajor), (formulas.idxOf A', gridTagElimMinor)]
+            else none
+        | _ => none
+      have h_len : elimMaps.length = elimIdxs.length := by
+        exact List.length_filterMap_eq_of_isSome _ _ _ (by
+          intro x
+          cases x with
+          | mk f idx =>
+              cases f with
+              | atom s =>
+                  simp [Option.isSome]
+              | impl A' B' =>
+                  by_cases hB : B' = Formula.impl A B <;> simp [hB, Option.isSome])
+      let selfIdx := List.idxOf (Formula.impl A B) formulas
+      unfold buildTaggedIncomingMapForFormula
+      rw [← h_len]
+      have h_impl :
+          ((([(List.idxOf B formulas, gridTagIntro)] ::
+              (elimMaps ++ [[(selfIdx, gridTagRepetition)]]))[1 + elimMaps.length]?).getD default) =
+            [(selfIdx, gridTagRepetition)] := by
+        have h_step :
+            ([(List.idxOf B formulas, gridTagIntro)] ::
+                (elimMaps ++ [[(selfIdx, gridTagRepetition)]]))[1 + elimMaps.length]? =
+              some [(selfIdx, gridTagRepetition)] := by
+          simp [Nat.add_comm, List.getElem?_cons_succ',
+            List.getElem?_append_singleton_length]
+        have h_step' := congrArg (fun o => o.getD default) h_step
+        simpa using h_step'
+      simpa [selfIdx, elimMaps] using h_impl
+
+lemma elimRules_from_zipIdx_eq_of_length_from
+    {n : Nat} {α β : Type*}
+    (xs : List α) (ys : List β)
+    (start offset : Nat)
+    (h_len : xs.length = ys.length) :
+    (((xs.zipIdx start).map fun (_x, pos) => mkElimRule (offset + pos) false false)
+      : List (Rule n)) =
+    (((ys.zipIdx start).map fun (_y, pos) => mkElimRule (offset + pos) false false)
+      : List (Rule n)) := by
+  induction xs generalizing ys start with
+  | nil =>
+      cases ys with
+      | nil =>
+          simp
+      | cons y ys =>
+          simp at h_len
+  | cons x xs ih =>
+      cases ys with
+      | nil =>
+          simp at h_len
+      | cons y ys =>
+          simp at h_len
+          simpa [List.zipIdx_cons] using ih ys (start + 1) h_len
+
+lemma elimRules_shift_eq_zipIdx_from
+    {n : Nat} {α : Type*}
+    (xs : List α) (start offset : Nat) :
+    (((xs.zipIdx start).map fun (_x, pos) => mkElimRule (offset + pos) false false)
+      : List (Rule n)) =
+    (((xs.zipIdx (offset + start)).map fun (_x, rid) => mkElimRule rid false false)
+      : List (Rule n)) := by
+  induction xs generalizing start offset with
+  | nil =>
+      simp
+  | cons x xs ih =>
+      simpa [List.zipIdx_cons, Nat.add_assoc] using
+        ih (start := start + 1) (offset := offset)
+
+lemma activateTaggedElimThenRepRulesAux_of_singleton_repetition
+    {n : Nat}
+    (incomingPrefix : NodeIncoming)
+    (elimPairs : List (Nat × Nat))
+    (ridStart selfIdx : Nat)
+    (dep : List.Vector Bool n) :
+    activateTaggedRulesAux
+      (incomingPrefix ++
+        elimPairs.map (fun p => [(p.1, gridTagElimMajor), (p.2, gridTagElimMinor)]) ++
+        [[(selfIdx, gridTagRepetition)]])
+      [((selfIdx, gridTagRepetition), dep)]
+      incomingPrefix.length
+      ((((elimPairs.zipIdx ridStart).map fun (_pair, rid) =>
+          mkElimRule rid false false) : List (Rule n)) ++
+        [mkRepetitionRule (ridStart + elimPairs.length) false]) =
+      (((elimPairs.zipIdx ridStart).map fun (_pair, rid) =>
+          mkElimRule rid false false) : List (Rule n)) ++
+        [mkRepetitionRule (ridStart + elimPairs.length) true] := by
+  induction elimPairs generalizing incomingPrefix ridStart with
+  | nil =>
+      simp [activateTaggedRulesAux,
+        set_rule_activation_tagged_repetition_of_singleton_repetition]
+  | cons pair rest ih =>
+      rcases pair with ⟨majorCol, minorCol⟩
+      simp [activateTaggedRulesAux, List.zipIdx_cons, List.append_assoc,
+        set_rule_activation_tagged_elim_of_singleton_repetition]
+      simpa [List.append_assoc, Nat.add_assoc, Nat.add_left_comm, Nat.add_comm] using
+        ih
+          (incomingPrefix := incomingPrefix ++
+            [[(majorCol, gridTagElimMajor), (minorCol, gridTagElimMinor)]])
+          (ridStart := ridStart + 1)
+
+lemma extract_activations_nodeForFormula_prefix_false
+    (formulas : List Formula) (formula : Formula) :
+    let introData := match formula with
+      | .impl _ _ =>
+          match encoderForIntro formulas formula with
+          | some encoder => [encoder]
+          | none => []
+      | _ => []
+    let elimData := formulas.zipIdx.filterMap fun (f, idx) =>
+      match f with
+      | .impl _ B => if B = formula then some idx else none
+      | _ => none
+    let introRules := introData.zipIdx.map fun (encoder, pos) =>
+      mkIntroRule pos encoder false
+    let elimRules := elimData.zipIdx.map fun (_, pos) =>
+      mkElimRule (introData.length + pos) false false
+    extract_activations (introRules ++ elimRules) =
+      List.replicate (introRules.length + elimRules.length) false := by
+  let introData := match formula with
+    | .impl _ _ =>
+        match encoderForIntro formulas formula with
+        | some encoder => [encoder]
+        | none => []
+    | _ => []
+  let elimData := formulas.zipIdx.filterMap fun (f, idx) =>
+    match f with
+    | .impl _ B => if B = formula then some idx else none
+    | _ => none
+  let introRules := introData.zipIdx.map fun (encoder, pos) =>
+    mkIntroRule pos encoder false
+  let elimRules : List (Rule formulas.length) := elimData.zipIdx.map fun (_, pos) =>
+    mkElimRule (introData.length + pos) false false
+  change extract_activations (introRules ++ elimRules) =
+    List.replicate (introRules.length + elimRules.length) false
+  have h_intro :
+      extract_activations introRules =
+        List.replicate introRules.length false := by
+    simpa [introRules] using
+      extract_activations_introRules_false introData
+  have h_elim :
+      extract_activations elimRules =
+        List.replicate elimRules.length false := by
+    simpa [elimRules] using
+      extract_activations_elimRules_false introData.length elimData
+  rw [show extract_activations (introRules ++ elimRules) =
+      extract_activations introRules ++ extract_activations elimRules by
+        simp [extract_activations]]
+  rw [h_intro, h_elim, List.replicate_add]
+
+theorem node_logic_with_tagged_routing_nodeForFormula_singleton_repetition
+    (formulas : List Formula) (formula : Formula)
+    (dep : List.Vector Bool formulas.length) :
+    let introData := match formula with
+      | .impl _ _ =>
+          match encoderForIntro formulas formula with
+          | some encoder => [encoder]
+          | none => []
+      | _ => []
+    let elimData := formulas.zipIdx.filterMap fun (f, idx) =>
+      match f with
+      | .impl _ B => if B = formula then some idx else none
+      | _ => none
+    let introRules := introData.zipIdx.map fun (encoder, pos) =>
+      mkIntroRule pos encoder false
+    let elimRules := elimData.zipIdx.map fun (_, pos) =>
+      mkElimRule (introData.length + pos) false false
+    let preRules := introRules ++ elimRules
+    let repRid := introData.length + elimData.length
+    let preInputs := List.replicate preRules.length ([] : List (List.Vector Bool formulas.length))
+    node_logic_with_tagged_routing
+      (preRules ++ [mkRepetitionRule repRid true])
+      (buildTaggedIncomingMapForFormula formulas formula)
+      [((formulas.idxOf formula, gridTagRepetition), dep)] = (dep, false) := by
+  let introData := match formula with
+    | .impl _ _ =>
+        match encoderForIntro formulas formula with
+        | some encoder => [encoder]
+        | none => []
+    | _ => []
+  let elimData := formulas.zipIdx.filterMap fun (f, idx) =>
+    match f with
+    | .impl _ B => if B = formula then some idx else none
+    | _ => none
+  let introRules := introData.zipIdx.map fun (encoder, pos) =>
+    mkIntroRule pos encoder false
+  let elimRules : List (Rule formulas.length) := elimData.zipIdx.map fun (_, pos) =>
+    mkElimRule (introData.length + pos) false false
+  let preRules := introRules ++ elimRules
+  let repRid := introData.length + elimData.length
+  let prefixInputs :=
+    (preRules.zipIdx.map fun (x : Rule formulas.length × Nat) =>
+      let ruleInc := (buildTaggedIncomingMapForFormula formulas formula)[x.2]!
+      gather_rule_inputs_tagged ruleInc
+        [((formulas.idxOf formula, gridTagRepetition), dep)])
+  change node_logic_with_tagged_routing
+    (preRules ++ [mkRepetitionRule repRid true])
+    (buildTaggedIncomingMapForFormula formulas formula)
+    [((formulas.idxOf formula, gridTagRepetition), dep)] = (dep, false)
+  have h_prefix :
+      extract_activations preRules =
+        List.replicate preRules.length false := by
+    simpa [preRules, introRules, elimRules, introData, elimData] using
+      extract_activations_nodeForFormula_prefix_false formulas formula
+  have h_per :
+      ((preRules ++ [mkRepetitionRule repRid true]).zipIdx.map
+        fun (x : Rule formulas.length × Nat) =>
+          let ruleInc := (buildTaggedIncomingMapForFormula formulas formula)[x.2]!
+          gather_rule_inputs_tagged ruleInc
+            [((formulas.idxOf formula, gridTagRepetition), dep)]) =
+        prefixInputs ++ [[dep]] := by
+    rw [zipIdx_map_append_singleton]
+    simp [prefixInputs]
+    have h_preLen : preRules.length = repRid := by
+      simp [preRules, introRules, elimRules, repRid]
+    have h_rep_getD :
+        ((buildTaggedIncomingMapForFormula formulas formula)[repRid]?.getD default) =
+          [(formulas.idxOf formula, gridTagRepetition)] := by
+      simpa [repRid, introData, elimData] using
+        buildTaggedIncomingMapForFormula_repetition_slot_getD formulas formula
+    rw [h_preLen]
+    rw [h_rep_getD, gather_rule_inputs_tagged_singleton_repetition]
+  have h_len : prefixInputs.length = preRules.length := by
+    simp [prefixInputs]
+  exact node_logic_with_tagged_routing_false_prefix_true_last_of_perInputs
+    (preRules := preRules)
+    (nodeIncoming := buildTaggedIncomingMapForFormula formulas formula)
+    (preInputs := prefixInputs)
+    (rid := repRid)
+    (selfIdx := formulas.idxOf formula)
+    (dep := dep)
+    h_prefix h_per h_len
+
+/-- Formula-role check used by the edge-aware path converter. This is defined
+    locally instead of using the later structural helper so the edge-aware
+    evaluator remains independent of the structural predicate section. -/
+def taggedElimPairMatches
+    (target major minor : Vertex) : Bool :=
+  match major.FORMULA with
+  | Formula.impl A B => decide (B = target.FORMULA ∧ A = minor.FORMULA)
+  | _ => false
+
+/-- Role tag assigned to the concrete source-target edge. Elimination is
+    checked before repetition so that `A` as the minor premise of `A -> A`
+    is not confused with a repetition input. -/
+def gridTagForSourceTarget
+    (bd : BranchingDLDS) (source target : Vertex) : Nat :=
+  match incomingSources bd.base target with
+  | [u] =>
+      if decide (source = u) then
+        match findIntroDischarge bd target with
+        | some _ => gridTagIntro
+        | none => gridTagRepetition
+      else gridTagRepetition
+  | [u, w] =>
+      if taggedElimPairMatches target u w then
+        if decide (source = u) then gridTagElimMajor
+        else if decide (source = w) then gridTagElimMinor
+        else gridTagRepetition
+      else if taggedElimPairMatches target w u then
+        if decide (source = w) then gridTagElimMajor
+        else if decide (source = u) then gridTagElimMinor
+        else gridTagRepetition
+      else gridTagRepetition
+  | _ => gridTagRepetition
+
+def nextVertexAndTagForReading
+    (bd : BranchingDLDS) (reading : ReadingInput) (u : Vertex) :
+    Option (Vertex × Nat) :=
+  match nextVertexForReading bd reading u with
+  | none => none
+  | some v => some (v, gridTagForSourceTarget bd u v)
+
+def readingTaggedPathFromVertex
+    (bd : BranchingDLDS) (reading : ReadingInput) :
+    Option Vertex → Nat → List (Nat × Nat)
+  | _, 0 => []
+  | none, steps + 1 =>
+      (0, gridTagRepetition) ::
+        readingTaggedPathFromVertex bd reading none steps
+  | some u, steps + 1 =>
+      match nextVertexAndTagForReading bd reading u with
+      | none =>
+          (0, gridTagRepetition) ::
+            readingTaggedPathFromVertex bd reading none steps
+      | some (w, tag) =>
+          ((buildFormulas bd.base).idxOf w.FORMULA + 1, tag) ::
+            readingTaggedPathFromVertex bd reading (some w) steps
+
+lemma readingTaggedPathFromVertex_length
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (start : Option Vertex) (steps : Nat) :
+    (readingTaggedPathFromVertex bd reading start steps).length = steps := by
+  induction steps generalizing start with
+  | zero =>
+      cases start <;> rfl
+  | succ steps ih =>
+      cases start with
+      | none =>
+          simp [readingTaggedPathFromVertex, ih]
+      | some u =>
+          simp [readingTaggedPathFromVertex]
+          split <;> simp [ih]
+
+def readingToTaggedPathFull
+    (bd : BranchingDLDS) (reading : ReadingInput) : TaggedPathInput :=
+  let steps := dldsMaxLevel bd.base
+  (buildFormulas bd.base).map fun formula =>
+    readingTaggedPathFromVertex bd reading (topVertexForFormula bd formula)
+      steps
+
+theorem readingToTaggedPathFull_wellformed
+    (bd : BranchingDLDS) (reading : ReadingInput) :
+    (readingToTaggedPathFull bd reading).length = numFormulas bd.base ∧
+      ∀ path ∈ readingToTaggedPathFull bd reading,
+        path.length = gridTransitionCount bd.base := by
+  constructor
+  · simp [readingToTaggedPathFull, numFormulas]
+  · intro path hMem
+    unfold readingToTaggedPathFull at hMem
+    rcases List.mem_map.mp hMem with ⟨formula, _hFormula, hPath⟩
+    rw [← hPath, readingTaggedPathFromVertex_length,
+      gridTransitionCount_eq_dldsMaxLevel]
+
+def extract_tagged_grid_result_at_vertex
+    (bd : BranchingDLDS)
+    (grid : List (GridLayer (numFormulas bd.base)))
+    (initialVecs : List (List.Vector Bool (numFormulas bd.base)))
+    (paths : TaggedPathInput)
+    (v : Vertex) : List.Vector Bool (numFormulas bd.base) :=
+  match traceOutputsAtLevel (get_tagged_eval_trace grid initialVecs paths)
+      v.LEVEL with
+  | none => formulaVecZero bd.base
+  | some outputs => outputAtFormula bd.base outputs v.FORMULA
+
+def taggedGridFEnvFromPath
+    (bd : BranchingDLDS)
+    (grid : List (GridLayer (numFormulas bd.base)))
+    (initialVecs : List (List.Vector Bool (numFormulas bd.base)))
+    (paths : TaggedPathInput) :
+    Vertex → List.Vector Bool (numFormulas bd.base) :=
+  fun u => extract_tagged_grid_result_at_vertex bd grid initialVecs paths u
+
+def taggedGridFEnvFromReading
+    (bd : BranchingDLDS) (reading : ReadingInput) :
+    Vertex → List.Vector Bool (numFormulas bd.base) :=
+  let grid := buildTaggedGridFromDLDS bd.base
+  let initialVecs := initialVectorsFromDLDS bd.base
+  let paths := readingToTaggedPathFull bd reading
+  taggedGridFEnvFromPath bd grid initialVecs paths
+
+def BranchingDLDS.TaggedGridCompatibleForReading
+    (bd : BranchingDLDS) (reading : ReadingInput) : Prop :=
+  ∀ v ∈ bd.evalOrder,
+    taggedGridFEnvFromReading bd reading v =
+      classicalKernel bd reading (taggedGridFEnvFromReading bd reading) v
+
+def BranchingDLDS.TaggedGridCompatible (bd : BranchingDLDS) : Prop :=
+  ∀ reading, bd.TaggedGridCompatibleForReading reading
+
+theorem tagged_node_logic_equals_classicalKernel_for_reading
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (v : Vertex)
+    (hMem : v ∈ bd.evalOrder)
+    (hCompat : bd.TaggedGridCompatibleForReading reading) :
+    let grid := buildTaggedGridFromDLDS bd.base
+    let initialVecs := initialVectorsFromDLDS bd.base
+    let paths := readingToTaggedPathFull bd reading
+    let fenvFromGrid : Vertex → List.Vector Bool (numFormulas bd.base) :=
+      taggedGridFEnvFromPath bd grid initialVecs paths
+    fenvFromGrid v = classicalKernel bd reading fenvFromGrid v := by
+  simpa [BranchingDLDS.TaggedGridCompatibleForReading,
+    taggedGridFEnvFromReading, taggedGridFEnvFromPath] using
+    hCompat v hMem
+
+theorem tagged_node_logic_equals_classicalKernel_under_TaggedGridCompatible
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (v : Vertex)
+    (hMem : v ∈ bd.evalOrder)
+    (hCompat : bd.TaggedGridCompatible) :
+    let grid := buildTaggedGridFromDLDS bd.base
+    let initialVecs := initialVectorsFromDLDS bd.base
+    let paths := readingToTaggedPathFull bd reading
+    let fenvFromGrid : Vertex → List.Vector Bool (numFormulas bd.base) :=
+      taggedGridFEnvFromPath bd grid initialVecs paths
+    fenvFromGrid v = classicalKernel bd reading fenvFromGrid v := by
+  exact tagged_node_logic_equals_classicalKernel_for_reading
+    bd reading v hMem (hCompat reading)
+
 /-! ##### Structural compatibility, non-branching fragment
 
 This is the first structural approximation to `GridCompatible`. It is local
@@ -4982,6 +6440,328 @@ theorem elim_shape_routes_to_target_column
     · exact h_w_level
     · exact h_struct.unique_one_level_outgoing
 
+lemma readingTaggedPathFromVertex_routes_first
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (u v : Vertex) (tag steps : Nat)
+    (h_next : nextVertexAndTagForReading bd reading u = some (v, tag)) :
+    (readingTaggedPathFromVertex bd reading (some u) (steps + 1)).head? =
+      some ((buildFormulas bd.base).idxOf v.FORMULA + 1, tag) := by
+  simp [readingTaggedPathFromVertex, h_next]
+
+theorem nextVertexAndTagForReading_eq_some_of_incoming_source
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (u v : Vertex)
+    (h_nb : bd.IsNonBranching)
+    (h_source : u ∈ incomingSources bd.base v)
+    (h_level : u.LEVEL = v.LEVEL + 1)
+    (h_unique : bd.base.UniqueOneLevelOutgoing) :
+    nextVertexAndTagForReading bd reading u =
+      some (v, gridTagForSourceTarget bd u v) := by
+  unfold nextVertexAndTagForReading
+  rw [nextVertexForReading_eq_some_of_incoming_source bd reading u v
+    h_nb h_source h_level h_unique]
+
+theorem readingTaggedPathFromVertex_routes_first_of_incoming_source
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (u v : Vertex) (steps : Nat)
+    (h_nb : bd.IsNonBranching)
+    (h_source : u ∈ incomingSources bd.base v)
+    (h_level : u.LEVEL = v.LEVEL + 1)
+    (h_unique : bd.base.UniqueOneLevelOutgoing) :
+    (readingTaggedPathFromVertex bd reading (some u) (steps + 1)).head? =
+      some ((buildFormulas bd.base).idxOf v.FORMULA + 1,
+        gridTagForSourceTarget bd u v) := by
+  apply readingTaggedPathFromVertex_routes_first
+  exact nextVertexAndTagForReading_eq_some_of_incoming_source bd reading
+    u v h_nb h_source h_level h_unique
+
+theorem taggedElimPairMatches_of_elimSourcePairMatches
+    (v major minor : Vertex)
+    (h_pair : elimSourcePairMatches v major minor = true) :
+    taggedElimPairMatches v major minor = true := by
+  obtain ⟨A, h_major, h_minor, _h_major_level, _h_minor_level⟩ :=
+    elimSourcePairMatches_formula v major minor h_pair
+  unfold taggedElimPairMatches
+  rw [h_major, h_minor]
+  simp
+
+private theorem taggedElimPairMatches_formula
+    (v major minor : Vertex)
+    (h_pair : taggedElimPairMatches v major minor = true) :
+    major.FORMULA = Formula.impl minor.FORMULA v.FORMULA := by
+  unfold taggedElimPairMatches at h_pair
+  cases h_major : major.FORMULA with
+  | atom name =>
+      simp [h_major] at h_pair
+  | impl A B =>
+      simp [h_major] at h_pair
+      rcases h_pair with ⟨hB, hA⟩
+      subst hA
+      subst hB
+      rfl
+
+private def formulaSize : Formula → Nat
+  | .atom _ => 1
+  | .impl A B => formulaSize A + formulaSize B + 1
+
+private theorem taggedElimPairMatches_not_swapped
+    (v major minor : Vertex)
+    (h_pair : taggedElimPairMatches v major minor = true) :
+    taggedElimPairMatches v minor major = false := by
+  by_contra h_swap
+  have h_major :
+      major.FORMULA = Formula.impl minor.FORMULA v.FORMULA :=
+    taggedElimPairMatches_formula v major minor h_pair
+  have h_minor :
+      minor.FORMULA = Formula.impl major.FORMULA v.FORMULA :=
+    taggedElimPairMatches_formula v minor major
+      (Bool.eq_true_of_not_eq_false h_swap)
+  have h_size_major :
+      formulaSize major.FORMULA =
+        formulaSize minor.FORMULA + formulaSize v.FORMULA + 1 := by
+    rw [h_major]
+    simp [formulaSize]
+  have h_size_minor :
+      formulaSize minor.FORMULA =
+        formulaSize major.FORMULA + formulaSize v.FORMULA + 1 := by
+    rw [h_minor]
+    simp [formulaSize]
+  omega
+
+private theorem Formula.impl_ne_left :
+    ∀ A B, Formula.impl A B ≠ A
+  | .atom name, B => by
+      intro h
+      cases h
+  | .impl A₁ A₂, B => by
+      intro h
+      injection h with h₁ h₂
+      exact Formula.impl_ne_left A₁ A₂ h₁
+
+theorem source_vertices_distinct_of_elimSourcePairMatches
+    (v major minor : Vertex)
+    (h_pair : elimSourcePairMatches v major minor = true) :
+    major ≠ minor := by
+  intro h_eq
+  obtain ⟨A, h_major, h_minor, _h_major_level, _h_minor_level⟩ :=
+    elimSourcePairMatches_formula v major minor h_pair
+  have h_forms : major.FORMULA = minor.FORMULA := by
+    simpa [h_eq]
+  rw [h_major, h_minor] at h_forms
+  exact Formula.impl_ne_left A v.FORMULA h_forms
+
+theorem gridTagForSourceTarget_eq_repetition_of_repetition_shape
+    (bd : BranchingDLDS) (v : Vertex)
+    (h_rep : isRepetitionShapeForGrid bd v = true) :
+    ∃ u,
+      incomingSources bd.base v = [u] ∧
+      gridTagForSourceTarget bd u v = gridTagRepetition := by
+  obtain ⟨u, h_sources, _h_not_hyp, _h_no_branch, h_no_intro,
+    _h_formula, _h_level⟩ := repetition_shape_sources bd v h_rep
+  refine ⟨u, h_sources, ?_⟩
+  simp [gridTagForSourceTarget, h_sources, h_no_intro]
+
+theorem gridTagForSourceTarget_eq_intro_of_intro_shape
+    (bd : BranchingDLDS) (v : Vertex)
+    (h_intro_shape : isIntroShapeForGrid bd v = true) :
+    ∃ A B u h_vertex,
+      v.FORMULA = Formula.impl A B ∧
+      incomingSources bd.base v = [u] ∧
+      findIntroDischarge bd v = some h_vertex ∧
+      gridTagForSourceTarget bd u v = gridTagIntro := by
+  obtain ⟨A, B, u, h_vertex, h_formula, h_sources, h_discharge,
+    _h_not_hyp, _h_no_branch, _h_hyp, _h_h_formula, _h_u_formula,
+    _h_level⟩ := intro_shape_sources bd v h_intro_shape
+  refine ⟨A, B, u, h_vertex, h_formula, h_sources, h_discharge, ?_⟩
+  simp [gridTagForSourceTarget, h_sources, h_discharge]
+
+theorem gridTagForSourceTarget_eq_elim_major_of_pair
+    (bd : BranchingDLDS) (v u w : Vertex)
+    (h_sources : incomingSources bd.base v = [u, w])
+    (h_pair : elimSourcePairMatches v u w = true) :
+    gridTagForSourceTarget bd u v = gridTagElimMajor := by
+  have h_tag_pair : taggedElimPairMatches v u w = true :=
+    taggedElimPairMatches_of_elimSourcePairMatches v u w h_pair
+  simp [gridTagForSourceTarget, h_sources, h_tag_pair]
+
+theorem gridTagForSourceTarget_eq_elim_minor_of_pair
+    (bd : BranchingDLDS) (v u w : Vertex)
+    (h_sources : incomingSources bd.base v = [u, w])
+    (h_pair : elimSourcePairMatches v u w = true) :
+    gridTagForSourceTarget bd w v = gridTagElimMinor := by
+  have h_tag_pair : taggedElimPairMatches v u w = true :=
+    taggedElimPairMatches_of_elimSourcePairMatches v u w h_pair
+  have h_uw : u ≠ w :=
+    source_vertices_distinct_of_elimSourcePairMatches v u w h_pair
+  have h_wu : w ≠ u := fun h => h_uw h.symm
+  simp [gridTagForSourceTarget, h_sources, h_tag_pair, h_wu]
+
+theorem gridTagForSourceTarget_eq_elim_major_of_swapped_pair
+    (bd : BranchingDLDS) (v u w : Vertex)
+    (h_sources : incomingSources bd.base v = [u, w])
+    (h_pair : elimSourcePairMatches v w u = true) :
+    gridTagForSourceTarget bd w v = gridTagElimMajor := by
+  have h_tag_pair : taggedElimPairMatches v w u = true :=
+    taggedElimPairMatches_of_elimSourcePairMatches v w u h_pair
+  have h_no_forward : taggedElimPairMatches v u w = false :=
+    taggedElimPairMatches_not_swapped v w u h_tag_pair
+  simp [gridTagForSourceTarget, h_sources, h_tag_pair, h_no_forward]
+
+theorem gridTagForSourceTarget_eq_elim_minor_of_swapped_pair
+    (bd : BranchingDLDS) (v u w : Vertex)
+    (h_sources : incomingSources bd.base v = [u, w])
+    (h_pair : elimSourcePairMatches v w u = true) :
+    gridTagForSourceTarget bd u v = gridTagElimMinor := by
+  have h_tag_pair : taggedElimPairMatches v w u = true :=
+    taggedElimPairMatches_of_elimSourcePairMatches v w u h_pair
+  have h_no_forward : taggedElimPairMatches v u w = false :=
+    taggedElimPairMatches_not_swapped v w u h_tag_pair
+  have h_wu : w ≠ u :=
+    source_vertices_distinct_of_elimSourcePairMatches v w u h_pair
+  have h_uw : u ≠ w := fun h => h_wu h.symm
+  simp [gridTagForSourceTarget, h_sources, h_tag_pair, h_no_forward, h_uw]
+
+theorem repetition_shape_routes_to_tagged_target
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (v : Vertex) (steps : Nat)
+    (h_struct : bd.StructuralGridCompatibleNonBranching)
+    (h_rep : isRepetitionShapeForGrid bd v = true) :
+    ∃ u,
+      incomingSources bd.base v = [u] ∧
+      (readingTaggedPathFromVertex bd reading (some u) (steps + 1)).head? =
+        some ((buildFormulas bd.base).idxOf v.FORMULA + 1,
+          gridTagRepetition) := by
+  obtain ⟨u, h_sources, _h_not_hyp, _h_no_branch, h_no_intro,
+    _h_formula, h_level⟩ := repetition_shape_sources bd v h_rep
+  have h_route :=
+    readingTaggedPathFromVertex_routes_first_of_incoming_source bd reading
+      u v steps h_struct.nonbranching (by simp [h_sources]) h_level
+      h_struct.unique_one_level_outgoing
+  have h_tag :
+      gridTagForSourceTarget bd u v = gridTagRepetition := by
+    simp [gridTagForSourceTarget, h_sources, h_no_intro]
+  refine ⟨u, h_sources, ?_⟩
+  simpa [h_tag] using h_route
+
+theorem intro_shape_routes_to_tagged_target
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (v : Vertex) (steps : Nat)
+    (h_struct : bd.StructuralGridCompatibleNonBranching)
+    (h_intro_shape : isIntroShapeForGrid bd v = true) :
+    ∃ A B u h_vertex,
+      v.FORMULA = Formula.impl A B ∧
+      incomingSources bd.base v = [u] ∧
+      findIntroDischarge bd v = some h_vertex ∧
+      (readingTaggedPathFromVertex bd reading (some u) (steps + 1)).head? =
+        some ((buildFormulas bd.base).idxOf v.FORMULA + 1,
+          gridTagIntro) := by
+  obtain ⟨A, B, u, h_vertex, h_formula, h_sources, h_discharge,
+    _h_not_hyp, _h_no_branch, _h_hyp, _h_h_formula, _h_u_formula,
+    h_level⟩ := intro_shape_sources bd v h_intro_shape
+  have h_route :=
+    readingTaggedPathFromVertex_routes_first_of_incoming_source bd reading
+      u v steps h_struct.nonbranching (by simp [h_sources]) h_level
+      h_struct.unique_one_level_outgoing
+  have h_tag :
+      gridTagForSourceTarget bd u v = gridTagIntro := by
+    simp [gridTagForSourceTarget, h_sources, h_discharge]
+  refine ⟨A, B, u, h_vertex, h_formula, h_sources, h_discharge, ?_⟩
+  simpa [h_tag] using h_route
+
+theorem elim_pair_routes_to_tagged_target
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (v u w : Vertex) (steps : Nat)
+    (h_struct : bd.StructuralGridCompatibleNonBranching)
+    (h_sources : incomingSources bd.base v = [u, w])
+    (h_pair : elimSourcePairMatches v u w = true) :
+    (readingTaggedPathFromVertex bd reading (some u) (steps + 1)).head? =
+      some ((buildFormulas bd.base).idxOf v.FORMULA + 1,
+        gridTagElimMajor) ∧
+    (readingTaggedPathFromVertex bd reading (some w) (steps + 1)).head? =
+      some ((buildFormulas bd.base).idxOf v.FORMULA + 1,
+        gridTagElimMinor) := by
+  obtain ⟨A, _h_major, _h_minor, h_u_level, h_w_level⟩ :=
+    elimSourcePairMatches_formula v u w h_pair
+  have h_u_route :=
+    readingTaggedPathFromVertex_routes_first_of_incoming_source bd reading
+      u v steps h_struct.nonbranching (by simp [h_sources]) h_u_level
+      h_struct.unique_one_level_outgoing
+  have h_w_route :=
+    readingTaggedPathFromVertex_routes_first_of_incoming_source bd reading
+      w v steps h_struct.nonbranching (by simp [h_sources]) h_w_level
+      h_struct.unique_one_level_outgoing
+  have h_u_tag := gridTagForSourceTarget_eq_elim_major_of_pair
+    bd v u w h_sources h_pair
+  have h_w_tag := gridTagForSourceTarget_eq_elim_minor_of_pair
+    bd v u w h_sources h_pair
+  constructor
+  · simpa [h_u_tag] using h_u_route
+  · simpa [h_w_tag] using h_w_route
+
+theorem elim_swapped_pair_routes_to_tagged_target
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (v u w : Vertex) (steps : Nat)
+    (h_struct : bd.StructuralGridCompatibleNonBranching)
+    (h_sources : incomingSources bd.base v = [u, w])
+    (h_pair : elimSourcePairMatches v w u = true) :
+    (readingTaggedPathFromVertex bd reading (some w) (steps + 1)).head? =
+      some ((buildFormulas bd.base).idxOf v.FORMULA + 1,
+        gridTagElimMajor) ∧
+    (readingTaggedPathFromVertex bd reading (some u) (steps + 1)).head? =
+      some ((buildFormulas bd.base).idxOf v.FORMULA + 1,
+        gridTagElimMinor) := by
+  obtain ⟨A, _h_major, _h_minor, h_w_level, h_u_level⟩ :=
+    elimSourcePairMatches_formula v w u h_pair
+  have h_w_route :=
+    readingTaggedPathFromVertex_routes_first_of_incoming_source bd reading
+      w v steps h_struct.nonbranching (by simp [h_sources]) h_w_level
+      h_struct.unique_one_level_outgoing
+  have h_u_route :=
+    readingTaggedPathFromVertex_routes_first_of_incoming_source bd reading
+      u v steps h_struct.nonbranching (by simp [h_sources]) h_u_level
+      h_struct.unique_one_level_outgoing
+  have h_w_tag := gridTagForSourceTarget_eq_elim_major_of_swapped_pair
+    bd v u w h_sources h_pair
+  have h_u_tag := gridTagForSourceTarget_eq_elim_minor_of_swapped_pair
+    bd v u w h_sources h_pair
+  constructor
+  · simpa [h_w_tag] using h_w_route
+  · simpa [h_u_tag] using h_u_route
+
+theorem elim_shape_routes_to_tagged_target
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (v : Vertex) (steps : Nat)
+    (h_struct : bd.StructuralGridCompatibleNonBranching)
+    (h_elim : isElimShapeForGrid bd v = true) :
+    ∃ u w,
+      incomingSources bd.base v = [u, w] ∧
+      ((elimSourcePairMatches v u w = true ∧
+        (readingTaggedPathFromVertex bd reading (some u) (steps + 1)).head? =
+          some ((buildFormulas bd.base).idxOf v.FORMULA + 1,
+            gridTagElimMajor) ∧
+        (readingTaggedPathFromVertex bd reading (some w) (steps + 1)).head? =
+          some ((buildFormulas bd.base).idxOf v.FORMULA + 1,
+            gridTagElimMinor)) ∨
+       (elimSourcePairMatches v w u = true ∧
+        (readingTaggedPathFromVertex bd reading (some w) (steps + 1)).head? =
+          some ((buildFormulas bd.base).idxOf v.FORMULA + 1,
+            gridTagElimMajor) ∧
+        (readingTaggedPathFromVertex bd reading (some u) (steps + 1)).head? =
+          some ((buildFormulas bd.base).idxOf v.FORMULA + 1,
+            gridTagElimMinor))) := by
+  obtain ⟨u, w, h_sources, _h_not_hyp, _h_no_branch, _h_no_intro, h_pair⟩ :=
+    elim_shape_sources bd v h_elim
+  refine ⟨u, w, h_sources, ?_⟩
+  cases h_pair with
+  | inl hp =>
+      have h_routes := elim_pair_routes_to_tagged_target
+        bd reading v u w steps h_struct h_sources hp
+      exact Or.inl ⟨hp, h_routes.1, h_routes.2⟩
+  | inr hp =>
+      have h_routes := elim_swapped_pair_routes_to_tagged_target
+        bd reading v u w steps h_struct h_sources hp
+      exact Or.inr ⟨hp, h_routes.1, h_routes.2⟩
+
 lemma Vector.zipWith_or_comm {n : Nat}
     (u v : List.Vector Bool n) :
     u.zipWith (· || ·) v = v.zipWith (· || ·) u := by
@@ -5189,6 +6969,26 @@ theorem elim_overlap_not_GridCompatibleForReading :
     simp [bd]
   exact elim_overlap_grid_not_classicalKernel (h vTarget hv)
 
+theorem elim_overlap_taggedGrid_no_error :
+    (get_tagged_eval_result (buildTaggedGridFromDLDS bd.base)
+      (initialVectorsFromDLDS bd.base) (readingToTaggedPathFull bd [])).snd =
+        false := by
+  native_decide
+
+theorem elim_overlap_taggedGrid_equals_classicalKernel :
+    taggedGridFEnvFromReading bd [] vTarget =
+      classicalKernel bd [] (taggedGridFEnvFromReading bd []) vTarget := by
+  native_decide
+
+theorem elim_overlap_TaggedGridCompatibleForReading :
+    bd.TaggedGridCompatibleForReading [] := by
+  intro v hv
+  simp [bd] at hv
+  rcases hv with rfl | rfl | rfl
+  · native_decide
+  · native_decide
+  · native_decide
+
 private lemma vMajor_mem_pre_of_target_split
     (pre post : List Vertex)
     (h : bd.evalOrder = pre ++ vTarget :: post) :
@@ -5252,11 +7052,11 @@ theorem elim_overlap_is_StructuralGridCompatibleNonBranching :
     · rcases he₂ with rfl | rfl
       · rfl
       · have : False := by
-          simpa [eMajor, eMinor, vMajor, vMinor] using h_start
+          simp [eMajor, eMinor, vMajor, vMinor] at h_start
         exact False.elim this
     · rcases he₂ with rfl | rfl
       · have : False := by
-          simpa [eMajor, eMinor, vMajor, vMinor] using h_start
+          simp [eMajor, eMinor, vMajor, vMinor] at h_start
         exact False.elim this
       · rfl
 
@@ -5267,6 +7067,16 @@ theorem structuralGridCompatibleNonBranching_not_sufficient :
   intro h
   exact elim_overlap_not_GridCompatibleForReading
     (h bd [] elim_overlap_is_StructuralGridCompatibleNonBranching)
+
+theorem taggedGrid_strictly_improves_formulaGrid :
+    ∃ bd : BranchingDLDS,
+      bd.StructuralGridCompatibleNonBranching ∧
+      bd.TaggedGridCompatibleForReading [] ∧
+      ¬ bd.GridCompatibleForReading [] := by
+  exact ⟨bd,
+    elim_overlap_is_StructuralGridCompatibleNonBranching,
+    elim_overlap_TaggedGridCompatibleForReading,
+    elim_overlap_not_GridCompatibleForReading⟩
 
 end GridBridgeElimOverlapCounterexample
 
