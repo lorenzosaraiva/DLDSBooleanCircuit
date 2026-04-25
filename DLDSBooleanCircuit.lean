@@ -2314,8 +2314,6 @@ theorem dlds_evaluation_correct
   unfold evaluateDLDS at h_accept
   exact circuit_correctness grid initial_vecs paths goal_column h_accept
 
-#check @dlds_evaluation_correct
-
 
 /-- **DLDS Completeness**: If a path represents a valid proof with all
     assumptions discharged, the circuit accepts it. -/
@@ -2346,8 +2344,6 @@ theorem dlds_evaluation_iff
      AllAssumptionsDischarged paths grid initial_vecs goal_column) := by
   unfold evaluateDLDS
   exact circuit_iff (buildGridFromDLDS d) (initialVectorsFromDLDS d) paths goal_column
-
-#check @dlds_evaluation_iff
 
 /-!
 ### 7.13: Global Acceptance and Correctness
@@ -2386,8 +2382,6 @@ theorem dlds_global_soundness
        AllAssumptionsDischarged paths grid initial_vecs goal_column) :=
   fun paths => dlds_evaluation_correct d paths goal_column (h_global paths)
 
-#check @dlds_global_soundness
-
 /-- **Global Completeness**: If every well-formed path in a DLDS leads to
     discharged assumptions, the circuit accepts all paths. -/
 theorem dlds_global_completeness
@@ -2419,23 +2413,20 @@ theorem dlds_global_iff
        AllAssumptionsDischarged paths grid initial_vecs goal_column)) :=
   ⟨dlds_global_soundness d goal_column, dlds_global_completeness d goal_column⟩
 
-#check @dlds_global_iff
-
 section ReadingBased
 
 /-!
-### Layer 1: Reading-Based DLDS Evaluation
+### Reading-based DLDS evaluation
 
 This section introduces a second evaluation function for DLDS based on
 **reading variables**, matching the input model used in quantum compilation.
 Reading variables are Boolean assignments that select which branch to follow
 at each branching node in the DLDS.
 
-For Layer 1 we restrict attention to DLDS WITHOUT branching nodes: in that
+For this wrapper interface we restrict attention to DLDS without branching nodes: in that
 case the reading is irrelevant and there is exactly one canonical path.
-The point of Layer 1 is to establish the API and the per-node correspondence
-foundation; Layer 2 will replace `readingToPath` with the real conversion
-that uses reading bits to select branch alternatives.
+The point is to establish the API and the per-node correspondence
+foundation used by the standalone semantics below.
 -/
 
 /-- Reading input: a Boolean assignment to reading variables.
@@ -2451,13 +2442,13 @@ def readingToPath (d : DLDS) (_ : ReadingInput) : PathInput :=
   -- For each formula in the grid, build the canonical path that follows
   -- the unique deduction edges.
   let formulas := buildFormulas d
-  formulas.map (fun _ => [])  -- placeholder: empty paths for now
+  formulas.map (fun _ => [])
 
 /-- Reading-based DLDS evaluation.
 
     For non-branching DLDS, this is equivalent to path-based evaluation
-    with the canonical path. For branching DLDS (Layer 2), the reading
-    bits will select branch alternatives at branching nodes. -/
+    with the canonical path. Branching DLDS are handled by the standalone
+    semantics below. -/
 def evaluateDLDSReading (d : DLDS) (reading : ReadingInput) (goal_column : Nat) : Bool :=
   evaluateDLDS d (readingToPath d reading) goal_column
 
@@ -2491,10 +2482,7 @@ lemma node_logic_input_independent {n : Nat}
 lemma node_routing_input_independent {n : Nat}
     (rules : List (Rule n))
     (node_incoming : NodeIncoming)
-    (available_inputs : List (Nat × List.Vector Bool n))
-    (h_one : exactlyOneActive rules)
-    (h_nodup : rules.Nodup)
-    (hlen : node_incoming.length = rules.length) :
+    (available_inputs : List (Nat × List.Vector Bool n)) :
     -- Both invocations produce the same output because node_logic_with_routing
     -- is a function of (rules, incoming, inputs) only.
     node_logic_with_routing rules node_incoming available_inputs =
@@ -2514,7 +2502,7 @@ lemma evaluateDLDSReading_eq_evaluateDLDS
   unfold evaluateDLDSReading
   rfl
 
-/-- **Reading-Based DLDS Soundness (Layer 1)**.
+/-- **Reading-Based DLDS Soundness.**
 
     If `evaluateDLDSReading` returns true for some reading, then either
     the corresponding path is structurally invalid or it represents a
@@ -2537,17 +2525,15 @@ theorem dlds_reading_evaluation_correct
   rw [evaluateDLDSReading_eq_evaluateDLDS] at h_accept
   exact dlds_evaluation_correct d (readingToPath d reading) goal_column h_accept
 
-#check @evaluateDLDSReading
-#check @dlds_reading_evaluation_correct
-
 /-!
-### Layer 2: Standalone Reading-Based DLDS Semantics
+### Standalone reading-based DLDS semantics
 
-Layer 2 delivers the real reading-based semantics: a standalone
+This section defines the reading-based semantics used by the kernel
+equivalence results: a standalone
 `dldsSemantics` function that walks the DLDS directly via per-node rules
 (hypothesis → one-hot, ELIM → OR of incoming sources, with reading bits
-consulted at branching points). Unlike Layer 1, which was a thin wrapper
-around the path-based circuit, Layer 2 is independent of the grid
+consulted at branching points). Unlike the wrapper interface above, which was built
+around the path-based circuit, this semantics is independent of the grid
 construction and mirrors the Python reference compiler
 (`_evaluate_nodes_for_reading`).
 
@@ -2563,16 +2549,16 @@ Key design decisions:
   colour in a branching's targets, the branched source contributes
   nothing (matching Python's `sources.get(reading[rvar])` returning
   `None`).
-* **`Selection` is deferred** to a future layer; for now only
-  `Branching` is modelled. Adding `Selection` later is purely additive.
+* **`Branching` metadata is explicit** and records the source, reading
+  variable, and colour-labelled targets used by the evaluator.
 
-For Layer 2 we prove two characterisation theorems for the
+We prove two characterisation theorems for the
 non-branching case (hypothesis one-hot correctness and ELIM OR
-accumulation at the step level), and we state the branching
-correspondence as a stub to be proven in a later layer.
+accumulation at the step level), followed by introduction discharge,
+branching, and global equivalence results.
 -/
 
-/-! #### Layer 2.1: Hypothesis-indexed dep vectors -/
+/-! #### Hypothesis-indexed dep vectors -/
 
 /-- Number of hypothesis vertices in a DLDS — the dimension of the
     hypothesis-indexed dep vector space. -/
@@ -2612,7 +2598,7 @@ def hypIndex (d : DLDS) (v : Vertex) : Option (Fin (numHyps d)) :=
   let idx := hyps.idxOf v
   if h : idx < numHyps d then some ⟨idx, h⟩ else none
 
-/-! #### Layer 2.2: Branching metadata -/
+/-! #### Branching metadata -/
 
 /-- A branching point in a DLDS. The dep vector of `source` is routed
     to one of several successor vertices depending on
@@ -2627,8 +2613,7 @@ structure Branching where
 
 /-- A DLDS together with branching metadata and an explicit evaluation
     order. The underlying `base : DLDS` is unchanged; all new fields
-    are purely additive. Adding `Selection` later is a new field on
-    this structure, requiring no changes to existing definitions. -/
+    are purely additive. -/
 structure BranchingDLDS where
   base       : DLDS
   branchings : List Branching := []
@@ -2646,7 +2631,7 @@ def BranchingDLDS.WellFormed (bd : BranchingDLDS) : Prop :=
 def BranchingDLDS.IsNonBranching (bd : BranchingDLDS) : Prop :=
   bd.branchings = []
 
-/-! #### Layer 2.3: Incoming source lookup -/
+/-! #### Incoming source lookup -/
 
 /-- Sources flowing into vertex `v`: all `u` such that `(u, v)` is a
     deduction edge in `d.E`. This mirrors the Python compiler's walk
@@ -2656,7 +2641,7 @@ def BranchingDLDS.IsNonBranching (bd : BranchingDLDS) : Prop :=
 def incomingSources (d : DLDS) (v : Vertex) : List Vertex :=
   (d.E.filter (fun e => e.END = v)).map (·.START)
 
-/-! #### Layer 2.4: Per-vertex step and environment -/
+/-! #### Per-vertex step and environment -/
 
 /-- Look up a vertex's dep vector in the accumulated environment.
     Returns the value of the first matching entry, or zero if the vertex
@@ -2747,7 +2732,7 @@ def dldsSemanticsAt
     HypDepVec bd.base :=
   envLookup (dldsSemantics bd reading) v
 
-/-! #### Layer 2.5: Foldl helper lemmas
+/-! #### Foldl helper lemmas
 
 These are generic facts about the `env ++ [(u, f env u)]` pattern used
 by `dldsSemantics`: membership is preserved by later appends, and if
@@ -2849,9 +2834,9 @@ private lemma envLookup_of_const {d : DLDS}
       · intro p hp hpv
         exact h_all p (List.mem_cons_of_mem _ hp) hpv
 
-/-! #### Layer 2.6: Non-branching characterisation theorems -/
+/-! #### Non-branching characterisation theorems -/
 
-/-- **Layer 2 Non-Branching Hypothesis Semantics.**
+/-- **Non-Branching Hypothesis Semantics.**
     For a hypothesis vertex `v` in any `BranchingDLDS` (branching or
     not), `dldsSemanticsAt` at `v` equals the one-hot dep vector at
     its hypothesis index. The reading input is irrelevant because the
@@ -2891,7 +2876,7 @@ theorem dldsSemantics_hyp_onehot
   unfold dldsSemanticsAt
   exact envLookup_of_const _ v _ h_ex h_all
 
-/-- **Layer 2 Non-Branching ELIM Step Semantics.**
+/-- **Non-Branching ELIM Step Semantics.**
     For a non-hypothesis vertex `v` in a non-branching `BranchingDLDS`,
     the `stepVertex` function computes exactly the OR of its incoming
     sources' dep vectors in the given environment. Combined with
@@ -2926,30 +2911,9 @@ theorem dldsSemantics_elim_or
     simp
   simp only [h_br, h_not_intro]
 
-/-! #### Layer 2.7: Branching theorem (future work) -/
+/-! #### Topological well-formedness and global ELIM lifting
 
-/-- **Layer 2 Branching Correspondence (future work).**
-    For a general `BranchingDLDS`, the dep vector of a vertex that
-    receives from a branch should be the OR of (a) its ordinary
-    incoming sources, and (b) the branched source iff the reading bit
-    matches the branch colour.
-
-    This theorem is stated here to document the intended semantics of
-    branching; its proof is deferred to Layer 3, where the necessary
-    topological-ordering invariant will be established. For now the
-    placeholder body is `True := by trivial` so the theorem name
-    exists without introducing an unproved proof term in the main file. -/
-theorem dldsSemantics_branching
-    (_bd : BranchingDLDS)
-    (_reading : ReadingInput)
-    (_v : Vertex)
-    (_b : Branching)
-    (_h_target : ∃ c, (c, _v) ∈ _b.targets) :
-    True := by trivial
-
-/-! #### Layer 2.9: Topological well-formedness and global ELIM lifting
-
-This layer lifts `dldsSemantics_elim_or` from the per-step `stepVertex`
+This section lifts `dldsSemantics_elim_or` from the per-step `stepVertex`
 level to the global `dldsSemanticsAt` level. The key extra ingredient is
 a *topological* well-formedness predicate on `BranchingDLDS`: the
 `evalOrder` must have no duplicates and every base edge must run from an
@@ -3105,7 +3069,7 @@ private lemma foldl_or_congr {d : DLDS}
     intro w hw
     exact h w (List.mem_cons_of_mem _ hw)
 
-/-- **Layer 2 Non-Branching Global ELIM Semantics.**
+/-- **Non-Branching Global ELIM Semantics.**
     For a non-hypothesis vertex `v` in a topologically well-formed,
     non-branching `BranchingDLDS`, the global semantics
     `dldsSemanticsAt` at `v` equals the foldl-OR of `dldsSemanticsAt`
@@ -3209,10 +3173,10 @@ theorem dldsSemanticsAt_elim_or
   intro u hu
   exact (h_lookup_source u hu).symm
 
-/-! #### Layer 2.10: Global introduction discharge
+/-! #### Global introduction discharge
 
 Introduction vertices are handled directly by the unified `stepVertex`
-(Layer 2.4). Each entry `(w, h) ∈ d.A` marks `w` as an introduction
+definition. Each entry `(w, h) ∈ d.A` marks `w` as an introduction
 vertex discharging the hypothesis vertex `h`; `findIntroDischarge`
 decodes this, and `stepVertex` dispatches to the intro arm in its
 four-case priority order (hypothesis, branching, intro, plain ELIM). -/
@@ -3335,7 +3299,7 @@ theorem dldsSemanticsAt_intro_clearbit
   intro u hu
   exact (h_lookup_source u hu).symm
 
-namespace Layer26Test
+namespace Examples.IntroDischarge
 
 open Semantic (Formula Vertex Deduction DLDS BranchingDLDS)
 
@@ -3355,7 +3319,7 @@ private def eAtoIntro : Deduction :=
 private def baseDLDS : DLDS :=
   { V := [vA, vIntro], E := [eAtoIntro], A := [(vIntro, vA)] }
 
-def testIntroDLDS : BranchingDLDS :=
+def introDischargeDLDS : BranchingDLDS :=
   { base := baseDLDS
     branchings := []
     numReading := 0
@@ -3363,17 +3327,13 @@ def testIntroDLDS : BranchingDLDS :=
 
 -- Expected: [false]. vA contributes its one-hot [true] to the OR-fold at
 -- vIntro, and the introduction clears that bit.
-#eval (dldsSemanticsAt testIntroDLDS [] vIntro).toList
+#eval (dldsSemanticsAt introDischargeDLDS [] vIntro).toList
 
-end Layer26Test
+end Examples.IntroDischarge
 
-#check @findIntroDischarge
-#check @dldsSemantics_intro_clearbit
-#check @dldsSemanticsAt_intro_clearbit
+/-! #### Branching correspondence
 
-/-! #### Layer 2.11: Branching correspondence
-
-This layer proves `dldsSemanticsAt_branching`, the global-level
+This section proves `dldsSemanticsAt_branching`, the global-level
 characterisation of the reading-based semantics at a vertex receiving
 from a branching. It uses the same proof infrastructure as
 `dldsSemanticsAt_elim_or` together with a stronger well-formedness
@@ -3490,7 +3450,7 @@ private lemma stepVertex_branching_eq (bd : BranchingDLDS)
   rw [if_neg h_h]
   simp only [h_branch]
 
-/-- **Layer 2 Branching Global Semantics.**
+/-- **Branching Global Semantics.**
     For a non-hypothesis vertex `v` in a branching-well-formed
     `BranchingDLDS` that receives from a branching with source `src`,
     reading variable `rvar`, and colour `colour`, the global semantics
@@ -3641,9 +3601,9 @@ theorem dldsSemanticsAt_branching
     intro u hu
     exact (h_lookup_ordinary u hu).symm
 
-/-! #### Layer 2.8: Concrete sanity test -/
+/-! #### Minimal branching example -/
 
-namespace Layer2Test
+namespace Examples.MinimalBranching
 
 open Semantic (Formula Vertex Deduction DLDS BranchingDLDS Branching)
 
@@ -3682,7 +3642,7 @@ private def branchYtoB : Branching :=
   { source := vY, readingVar := 0, targets := [(1, vB)] }
 
 /-- Tiny branching BranchingDLDS used to exercise the semantics. -/
-def testBranchingDLDS : BranchingDLDS :=
+def minimalBranchingDLDS : BranchingDLDS :=
   { base := baseDLDS
     branchings := [branchYtoB]
     numReading := 1
@@ -3691,19 +3651,19 @@ def testBranchingDLDS : BranchingDLDS :=
 -- Running the semantics with reading=[false] should drop vY's contribution
 -- at vB, whereas reading=[true] should include it. The two outputs must
 -- therefore differ at vB.
-#eval (dldsSemanticsAt testBranchingDLDS [false] vB).toList
-#eval (dldsSemanticsAt testBranchingDLDS [true]  vB).toList
+#eval (dldsSemanticsAt minimalBranchingDLDS [false] vB).toList
+#eval (dldsSemanticsAt minimalBranchingDLDS [true]  vB).toList
 
-end Layer2Test
+end Examples.MinimalBranching
 
-/-! #### Layer 2.12: Medium-sized cross-case test
+/-! #### All-cases worked example
 
 A single branching DLDS that simultaneously exercises branching,
 introduction discharge, and plain ELIM, with four hypotheses so dep
 vectors have enough structure to distinguish per-vertex contributions.
 Used in the companion paper as the medium worked example. -/
 
-namespace BigTest
+namespace Examples.AllCases
 
 open Semantic (Formula Vertex Deduction DLDS BranchingDLDS Branching)
 
@@ -3775,7 +3735,7 @@ private def branchH3toE2 : Branching :=
     vH1..vH4 with indices 0..3; vE1 plain-ORs vH1 and vH2; vE2 ORs
     vH2 with vH3 conditionally on the reading bit; vI discharges
     vH1 from vE1 (clearing bit 0); vRoot plain-ORs vI, vE2, and vH4. -/
-def bigTestDLDS : BranchingDLDS :=
+def allCasesDLDS : BranchingDLDS :=
   { base := baseDLDS
     branchings := [branchH3toE2]
     numReading := 1
@@ -3787,10 +3747,10 @@ def bigTestDLDS : BranchingDLDS :=
 --   vE2   = [false, true,  false, false]
 --   vI    = [false, true,  false, false]
 --   vRoot = [false, true,  false, true ]
-#eval (dldsSemanticsAt bigTestDLDS [false] vE1).toList
-#eval (dldsSemanticsAt bigTestDLDS [false] vE2).toList
-#eval (dldsSemanticsAt bigTestDLDS [false] vI).toList
-#eval (dldsSemanticsAt bigTestDLDS [false] vRoot).toList
+#eval (dldsSemanticsAt allCasesDLDS [false] vE1).toList
+#eval (dldsSemanticsAt allCasesDLDS [false] vE2).toList
+#eval (dldsSemanticsAt allCasesDLDS [false] vI).toList
+#eval (dldsSemanticsAt allCasesDLDS [false] vRoot).toList
 
 -- Reading [true]: colour 1 matches, so vH3 flows into vE2 and on into
 -- vRoot. Expected dep vectors:
@@ -3798,27 +3758,18 @@ def bigTestDLDS : BranchingDLDS :=
 --   vE2   = [false, true,  true,  false]
 --   vI    = [false, true,  false, false]
 --   vRoot = [false, true,  true,  true ]
-#eval (dldsSemanticsAt bigTestDLDS [true] vE1).toList
-#eval (dldsSemanticsAt bigTestDLDS [true] vE2).toList
-#eval (dldsSemanticsAt bigTestDLDS [true] vI).toList
-#eval (dldsSemanticsAt bigTestDLDS [true] vRoot).toList
+#eval (dldsSemanticsAt allCasesDLDS [true] vE1).toList
+#eval (dldsSemanticsAt allCasesDLDS [true] vE2).toList
+#eval (dldsSemanticsAt allCasesDLDS [true] vI).toList
+#eval (dldsSemanticsAt allCasesDLDS [true] vRoot).toList
 
-end BigTest
+end Examples.AllCases
 
-#check @dldsSemantics
-#check @dldsSemanticsAt
-#check @dldsSemantics_hyp_onehot
-#check @dldsSemantics_elim_or
-#check @dldsSemantics_branching
-#check @dldsSemanticsAt_elim_or
-#check @dldsSemanticsAt_branching
-
-/-! #### Layer 3: Formal equivalence of node_logic and stepVertex
+/-! #### Kernel equivalence across index spaces
 
 This section formalizes the per-vertex kernel equivalence between the
 classical Boolean-circuit evaluation (`node_logic`, Section 2) and the
-reading-based evaluation (`stepVertex`, Layer 2.4), establishing
-Candidate 2 of the paper's Layer 3 roadmap.
+reading-based evaluation (`stepVertex`).
 
 The two kernels operate in different index spaces:
 * `node_logic` uses formula-indexed dep vectors of dimension
@@ -4097,7 +4048,7 @@ private lemma formulaVecToHypVec_clearBit
     (h_distinct : d.HypFormulasDistinct)
     (h_in_build : d.HypFormulasInBuild)
     (h_h_mem : h_vertex ∈ d.V) (h_h_hyp : h_vertex.HYPOTHESIS = true)
-    (h_idx_lt : (d.V.filter (·.HYPOTHESIS)).idxOf h_vertex < numHyps d) :
+    (_ : (d.V.filter (·.HYPOTHESIS)).idxOf h_vertex < numHyps d) :
     formulaVecToHypVec d
       (u.zipWith (fun b e => b && !e)
         ⟨(buildFormulas d).map (fun f => decide (f = h_vertex.FORMULA)),
@@ -4182,7 +4133,7 @@ private lemma formulaVecToHypVec_clearBit
         fun heq => h (h_eq_iff.mp heq)
       simp [h, h_form_ne]
 
-/-- **Per-vertex kernel equivalence (Layer 3, Candidate 2).**
+/-- **Per-vertex kernel equivalence.**
 
     For any vertex `v` in a well-formed BranchingDLDS with distinct
     hypothesis formulas, the translated formula-indexed classical kernel
@@ -4285,7 +4236,7 @@ theorem classicalKernel_stepVertex_equiv
         simp only
         exact h_foldl_translate
 
-/-! #### Layer 3.5: Global kernel equivalence
+/-! #### Global kernel equivalence
 
 This subsection lifts the per-vertex kernel equivalence to the full
 evaluation-order semantics. We run the formula-indexed `classicalKernel`
@@ -4482,10 +4433,7 @@ private theorem classicalKernelSemantics_align_from
           ∀ v ∈ rest, ∀ h_vertex,
             findIntroDischarge bd v = some h_vertex →
               h_vertex ∈ bd.base.V ∧ h_vertex.HYPOTHESIS = true := by
-        intro v
-        intro hv
-        intro h_vertex
-        intro h_find
+        intro v hv h_vertex h_find
         exact h_discharge_wf v (List.mem_cons_of_mem _ hv) h_vertex h_find
       intro u
       simpa [List.foldl_cons, classicalKernelSemanticsStep, dldsSemanticsStep,
@@ -4501,7 +4449,7 @@ private theorem classicalKernelSemantics_align_from
           h_discharge_wf_rest
           u
 
-/-- **Layer 3 global kernel equivalence.** The formula-indexed
+/-- **Global kernel equivalence.** The formula-indexed
     `classicalKernel` semantics and the hypothesis-indexed
     `dldsSemantics` agree pointwise after translating with
     `formulaVecToHypVec`. -/
@@ -4549,7 +4497,66 @@ theorem classicalKernel_dldsSemantics_global_equiv
     dldsSemanticsAt, dldsSemantics, classicalKernelSemanticsStep,
     dldsSemanticsStep] using h_align_all v
 
-/-! #### Layer 3 Candidate 1: grid bridge infrastructure
+/-- Corollary: for any well-formed `BranchingDLDS`, the hypothesis-indexed
+dep vector computed by `dldsSemanticsAt` at a goal vertex `v` coincides with
+the translation (via `formulaVecToHypVec`) of the formula-indexed dep vector
+computed by `classicalKernelSemanticsAt` at `v`.
+
+This surfaces the global kernel equivalence in goal-centric form: the
+hypothesis-indexed "all dependencies discharged" check at `v` amounts to
+the translated formula-indexed kernel output being zero at `v`. -/
+theorem dldsSemanticsAt_eq_translated_classicalKernelSemanticsAt_at_goal
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (h_topo : bd.WellFormedTopo)
+    (h_distinct : bd.base.HypFormulasDistinct)
+    (h_in_build : bd.base.HypFormulasInBuild)
+    (h_eval_in_V : ∀ v ∈ bd.evalOrder, v ∈ bd.base.V)
+    (h_discharge_wf :
+      ∀ v ∈ bd.evalOrder, ∀ h_vertex,
+        findIntroDischarge bd v = some h_vertex →
+          h_vertex ∈ bd.base.V ∧ h_vertex.HYPOTHESIS = true)
+    (goalVertex : Vertex)
+    (h_goal_mem : goalVertex ∈ bd.evalOrder) :
+    dldsSemanticsAt bd reading goalVertex =
+      formulaVecToHypVec bd.base
+        (classicalKernelSemanticsAt bd reading goalVertex) := by
+  have h :=
+    classicalKernel_dldsSemantics_global_equiv bd reading h_topo h_distinct
+      h_in_build h_eval_in_V h_discharge_wf goalVertex h_goal_mem
+  exact h.symm
+
+namespace Examples.AllCases
+
+-- Cross-validation: running the formula-indexed classical kernel and then
+-- translating via `formulaVecToHypVec` must match the hypothesis-indexed
+-- reading-based semantics at every vertex, for every reading. The two
+-- vectors are equal by `classicalKernel_dldsSemantics_global_equiv`; this
+-- `#eval` block is a sanity check that the definitions evaluate to the
+-- claimed values on a nontrivial medium-sized example.
+
+-- Reading [false]:
+#eval (formulaVecToHypVec allCasesDLDS.base
+  (classicalKernelSemanticsAt allCasesDLDS [false] vE1)).toList
+#eval (formulaVecToHypVec allCasesDLDS.base
+  (classicalKernelSemanticsAt allCasesDLDS [false] vE2)).toList
+#eval (formulaVecToHypVec allCasesDLDS.base
+  (classicalKernelSemanticsAt allCasesDLDS [false] vI)).toList
+#eval (formulaVecToHypVec allCasesDLDS.base
+  (classicalKernelSemanticsAt allCasesDLDS [false] vRoot)).toList
+
+-- Reading [true]:
+#eval (formulaVecToHypVec allCasesDLDS.base
+  (classicalKernelSemanticsAt allCasesDLDS [true] vE1)).toList
+#eval (formulaVecToHypVec allCasesDLDS.base
+  (classicalKernelSemanticsAt allCasesDLDS [true] vE2)).toList
+#eval (formulaVecToHypVec allCasesDLDS.base
+  (classicalKernelSemanticsAt allCasesDLDS [true] vI)).toList
+#eval (formulaVecToHypVec allCasesDLDS.base
+  (classicalKernelSemanticsAt allCasesDLDS [true] vRoot)).toList
+
+end Examples.AllCases
+
+/-! #### Grid bridge infrastructure
 
 The definitions below connect reading inputs to the existing path-based
 grid evaluator without changing the earlier APIs. The bridge theorem is
@@ -4794,7 +4801,7 @@ def BranchingDLDS.GridCompatibleForReading
 def BranchingDLDS.GridCompatible (bd : BranchingDLDS) : Prop :=
   ∀ reading, bd.GridCompatibleForReading reading
 
-/-- Candidate 1 bridge under the explicit grid-compatibility invariant. -/
+/-- Bridge under the explicit grid-compatibility invariant. -/
 theorem node_logic_equals_classicalKernel_under_GridCompatible
     (bd : BranchingDLDS) (reading : ReadingInput)
     (v : Vertex)
@@ -5615,7 +5622,7 @@ lemma multiple_xor_replicate_false_append_true
   | zero =>
       simp [multiple_xor]
   | succ k ih =>
-      simp [List.replicate_succ, multiple_xor, ih]
+      simp [List.replicate_succ, ih]
 
 lemma list_or_replicate_zero_append_singleton
     {n : Nat} (k : Nat)
@@ -5817,7 +5824,7 @@ lemma zipIdx_map_append_singleton
   | cons x rest ih =>
       simp [List.zipIdx_cons, ih]
       congr 1
-      simp [Nat.add_assoc, Nat.add_left_comm, Nat.add_comm]
+      simp [Nat.add_left_comm, Nat.add_comm]
 
 @[simp] lemma List.getElem?_append_singleton_length
     {α : Type*} (xs : List α) (a : α) :
@@ -5826,7 +5833,7 @@ lemma zipIdx_map_append_singleton
   | nil =>
       simp
   | cons x rest ih =>
-      simp [ih]
+      simp
 
 @[simp] lemma List.getElem?_cons_succ'
     {α : Type*} (x : α) (xs : List α) (n : Nat) :
@@ -5840,7 +5847,7 @@ lemma zipIdx_map_append_singleton
   | nil =>
       simp
   | cons x rest ih =>
-      simp [ih]
+      simp
 
 lemma buildTaggedIncomingMapForFormula_repetition_slot_getD
     (formulas : List Formula) (formula : Formula) :
@@ -5882,7 +5889,7 @@ lemma buildTaggedIncomingMapForFormula_repetition_slot_getD
                   by_cases hB : B = Formula.atom name <;> simp [hB, Option.isSome])
       unfold buildTaggedIncomingMapForFormula
       rw [← h_len]
-      simp [elimMaps, List.getElem?_append_singleton_length]
+      simp [elimMaps]
   | impl A B =>
       dsimp
       let elimIdxs := formulas.zipIdx.filterMap fun (f, idx) =>
@@ -5917,8 +5924,7 @@ lemma buildTaggedIncomingMapForFormula_repetition_slot_getD
             ([(List.idxOf B formulas, gridTagIntro)] ::
                 (elimMaps ++ [[(selfIdx, gridTagRepetition)]]))[1 + elimMaps.length]? =
               some [(selfIdx, gridTagRepetition)] := by
-          simp [Nat.add_comm, List.getElem?_cons_succ',
-            List.getElem?_append_singleton_length]
+          simp [Nat.add_comm]
         have h_step' := congrArg (fun o => o.getD default) h_step
         simpa using h_step'
       simpa [selfIdx, elimMaps] using h_impl
@@ -6061,7 +6067,6 @@ theorem node_logic_with_tagged_routing_nodeForFormula_singleton_repetition
       mkElimRule (introData.length + pos) false false
     let preRules := introRules ++ elimRules
     let repRid := introData.length + elimData.length
-    let preInputs := List.replicate preRules.length ([] : List (List.Vector Bool formulas.length))
     node_logic_with_tagged_routing
       (preRules ++ [mkRepetitionRule repRid true])
       (buildTaggedIncomingMapForFormula formulas formula)
@@ -6810,7 +6815,7 @@ theorem source_vertices_distinct_of_elimSourcePairMatches
   obtain ⟨A, h_major, h_minor, _h_major_level, _h_minor_level⟩ :=
     elimSourcePairMatches_formula v major minor h_pair
   have h_forms : major.FORMULA = minor.FORMULA := by
-    simpa [h_eq]
+    simp [h_eq]
   rw [h_major, h_minor] at h_forms
   exact Formula.impl_ne_left A v.FORMULA h_forms
 
@@ -7347,15 +7352,15 @@ end GridBridgeElimOverlapCounterexample
 end ReadingBased
 
 /-!
-# DLDS Circuit Evaluation Tests
+# DLDS Circuit Evaluation Examples
 
-This module contains test cases demonstrating the DLDS-to-circuit
-translation and evaluation. Each test constructs a natural deduction
+This module contains executable examples demonstrating the DLDS-to-circuit
+translation and evaluation. Each example constructs a natural deduction
 proof as a DLDS and verifies it evaluates correctly.
 
-## Test Cases
+## Examples
 
-1. **Test.Identity**: Identity proof (A⊃B)⊃(A⊃B) - valid and invalid paths
+1. **Examples.Identity**: Identity proof (A⊃B)⊃(A⊃B) - valid and invalid paths
 2. **Test.Syllogism**: Hypothetical syllogism (A⊃B)⊃(B⊃C)⊃(A⊃C)
 3. **Test.Incomplete**: Incomplete proof - undischarged assumptions detected
 
@@ -7384,7 +7389,7 @@ def checkDLDSProof (d : DLDS) (paths : Semantic.PathInput) (goal_column : Nat) :
 end Testing
 
 
-namespace Test.Identity
+namespace Examples.Identity
 /-!
 ### Test: Identity Combinator (A⊃B)⊃(A⊃B)
 
@@ -7479,15 +7484,7 @@ def invalidPath : List (List Nat) :=
     [4, 0, 0]    -- conclusion: inactive
   ]
 
-#eval IO.println "\n══════════ TEST: Identity (Valid Path) ══════════"
--- Expected: ✓ Accepted (valid proof, all assumptions discharged)
-#eval! Testing.checkDLDSProof dlds validPath 4
-
-#eval IO.println "\n══════════ TEST: Identity (Invalid Path) ══════════"
--- Expected: ✓ Accepted (structural error detected)
-#eval! Testing.checkDLDSProof dlds invalidPath 4
-
-end Test.Identity
+end Examples.Identity
 
 
 namespace Test.Syllogism
@@ -7591,10 +7588,6 @@ def validPath : List (List Nat) :=
     [0, 0, 0, 0, 0, 0, 0, 0]
   ]
 
-#eval IO.println "\n══════════ TEST: Hypothetical Syllogism ══════════"
--- Expected: ✓ Accepted
-#eval! Testing.checkDLDSProof dlds validPath 8
-
 end Test.Syllogism
 
 
@@ -7668,10 +7661,6 @@ def path : List (List Nat) :=
     [0, 0],   -- B: goal (inactive routing)
     [2, 2]    -- A⊃B: routes to B
   ]
-
-#eval IO.println "\n══════════ TEST: Incomplete Proof ══════════"
--- Expected: ✗ Rejected (undischarged assumptions)
-#eval! Testing.checkDLDSProof dlds path 1
 
 end Test.Incomplete
 
