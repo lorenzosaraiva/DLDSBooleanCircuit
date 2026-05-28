@@ -6287,6 +6287,415 @@ theorem tagged_node_logic_equals_classicalKernel_under_TaggedGridCompatible
   exact tagged_node_logic_equals_classicalKernel_for_reading
     bd reading v hMem (hCompat reading)
 
+private theorem classicalKernel_eq_of_eq_on_dependencies
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (fenv₁ fenv₂ : Vertex → List.Vector Bool (numFormulas bd.base))
+    (v : Vertex)
+    (h_sources :
+      ∀ u ∈ incomingSources bd.base v, fenv₁ u = fenv₂ u)
+    (h_branch :
+      ∀ src rvar colour,
+        findBranchTarget bd v = some (src, rvar, colour) →
+          fenv₁ src = fenv₂ src) :
+    classicalKernel bd reading fenv₁ v =
+      classicalKernel bd reading fenv₂ v := by
+  unfold classicalKernel
+  by_cases h_hyp : v.HYPOTHESIS = true
+  · simp [h_hyp]
+  · simp only [h_hyp]
+    cases h_find : findBranchTarget bd v with
+    | some triple =>
+        obtain ⟨src, rvar, colour⟩ := triple
+        simp only
+        set ordinary := (incomingSources bd.base v).filter
+          (fun u => decide (u ≠ src)) with hordinary
+        have h_ordinary :
+            ∀ u ∈ ordinary, fenv₁ u = fenv₂ u := by
+          intro u hu
+          have hu' : u ∈ (incomingSources bd.base v).filter
+              (fun u => decide (u ≠ src)) := by
+            simpa [hordinary] using hu
+          exact h_sources u (List.mem_filter.mp hu').1
+        have h_fold :
+            ordinary.foldl
+                (fun acc u => acc.zipWith (· || ·) (fenv₁ u))
+                (List.Vector.replicate (numFormulas bd.base) false) =
+              ordinary.foldl
+                (fun acc u => acc.zipWith (· || ·) (fenv₂ u))
+                (List.Vector.replicate (numFormulas bd.base) false) := by
+          apply foldl_congr_on_list
+          intro acc u hu
+          rw [h_ordinary u hu]
+        by_cases h_col : readingColour reading rvar = some colour
+        · simp [h_col, h_fold, h_branch src rvar colour h_find]
+        · simp [h_col, h_fold]
+    | none =>
+        simp only
+        have h_fold :
+            (incomingSources bd.base v).foldl
+                (fun acc u => acc.zipWith (· || ·) (fenv₁ u))
+                (List.Vector.replicate (numFormulas bd.base) false) =
+              (incomingSources bd.base v).foldl
+                (fun acc u => acc.zipWith (· || ·) (fenv₂ u))
+                (List.Vector.replicate (numFormulas bd.base) false) := by
+          apply foldl_congr_on_list
+          intro acc u hu
+          rw [h_sources u hu]
+        cases h_intro : findIntroDischarge bd v with
+        | some h_vertex =>
+            simp [h_fold]
+        | none =>
+            simp [h_fold]
+
+private theorem classicalKernelSemantics_fixedPoint_from
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (fenv : Vertex → List.Vector Bool (numFormulas bd.base))
+    (h_wf_branching : bd.WellFormedBranching)
+    (h_compat :
+      ∀ v ∈ bd.evalOrder,
+        fenv v = classicalKernel bd reading fenv v)
+    (pre xs : List Vertex)
+    (h_split : bd.evalOrder = pre ++ xs)
+    (h_pre :
+      ∀ u ∈ pre,
+        formulaEnvLookup
+          (pre.foldl (classicalKernelSemanticsStep bd reading) []) u =
+          fenv u) :
+    ∀ u ∈ pre ++ xs,
+      formulaEnvLookup
+        ((pre ++ xs).foldl (classicalKernelSemanticsStep bd reading) []) u =
+        fenv u := by
+  induction xs generalizing pre with
+  | nil =>
+      intro u hu
+      simpa using h_pre u (by simpa using hu)
+  | cons x rest ih =>
+      set envPre :=
+        pre.foldl (classicalKernelSemanticsStep bd reading) [] with henvPre
+      have h_nd_split : (pre ++ x :: rest).Nodup := by
+        simpa [h_split] using h_wf_branching.1.1
+      have h_x_notin_pre : x ∉ pre := by
+        have hparts := List.nodup_append.mp h_nd_split
+        have hdisj := hparts.2.2
+        intro hx
+        exact (hdisj x hx x (by simp)) rfl
+      have h_sources_eq :
+          ∀ u ∈ incomingSources bd.base x,
+            formulaEnvLookup envPre u = fenv u := by
+        intro u hu
+        unfold incomingSources at hu
+        rcases List.mem_map.mp hu with ⟨e, he_filter, he_start⟩
+        rcases List.mem_filter.mp he_filter with ⟨he_mem, he_end_bool⟩
+        have he_end : e.END = x := by
+          simpa using he_end_bool
+        have h_src_pre : e.START ∈ pre :=
+          h_wf_branching.1.2 e he_mem pre rest (by simpa [he_end] using h_split)
+        have hu_pre : u ∈ pre := by
+          simpa [he_start] using h_src_pre
+        simpa [henvPre] using h_pre u hu_pre
+      have h_branch_eq :
+          ∀ src rvar colour,
+            findBranchTarget bd x = some (src, rvar, colour) →
+              formulaEnvLookup envPre src = fenv src := by
+        intro src rvar colour h_find
+        obtain ⟨b, hb_mem, hb_src, hb_rvar, hb_target⟩ :=
+          findBranchTarget_spec bd x src rvar colour h_find
+        have h_src_pre : b.source ∈ pre :=
+          h_wf_branching.2 b hb_mem colour x hb_target pre rest h_split
+        have hsrc_pre : src ∈ pre := by
+          simpa [hb_src] using h_src_pre
+        simpa [henvPre] using h_pre src hsrc_pre
+      have h_step :
+          classicalKernel bd reading (formulaEnvLookup envPre) x = fenv x := by
+        have h_kernel :=
+          classicalKernel_eq_of_eq_on_dependencies bd reading
+            (formulaEnvLookup envPre) fenv x h_sources_eq h_branch_eq
+        have hx_mem : x ∈ bd.evalOrder := by
+          rw [h_split]
+          simp
+        calc
+          classicalKernel bd reading (formulaEnvLookup envPre) x =
+              classicalKernel bd reading fenv x := h_kernel
+          _ = fenv x := (h_compat x hx_mem).symm
+      have h_pre_next :
+          ∀ u ∈ pre ++ [x],
+            formulaEnvLookup
+              ((pre ++ [x]).foldl
+                (classicalKernelSemanticsStep bd reading) []) u =
+              fenv u := by
+        intro u hu
+        rw [List.foldl_append]
+        simp only [List.foldl_cons, List.foldl_nil,
+          classicalKernelSemanticsStep]
+        by_cases hux : u = x
+        · subst u
+          rw [formulaEnvLookup_append_singleton_of_not_mem]
+          · simpa [henvPre] using h_step
+          · intro w hw
+            have hkeys :=
+              foldl_append_keys_subset
+                (fun env v => classicalKernel bd reading
+                  (formulaEnvLookup env) v)
+                pre [] (x, w) (by simpa [henvPre] using hw)
+            rcases hkeys with hacc | hkey
+            · simp at hacc
+            · exact h_x_notin_pre hkey
+        · have hu_pre : u ∈ pre := by
+            rcases List.mem_append.mp hu with hpre | hxmem
+            · exact hpre
+            · simp at hxmem
+              exact False.elim (hux hxmem)
+          rw [formulaEnvLookup_append_singleton_ne
+            envPre x u
+            (classicalKernel bd reading (formulaEnvLookup envPre) x) hux]
+          simpa [henvPre] using h_pre u hu_pre
+      have h_split_next : bd.evalOrder = (pre ++ [x]) ++ rest := by
+        simpa [List.append_assoc] using h_split
+      intro u hu
+      have h_rec := ih (pre := pre ++ [x]) h_split_next h_pre_next
+      simpa [List.append_assoc] using h_rec u (by simpa [List.append_assoc] using hu)
+
+theorem taggedGridFEnvFromReading_eq_classicalKernelSemanticsAt_for_reading
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (h_wf_branching : bd.WellFormedBranching)
+    (h_compat : bd.TaggedGridCompatibleForReading reading) :
+    ∀ v ∈ bd.evalOrder,
+      taggedGridFEnvFromReading bd reading v =
+        classicalKernelSemanticsAt bd reading v := by
+  intro v hv
+  let fenv := taggedGridFEnvFromReading bd reading
+  have h_fixed :
+      ∀ u ∈ ([] : List Vertex) ++ bd.evalOrder,
+        formulaEnvLookup
+          ((([] : List Vertex) ++ bd.evalOrder).foldl
+            (classicalKernelSemanticsStep bd reading) []) u =
+          fenv u :=
+    classicalKernelSemantics_fixedPoint_from bd reading fenv
+      h_wf_branching
+      (by
+        intro u hu
+        exact h_compat u hu)
+      [] bd.evalOrder
+      (by simp)
+      (by intro u hu; simp at hu)
+  have hv_fixed := h_fixed v (by simpa using hv)
+  simpa [fenv, classicalKernelSemanticsAt, classicalKernelSemantics] using
+    hv_fixed.symm
+
+theorem taggedGridFEnvFromReading_eq_classicalKernelSemanticsAt
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (h_wf_branching : bd.WellFormedBranching)
+    (h_compat : bd.TaggedGridCompatible) :
+    ∀ v ∈ bd.evalOrder,
+      taggedGridFEnvFromReading bd reading v =
+        classicalKernelSemanticsAt bd reading v := by
+  exact taggedGridFEnvFromReading_eq_classicalKernelSemanticsAt_for_reading
+    bd reading h_wf_branching (h_compat reading)
+
+/-- Conditional bridge from the tagged-grid run induced by one reading to the
+    actual reading/DLDS dependency semantics. The tagged grid is
+    formula-indexed, so the statement compares after `formulaVecToHypVec`. -/
+theorem taggedGridFEnvFromReading_eq_dldsSemanticsAt_for_reading
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (h_wf_branching : bd.WellFormedBranching)
+    (h_distinct : bd.base.HypFormulasDistinct)
+    (h_in_build : bd.base.HypFormulasInBuild)
+    (h_eval_in_V : ∀ v ∈ bd.evalOrder, v ∈ bd.base.V)
+    (h_discharge_wf :
+      ∀ v ∈ bd.evalOrder, ∀ h_vertex,
+        findIntroDischarge bd v = some h_vertex →
+          h_vertex ∈ bd.base.V ∧ h_vertex.HYPOTHESIS = true)
+    (h_compat : bd.TaggedGridCompatibleForReading reading) :
+    ∀ v ∈ bd.evalOrder,
+      formulaVecToHypVec bd.base (taggedGridFEnvFromReading bd reading v) =
+        dldsSemanticsAt bd reading v := by
+  intro v hv
+  have h_tag :=
+    taggedGridFEnvFromReading_eq_classicalKernelSemanticsAt_for_reading
+      bd reading h_wf_branching h_compat v hv
+  have h_kernel :=
+    classicalKernel_dldsSemantics_global_equiv bd reading h_wf_branching.1
+      h_distinct h_in_build h_eval_in_V h_discharge_wf v hv
+  rw [h_tag]
+  exact h_kernel
+
+/-- Global-reading variant of
+    `taggedGridFEnvFromReading_eq_dldsSemanticsAt_for_reading`. -/
+theorem taggedGridFEnvFromReading_eq_dldsSemanticsAt
+    (bd : BranchingDLDS) (reading : ReadingInput)
+    (h_wf_branching : bd.WellFormedBranching)
+    (h_distinct : bd.base.HypFormulasDistinct)
+    (h_in_build : bd.base.HypFormulasInBuild)
+    (h_eval_in_V : ∀ v ∈ bd.evalOrder, v ∈ bd.base.V)
+    (h_discharge_wf :
+      ∀ v ∈ bd.evalOrder, ∀ h_vertex,
+        findIntroDischarge bd v = some h_vertex →
+          h_vertex ∈ bd.base.V ∧ h_vertex.HYPOTHESIS = true)
+    (h_compat : bd.TaggedGridCompatible) :
+    ∀ v ∈ bd.evalOrder,
+      formulaVecToHypVec bd.base (taggedGridFEnvFromReading bd reading v) =
+        dldsSemanticsAt bd reading v := by
+  exact taggedGridFEnvFromReading_eq_dldsSemanticsAt_for_reading
+    bd reading h_wf_branching h_distinct h_in_build h_eval_in_V
+    h_discharge_wf (h_compat reading)
+
+/-! ##### Reading-level rejection and robustness instantiation -/
+
+namespace RobustnessInput
+
+def toReadingInput {r : Nat}
+    (x : Robustness.Input 2 r) : ReadingInput :=
+  List.ofFn fun i : Fin r => decide ((x i).val = 1)
+
+end RobustnessInput
+
+def HasUndischargedDependency
+    (bd : BranchingDLDS) (root : Vertex) (reading : ReadingInput) : Prop :=
+  dldsSemanticsAt bd reading root ≠ HypDepVec.zero bd.base
+
+def RejectsReading
+    (bd : BranchingDLDS) (root : Vertex)
+    (reading : Robustness.Input 2 bd.numReading) : Prop :=
+  HasUndischargedDependency bd root
+    (RobustnessInput.toReadingInput reading)
+
+theorem rejectsReading_density_from_badPrefix
+    (bd : BranchingDLDS)
+    (root : Vertex)
+    {C : Nat}
+    (π : Robustness.Prefix 2 bd.numReading)
+    (hπ : Robustness.BadPrefix (RejectsReading bd root) π)
+    (hC : π.len ≤ C)
+    (hCr : C ≤ bd.numReading) :
+    2 ^ bd.numReading ≤
+      (Robustness.BadFinset (RejectsReading bd root)).card * 2 ^ C := by
+  exact Robustness.bad_inputs_density_fixed_C_mul
+    (m := 2)
+    (r := bd.numReading)
+    (C := C)
+    (hm := by decide)
+    (rejects := RejectsReading bd root)
+    (π := π)
+    hπ hC hCr
+
+/-- Paper-facing semantic robustness wrapper: a bad prefix of length at most
+    `C` forces a multiplication-form lower bound on rejected readings. -/
+theorem semantic_robustness_from_short_badPrefix
+    (bd : BranchingDLDS)
+    (root : Vertex)
+    {C : Nat}
+    (π : Robustness.Prefix 2 bd.numReading)
+    (hπ : Robustness.BadPrefix (RejectsReading bd root) π)
+    (hC : π.len ≤ C)
+    (hCr : C ≤ bd.numReading) :
+    2 ^ bd.numReading ≤
+      (Robustness.BadFinset (RejectsReading bd root)).card * 2 ^ C := by
+  exact rejectsReading_density_from_badPrefix bd root π hπ hC hCr
+
+def TaggedRejectsReading
+    (bd : BranchingDLDS) (root : Vertex)
+    (reading : Robustness.Input 2 bd.numReading) : Prop :=
+  formulaVecToHypVec bd.base
+      (taggedGridFEnvFromReading bd
+        (RobustnessInput.toReadingInput reading) root) ≠
+    HypDepVec.zero bd.base
+
+theorem taggedRejectsReading_iff_rejectsReading
+    (bd : BranchingDLDS)
+    (root : Vertex)
+    (reading : Robustness.Input 2 bd.numReading)
+    (h_root_mem : root ∈ bd.evalOrder)
+    (h_wf_branching : bd.WellFormedBranching)
+    (h_distinct : bd.base.HypFormulasDistinct)
+    (h_in_build : bd.base.HypFormulasInBuild)
+    (h_eval_in_V : ∀ v ∈ bd.evalOrder, v ∈ bd.base.V)
+    (h_discharge_wf :
+      ∀ v ∈ bd.evalOrder, ∀ h_vertex,
+        findIntroDischarge bd v = some h_vertex →
+          h_vertex ∈ bd.base.V ∧ h_vertex.HYPOTHESIS = true)
+    (h_compat :
+      bd.TaggedGridCompatibleForReading
+        (RobustnessInput.toReadingInput reading)) :
+    TaggedRejectsReading bd root reading ↔ RejectsReading bd root reading := by
+  unfold TaggedRejectsReading RejectsReading HasUndischargedDependency
+  rw [taggedGridFEnvFromReading_eq_dldsSemanticsAt_for_reading
+    bd (RobustnessInput.toReadingInput reading) h_wf_branching h_distinct
+    h_in_build h_eval_in_V h_discharge_wf h_compat root h_root_mem]
+
+/-- Tagged-grid-facing robustness wrapper. Under the conditional tagged-grid
+    bridge assumptions for every binary reading, a bad prefix for the tagged
+    rejection predicate yields the semantic rejected-reading lower bound. -/
+theorem taggedGrid_robustness_from_short_badPrefix
+    (bd : BranchingDLDS)
+    (root : Vertex)
+    {C : Nat}
+    (π : Robustness.Prefix 2 bd.numReading)
+    (hπ : Robustness.BadPrefix (TaggedRejectsReading bd root) π)
+    (hC : π.len ≤ C)
+    (hCr : C ≤ bd.numReading)
+    (h_root_mem : root ∈ bd.evalOrder)
+    (h_wf_branching : bd.WellFormedBranching)
+    (h_distinct : bd.base.HypFormulasDistinct)
+    (h_in_build : bd.base.HypFormulasInBuild)
+    (h_eval_in_V : ∀ v ∈ bd.evalOrder, v ∈ bd.base.V)
+    (h_discharge_wf :
+      ∀ v ∈ bd.evalOrder, ∀ h_vertex,
+        findIntroDischarge bd v = some h_vertex →
+          h_vertex ∈ bd.base.V ∧ h_vertex.HYPOTHESIS = true)
+    (h_compat :
+      ∀ reading : Robustness.Input 2 bd.numReading,
+        bd.TaggedGridCompatibleForReading
+          (RobustnessInput.toReadingInput reading)) :
+    2 ^ bd.numReading ≤
+      (Robustness.BadFinset (RejectsReading bd root)).card * 2 ^ C := by
+  apply semantic_robustness_from_short_badPrefix bd root π
+  · intro reading hreading
+    have h_tagged := hπ reading hreading
+    exact (taggedRejectsReading_iff_rejectsReading bd root reading
+      h_root_mem h_wf_branching h_distinct h_in_build h_eval_in_V
+      h_discharge_wf (h_compat reading)).mp h_tagged
+  · exact hC
+  · exact hCr
+
+/-- Assumption package for using the conditional tagged-grid robustness
+    theorem at a chosen root. This only bundles the hypotheses already
+    required by `taggedGrid_robustness_from_short_badPrefix`. -/
+structure RobustnessReady
+    (bd : BranchingDLDS) (root : Vertex) : Prop where
+  wellFormedBranching : bd.WellFormedBranching
+  hypDistinct : bd.base.HypFormulasDistinct
+  hypInBuild : bd.base.HypFormulasInBuild
+  evalOrderInVertices : ∀ v ∈ bd.evalOrder, v ∈ bd.base.V
+  introDischargeWF :
+    ∀ v ∈ bd.evalOrder, ∀ h_vertex,
+      findIntroDischarge bd v = some h_vertex →
+        h_vertex ∈ bd.base.V ∧ h_vertex.HYPOTHESIS = true
+  taggedCompatible :
+    ∀ reading : Robustness.Input 2 bd.numReading,
+      bd.TaggedGridCompatibleForReading
+        (RobustnessInput.toReadingInput reading)
+  rootInEvalOrder : root ∈ bd.evalOrder
+
+theorem taggedGrid_robustness_from_short_badPrefix_ready
+    (bd : BranchingDLDS)
+    (root : Vertex)
+    (ready : RobustnessReady bd root)
+    {C : Nat}
+    (π : Robustness.Prefix 2 bd.numReading)
+    (hπ : Robustness.BadPrefix (TaggedRejectsReading bd root) π)
+    (hC : π.len ≤ C)
+    (hCr : C ≤ bd.numReading) :
+    2 ^ bd.numReading ≤
+      (Robustness.BadFinset (RejectsReading bd root)).card * 2 ^ C := by
+  exact taggedGrid_robustness_from_short_badPrefix bd root π hπ hC hCr
+    ready.rootInEvalOrder
+    ready.wellFormedBranching
+    ready.hypDistinct
+    ready.hypInBuild
+    ready.evalOrderInVertices
+    ready.introDischargeWF
+    ready.taggedCompatible
+
 /-! ##### Structural compatibility, non-branching fragment
 
 This is the first structural approximation to `GridCompatible`. It is local
