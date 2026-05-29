@@ -2622,10 +2622,51 @@ structure BranchingDLDS where
   evalOrder  : List Vertex
   deriving Repr
 
+def BranchingDLDS.ofBase (d : DLDS) : BranchingDLDS :=
+  { base := d
+    branchings := []
+    numReading := 0
+    evalOrder := d.V }
+
+@[simp] theorem BranchingDLDS.ofBase_base (d : DLDS) :
+    (BranchingDLDS.ofBase d).base = d := by
+  rfl
+
+@[simp] theorem BranchingDLDS.ofBase_branchings (d : DLDS) :
+    (BranchingDLDS.ofBase d).branchings = [] := by
+  rfl
+
+@[simp] theorem BranchingDLDS.ofBase_numReading (d : DLDS) :
+    (BranchingDLDS.ofBase d).numReading = 0 := by
+  rfl
+
+@[simp] theorem BranchingDLDS.ofBase_evalOrder (d : DLDS) :
+    (BranchingDLDS.ofBase d).evalOrder = d.V := by
+  rfl
+
 /-- Well-formedness: the evaluation order must be a permutation of
     the DLDS's vertex list. -/
 def BranchingDLDS.WellFormed (bd : BranchingDLDS) : Prop :=
   bd.evalOrder.Perm bd.base.V
+
+theorem BranchingDLDS.WellFormed_of_evalOrder_eq_baseV
+    (bd : BranchingDLDS)
+    (h_eval : bd.evalOrder = bd.base.V) :
+    bd.WellFormed := by
+  simp [BranchingDLDS.WellFormed, h_eval]
+
+theorem BranchingDLDS.ofBase_WellFormed
+    (d : DLDS) :
+    (BranchingDLDS.ofBase d).WellFormed := by
+  exact BranchingDLDS.WellFormed_of_evalOrder_eq_baseV
+    (BranchingDLDS.ofBase d) (by simp)
+
+theorem BranchingDLDS.ofBase_evalOrderInVertices
+    (d : DLDS) :
+    ∀ v ∈ (BranchingDLDS.ofBase d).evalOrder,
+      v ∈ (BranchingDLDS.ofBase d).base.V := by
+  intro v hv
+  simpa using hv
 
 /-- A `BranchingDLDS` is non-branching iff it carries no branching
     metadata. The reading input is then ignored. -/
@@ -6656,6 +6697,62 @@ theorem taggedGrid_robustness_from_short_badPrefix
       h_discharge_wf (h_compat reading)).mp h_tagged
   · exact hC
   · exact hCr
+
+theorem DLDS.hypFormulasInBuild_of_buildFormulas
+    (d : DLDS) : d.HypFormulasInBuild := by
+  intro w hw _h_hyp
+  have hmem : w.FORMULA ∈ d.V.map (·.FORMULA) :=
+    List.mem_map.mpr ⟨w, hw, rfl⟩
+  exact List.idxOf_lt_length_iff.mpr (by
+    simpa [buildFormulas] using hmem)
+
+theorem BranchingDLDS.ofBase_hypFormulasInBuild
+    (d : DLDS) :
+    (BranchingDLDS.ofBase d).base.HypFormulasInBuild := by
+  exact DLDS.hypFormulasInBuild_of_buildFormulas d
+
+theorem BranchingDLDS.evalOrderInVertices_of_WellFormed
+    (bd : BranchingDLDS)
+    (h_wf : bd.WellFormed) :
+    ∀ v ∈ bd.evalOrder, v ∈ bd.base.V := by
+  intro v hv
+  exact (List.Perm.mem_iff h_wf).mp hv
+
+/-
+RobustnessReady proof obligations:
+1. wellFormedBranching:
+   status: requires a major structural theorem for generated branching DLDSs.
+   Existing local semantics theorems use this predicate, but generation has
+   not yet been connected to `WellFormedBranching`.
+2. hypDistinct:
+   status: requires a structural construction invariant. It says hypothesis
+   vertices have pairwise distinct formulas, and is not implied by the raw
+   `DLDS` type.
+3. hypInBuild:
+   status: already directly provable from `buildFormulas`; see
+   `DLDS.hypFormulasInBuild_of_buildFormulas`.
+4. evalOrderInVertices:
+   status: probably provable with a small helper once `bd.WellFormed` is
+   available; see `BranchingDLDS.evalOrderInVertices_of_WellFormed`.
+   `RobustnessReady` does not assume `bd.WellFormed` separately.
+   Inspection note: this file currently has hand-written example
+   `BranchingDLDS` values (`introDischargeDLDS`, `minimalBranchingDLDS`,
+   `allCasesDLDS`) and a structural predicate
+   `StructuralGridCompatibleNonBranching` that carries `bd.WellFormed`.
+   There is not yet a production generator theorem producing
+   `bd.WellFormed`; for literal constructions whose `evalOrder` is exactly
+   `bd.base.V`, use `BranchingDLDS.WellFormed_of_evalOrder_eq_baseV`.
+5. introDischargeWF:
+   status: requires a construction invariant for auxiliary discharge pairs
+   in `bd.base.A`: discharged vertices must belong to `bd.base.V` and be
+   hypotheses.
+6. taggedCompatible:
+   status: requires the major tagged-grid structural correctness theorem.
+   This is the main remaining bridge from generated DLDSs to the tagged grid.
+7. rootInEvalOrder:
+   status: requires clarification/change in the construction interface or a
+   root-selection invariant tying the chosen root to `bd.evalOrder`.
+-/
 
 /-- Assumption package for using the conditional tagged-grid robustness
     theorem at a chosen root. This only bundles the hypotheses already

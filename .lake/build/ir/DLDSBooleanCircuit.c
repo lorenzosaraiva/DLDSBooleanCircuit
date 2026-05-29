@@ -1321,6 +1321,9 @@ LEAN_EXPORT lean_object* lp_DLDSBooleanCircuit_Semantic_taggedGridFEnvFromPath(l
 LEAN_EXPORT lean_object* lp_DLDSBooleanCircuit_Semantic_taggedGridFEnvFromPath___boxed(lean_object*, lean_object*, lean_object*, lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_DLDSBooleanCircuit_Semantic_taggedGridFEnvFromReading(lean_object*, lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_DLDSBooleanCircuit_Semantic_taggedGridFEnvFromReading___boxed(lean_object*, lean_object*, lean_object*);
+LEAN_EXPORT uint8_t lp_DLDSBooleanCircuit_Semantic_RobustnessInput_toReadingInput___lam__0(lean_object*, lean_object*);
+LEAN_EXPORT lean_object* lp_DLDSBooleanCircuit_Semantic_RobustnessInput_toReadingInput___lam__0___boxed(lean_object*, lean_object*);
+LEAN_EXPORT lean_object* lp_DLDSBooleanCircuit_Semantic_RobustnessInput_toReadingInput(lean_object*, lean_object*);
 LEAN_EXPORT uint8_t lp_DLDSBooleanCircuit_Semantic_sourceOneLevelAbove(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* lp_DLDSBooleanCircuit_Semantic_sourceOneLevelAbove___boxed(lean_object*, lean_object*);
 LEAN_EXPORT uint8_t lp_DLDSBooleanCircuit_Semantic_elimPremiseFormulasMatch(lean_object*, lean_object*, lean_object*);
@@ -17756,6 +17759,36 @@ lean_dec(x_2);
 return x_4;
 }
 }
+LEAN_EXPORT uint8_t lp_DLDSBooleanCircuit_Semantic_RobustnessInput_toReadingInput___lam__0(lean_object* x_1, lean_object* x_2) {
+_start:
+{
+lean_object* x_3; lean_object* x_4; uint8_t x_5; 
+x_3 = lean_apply_1(x_1, x_2);
+x_4 = lean_unsigned_to_nat(1u);
+x_5 = lean_nat_dec_eq(x_3, x_4);
+lean_dec(x_3);
+return x_5;
+}
+}
+LEAN_EXPORT lean_object* lp_DLDSBooleanCircuit_Semantic_RobustnessInput_toReadingInput___lam__0___boxed(lean_object* x_1, lean_object* x_2) {
+_start:
+{
+uint8_t x_3; lean_object* x_4; 
+x_3 = lp_DLDSBooleanCircuit_Semantic_RobustnessInput_toReadingInput___lam__0(x_1, x_2);
+x_4 = lean_box(x_3);
+return x_4;
+}
+}
+LEAN_EXPORT lean_object* lp_DLDSBooleanCircuit_Semantic_RobustnessInput_toReadingInput(lean_object* x_1, lean_object* x_2) {
+_start:
+{
+lean_object* x_3; lean_object* x_4; 
+x_3 = lean_alloc_closure((void*)(lp_DLDSBooleanCircuit_Semantic_RobustnessInput_toReadingInput___lam__0___boxed), 2, 1);
+lean_closure_set(x_3, 0, x_2);
+x_4 = l_List_ofFn___redArg(x_1, x_3);
+return x_4;
+}
+}
 LEAN_EXPORT uint8_t lp_DLDSBooleanCircuit_Semantic_sourceOneLevelAbove(lean_object* x_1, lean_object* x_2) {
 _start:
 {
@@ -18330,8 +18363,8 @@ return x_10;
 else
 {
 uint8_t x_20; 
-lean_dec_ref(x_4);
 lean_dec(x_5);
+lean_dec_ref(x_4);
 lean_dec_ref(x_2);
 lean_dec_ref(x_1);
 x_20 = 0;

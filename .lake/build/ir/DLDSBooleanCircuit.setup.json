@@ -9059,6 +9059,11 @@
    "C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\mathlib\\.lake\\build\\lib\\lean\\Mathlib\\Data\\List\\Induction.ir",
    "C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\mathlib\\.lake\\build\\lib\\lean\\Mathlib\\Data\\List\\Induction.olean.server",
    "C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\mathlib\\.lake\\build\\lib\\lean\\Mathlib\\Data\\List\\Induction.olean.private"],
+  "Mathlib.Data.List.GetD":
+  ["C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\mathlib\\.lake\\build\\lib\\lean\\Mathlib\\Data\\List\\GetD.olean",
+   "C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\mathlib\\.lake\\build\\lib\\lean\\Mathlib\\Data\\List\\GetD.ir",
+   "C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\mathlib\\.lake\\build\\lib\\lean\\Mathlib\\Data\\List\\GetD.olean.server",
+   "C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\mathlib\\.lake\\build\\lib\\lean\\Mathlib\\Data\\List\\GetD.olean.private"],
   "Mathlib.Data.List.Forall2":
   ["C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\mathlib\\.lake\\build\\lib\\lean\\Mathlib\\Data\\List\\Forall2.olean",
    "C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\mathlib\\.lake\\build\\lib\\lean\\Mathlib\\Data\\List\\Forall2.ir",
@@ -15149,6 +15154,8 @@
    "C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\importGraph\\.lake\\build\\lib\\lean\\ImportGraph\\Graph\\TransitiveClosure.ir",
    "C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\importGraph\\.lake\\build\\lib\\lean\\ImportGraph\\Graph\\TransitiveClosure.olean.server",
    "C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\importGraph\\.lake\\build\\lib\\lean\\ImportGraph\\Graph\\TransitiveClosure.olean.private"],
+  "DLDSBooleanCircuit.Robustness":
+  ["C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\build\\lib\\lean\\DLDSBooleanCircuit\\Robustness.olean"],
   "Batteries.Util.ProofWanted":
   ["C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\batteries\\.lake\\build\\lib\\lean\\Batteries\\Util\\ProofWanted.olean",
    "C:\\Users\\Lorenzo\\Documents\\Workspace\\Doutorado\\DLDSBooleanCircuit\\.lake\\packages\\batteries\\.lake\\build\\lib\\lean\\Batteries\\Util\\ProofWanted.ir",
