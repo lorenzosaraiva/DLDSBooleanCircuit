@@ -7,3 +7,7 @@ require mathlib from git
 package DLDSBooleanCircuit
 
 lean_lib DLDSBooleanCircuit
+
+lean_lib HorizontalCompressionEXEC
+
+lean_lib Semantic

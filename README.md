@@ -1,80 +1,62 @@
 # DLDS Boolean Circuit in Lean
 
-This repository contains the Lean 4 formalization accompanying the paper  
-**"From Dag-Like Proofs to Boolean Circuits in Lean" **.  
+This repository contains the Lean 4 formalization accompanying the article
+"From Dag-Like Proofs to Boolean Circuits in Lean".
 
-The development proves the correctness of a Boolean circuit construction
-that encodes horizontally compressed Natural Deduction proofs
-(Dag-Like Derivability Structures, DLDS) in purely implicational minimal logic.
-It provides a formally certified bridge between proof compression
-and circuit-level verification.
+The development proves correctness theorems for a Boolean circuit evaluator over
+DLDS path assignments. It also defines DLDS-side structural predicates and a
+restricted simple-tree bridge from valid DLDS inputs to genuine circuit
+acceptance. The full compressed Flow bridge for collapsed nodes, ancestor edges,
+colour fan-out, and lambda-labelled edges is outside this artifact.
 
----
+## Building
 
-## Running the Code
+Install Lean through `elan`, then run:
 
-You can explore the Lean development in two ways:
-
-### 1. Without installation (recommended for quick use)
-
-Open the file directly in the [Lean web editor](https://live.lean-lang.org/)  
-and paste the contents of [`DLDSBooleanCircuit.lean`](DLDSBooleanCircuit.lean).  
-This allows you to experiment with the definitions without setting up Lean locally.
-
-### 2. With a local Lean installation
-
-1. Install [Lean 4](https://lean-lang.org/) (version ≥ 4.8 recommended).  
-2. Clone this repository:
-   git clone https://github.com/lorenzosaraiva/DLDSBooleanCircuit.git
-   cd DLDSBooleanCircuit
-3. Open DLDSBooleanCircuit.lean in VS Code with the Lean4 extension, or build it with:
-   lake build
-   
-### 3. Run in GitHub Codespaces (no local install)
-
-Launch a ready-to-use cloud dev environment:
-
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/<YOUR_GITHUB_USERNAME>/<YOUR_REPO>?quickstart=1)
-
-This opens VS Code in the browser with Lean 4 and the Lean extension preinstalled.
-No local setup required.
-
-> Devcontainer setup adapted from
-> [jeffsantos/lean-project-template](https://github.com/jeffsantos/lean-project-template).
-
-
-### 4. Repository Contents
-
-**`DLDSBooleanCircuit.lean`** (~1400 lines) – Complete Lean 4 formalization with:
-
-- **Core circuit types** (Section 1): Rules, activation bits, circuit nodes with XOR-based conflict detection
-- **Boolean circuit logic** (Section 2): `multiple_xor` exactly-one-true checker, node evaluation functions
-- **Correctness proofs** (Sections 3-5): 
-  - `multiple_xor_bool_iff_exactlyOneActive` – XOR ↔ exactly-one-active equivalence
-  - `node_correct` – Single-node correctness theorem
-- **Path-based evaluation** (Section 6): Token propagation, routing-aware node logic, layer evaluation
-  - `circuit_correctness` – **Main soundness theorem**: circuit acceptance implies structural error OR valid proof with discharged assumptions
-- **DLDS grid construction** (Section 7): Formula universe extraction, encoder generation, grid builders
-  - `dlds_evaluation_correct` – **End-to-end correctness**: combines grid construction + circuit evaluation
-- **Test cases**: Identity combinator, hypothetical syllogism, incomplete proof (undischarged assumptions)
-
-**Key theorem**:
-```lean
-theorem circuit_correctness : 
-  evaluateCircuit = true → 
-    PathStructurallyInvalid ∨ 
-    (PathRepresentsValidProof ∧ AllAssumptionsDischarged)
+```bash
+lake build
 ```
 
-### 5. Reference
+The compatibility entrypoint is:
 
-This code accompanies the paper:
+```bash
+lake env lean DLDSBooleanCircuit.lean
+```
 
-Lorenzo Saraiva and Hermann Haeusler
-"From Dag-Like Proofs to Boolean Circuits in Lean"
-submitted to FoIKS 2026.
+## Module Layout
 
-## 6. License
+- `Semantic/Core.lean`: circuit data types and rule constructors.
+- `Semantic/Boolean.lean`: Boolean semantics and exactly-one activation logic.
+- `Semantic/VectorLemmas.lean`: list and vector support lemmas.
+- `Semantic/NodeCorrectness.lean`: node-level correctness.
+- `Semantic/Routing.lean`: tokens, path inputs, labels, routing, and node errors.
+- `Semantic/Evaluator.lean`: layer and circuit evaluation theorems.
+- `Semantic/DLDS.lean`: DLDS extraction, validity predicates, and helpers.
+- `Semantic/TreeBridge.lean`: the simple-tree bridge.
+- `Semantic/Examples.lean`: example DLDSs and executable witnesses.
+- `Semantic.lean`: public aggregate for the core development.
 
-This project is released under the MIT License.  
-See the [LICENSE](LICENSE) file for details.
+`HorizontalCompressionEXEC.lean` contains the graph and horizontal compression
+infrastructure used by the DLDS layer.
+
+## Main Theorems
+
+The article-facing theorem names are preserved, including:
+
+- `node_correct`
+- `circuit_correctness`
+- `circuit_iff`
+- `dlds_evaluation_correct`
+- `dlds_evaluation_iff`
+- `dlds_global_soundness`
+- `dlds_global_completeness`
+- `dlds_global_iff`
+- `tree_bridge_forward`
+- `tree_bridge_forward_of_descent_coherent`
+
+The predicate `GenuinelyAccepts` rules out neutral acceptance of structurally
+invalid paths and is the predicate used by the simple-tree bridge.
+
+## License
+
+This project is released under the MIT License. See `LICENSE`.
