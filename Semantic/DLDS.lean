@@ -1600,18 +1600,56 @@ def AncestorEdges (d : Graph) : Prop :=
 def ancestorEdgesB (d : Graph) : Bool :=
   d.PATHS.all fun p => decide (p.START.LEVEL < p.END.LEVEL)
 
-/-- **Def-23 Ancestor-Backway-Information**: each ancestral path carries its
-    stored relative-address label in the available `COLOURS` field. The imported
-    `Ancestral` type has no separate `P` field, so this records well-formedness
-    of that concrete label list. -/
+/-- Drop the optional leading `0` used by Robinson's colour-path convention
+    before checking the positive colour payload. -/
+def ancestorBackwayPayload (colours : List Nat) : List Nat :=
+  match colours with
+  | [] => []
+  | c :: rest => if c = 0 then rest else c :: rest
+
+/-- Def-19 / Algorithm 2 relative address lookup.
+
+    Starting from `origin`, consume `γ` left-to-right. At each step, if the
+    current node has a unique outgoing deduction edge, follow it. Otherwise,
+    follow the unique outgoing edge whose colour is the current head of `γ`.
+    If neither choice is unique, the address is invalid.
+
+    The fuel is `d.NODES.length + 1`: a valid acyclic address cannot pass
+    through more graph vertices than this, while the recursion also strictly
+    consumes `γ` at each successful step. -/
+def relativeAddress (d : Graph) (origin : Vertex) (γ : List Nat) : Option Vertex :=
+  loop (d.NODES.length + 1) origin γ
+where
+  loop : Nat → Vertex → List Nat → Option Vertex
+  | _, b, [] => some b
+  | 0, _, _ :: _ => none
+  | fuel + 1, b, colour :: rest =>
+      match get_rule.outgoing b d with
+      | [g] => loop fuel g.END rest
+      | outs =>
+          match outs.filter (fun e => e.COLOUR = colour) with
+          | [g] => loop fuel g.END rest
+          | _ => none
+
+def relativeAddressB (d : Graph) (origin : Vertex) (γ : List Nat)
+    (target : Vertex) : Bool :=
+  relativeAddress d origin γ == some target
+
+/-- **Def-23 Ancestor-Backway-Information**: each ancestor edge label is the
+    genuine relative address from the edge's endpoint back to its startpoint.
+
+    This is Def-19 / Algorithm 2 from the source: for each ancestral edge
+    `p : START → END`, running the relative-address lookup from `p.END` with
+    `p.COLOURS` must return `p.START`. On tree fixtures `PATHS = []`, so the
+    condition is vacuous. -/
 def AncestorBackwayInformation (d : Graph) : Prop :=
-  ∀ p ∈ d.PATHS, check_numbers p.COLOURS
+  ∀ p ∈ d.PATHS, relativeAddress d p.END p.COLOURS = some p.START
 
 def checkNumbersB (xs : List Nat) : Bool :=
   !xs.isEmpty && xs.all fun n => decide (n > 0)
 
 def ancestorBackwayInformationB (d : Graph) : Bool :=
-  d.PATHS.all fun p => checkNumbersB p.COLOURS
+  d.PATHS.all fun p => relativeAddressB d p.END p.COLOURS p.START
 
 /-- **Def-23 Non-Nested-Ancestor-Edges**: no two ancestral intervals are
     properly nested by their endpoint levels. -/
@@ -1951,12 +1989,15 @@ structure ValidDLDS (d : Graph) : Prop where
 
 
 /-- Scope predicate: a *tree* DLDS — every node has at most one outgoing deduction
-    edge, no node is collapsed, and there are no ancestral paths. The compressed
-    case will relax all three. -/
+    edge, no node is collapsed, there are no ancestral paths, and all deduction
+    edges carry the default colour `0`. Nonzero colours are introduced by
+    collapse, so the uncollapsed tree fragment uses only colour `0`. The
+    compressed case will relax these conditions. -/
 def IsTreeDLDS (d : Graph) : Prop :=
   (∀ v ∈ d.NODES, (get_rule.outgoing v d).length ≤ 1)
   ∧ (∀ v ∈ d.NODES, v.COLLAPSED = false)
   ∧ d.PATHS = []
+  ∧ (∀ e ∈ d.EDGES, e.COLOUR = 0)
 
 /-- Injective formula labeling: distinct nodes carry distinct formulas. This is
     the precondition that makes `buildFormulas`' column-per-formula model faithful
@@ -4114,4 +4155,6 @@ lemma buildIncomingMapForFormula_length_pos
   cases formula <;> simp
 
 
+
+#print axioms dlds_global_iff
 end Semantic

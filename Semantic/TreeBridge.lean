@@ -4,9 +4,7 @@ open scoped Classical
 
 namespace Semantic
 
-/-!
-# Simple-tree bridge to genuine circuit acceptance.
--/
+/-! # Simple-tree bridge to genuine circuit acceptance. -/
 
 lemma coherent_base_layer (formulas : List Formula)
     (vecs : List (List.Vector Bool formulas.length)) (tl : Nat)
@@ -110,8 +108,6 @@ lemma buildGridFromDLDS_getD_zero (d : Graph) :
   unfold buildGridFromDLDS buildLayers
   simp
 
-/-- Initial tokens satisfy layer coherence: each formula column has one
-    repetition token on its self-wire. -/
 lemma coherent_base (d : Graph) (_hvalid : ValidDLDS d) :
     TokensCoherentAtLayer
       ((buildGridFromDLDS d).getD 0 { nodes := [], incoming := [] })
@@ -122,7 +118,6 @@ lemma coherent_base (d : Graph) (_hvalid : ValidDLDS d) :
     (initialVectorsFromDLDS_length d)
     (buildFormulas_nodup d)
 
-/-- Initial tokens agree with the depth-0 route replay state. -/
 lemma coherent_base_wellRouted (d : Graph) (hvalid : ValidDLDS d) :
     TokensWellRoutedAtLayer d 0
       ((buildGridFromDLDS d).getD 0 { nodes := [], incoming := [] })
@@ -140,7 +135,6 @@ lemma coherent_base_wellRouted (d : Graph) (hvalid : ValidDLDS d) :
       simp [routeStateAfter, initTokenAt, hpathLen]
   · exact coherent_base d hvalid
 
-/-- Initial tokens are exact at depth 0. -/
 lemma coherent_base_exact (d : Graph) (hvalid : ValidDLDS d) :
     TokensExactAtLayer d 0
       ((buildGridFromDLDS d).getD 0 { nodes := [], incoming := [] })
@@ -326,12 +320,6 @@ lemma tokensPresence_step (d : Graph) (htree : IsSimpleTreeDLDS d) (hvalid : Val
           · simp at hq_some
         · simp at hq_some
 
-/-- Well-routed propagation step: if tokens are routed according to
-    `pathsFromDLDS` at layer `i`, then after one `propagate_tokens` step each
-    surviving token is routed according to `pathsFromDLDS` at layer `i+1`.
-
-    This is independent of per-slot coherence; the latter is isolated in
-    `unique_token_per_slot`. -/
 lemma coherent_step_wellRouted (d : Graph) (_htree : IsSimpleTreeDLDS d) (_hvalid : ValidDLDS d)
     (i level : Nat) (hi : i < (buildGridFromDLDS d).length)
     (hlvl : level = (buildGridFromDLDS d).length - 1 - i)
@@ -383,9 +371,6 @@ lemma coherent_step_wellRouted (d : Graph) (_htree : IsSimpleTreeDLDS d) (_hvali
     · simp at ht_some
   · simp at ht_some
 
-/-- Raw route-alignment propagation step, without assuming or producing
-    per-column coherence. This is the non-circular form needed by the
-    placement-to-token bridge. -/
 lemma coherent_step_routeAligned
     (d : Graph) (_htree : IsSimpleTreeDLDS d) (_hvalid : ValidDLDS d)
     (i level : Nat) (hi : i < (buildGridFromDLDS d).length)
@@ -440,8 +425,10 @@ lemma coherent_step_routeAligned
 
 
 
-/-- Boolean check: at every trace layer, each column's token group satisfies
-    `tokensMatchOneRuleB` (empty ⟹ true; non-empty ⟹ one rule, count=arity, all slots). -/
+/--
+ Boolean check: at every trace layer, each column's token group satisfies
+    `tokensMatchOneRuleB` (empty ⟹ true; non-empty ⟹ one rule, count=arity, all slots).
+-/
 def uniqueTokenPerSlotB (d : Graph) : Bool :=
   let layers := buildGridFromDLDS d
   let traces := tokenTraceDLDS d
@@ -450,10 +437,6 @@ def uniqueTokenPerSlotB (d : Graph) : Bool :=
     | none => true
     | some layer => tokensCoherentAtLayerB layer tokens
 
-/-- **Bool → Prop bridge (one node)**: the executable per-node coherence check
-    `tokensMatchOneRuleB` implies the propositional `TokensMatchOneRule`. The two
-    have the same shape; this just transports `&&`/`all`/`any`/`decide` into
-    `∧`/`∀`/`∃`/`=`. -/
 lemma tokensMatchOneRuleB_implies_Prop {n : Nat}
     (node : CircuitNode n) (inc : NodeIncoming) (toks : List (Token n))
     (h : tokensMatchOneRuleB node inc toks = true) :
@@ -498,8 +481,6 @@ lemma tokensMatchOneRuleB_implies_Prop {n : Nat}
                 subst hr'; subst hslot'
                 exact ⟨s, hs, src', hdecs, hsrc'⟩
 
-/-- **Bool → Prop bridge (layer)**: the executable per-layer coherence check
-    implies the propositional `TokensCoherentAtLayer`. -/
 lemma tokensCoherentAtLayerB_implies_Prop {n : Nat}
     (layer : GridLayer n) (toks : List (Token n))
     (h : tokensCoherentAtLayerB layer toks = true) :
@@ -513,8 +494,6 @@ lemma tokensCoherentAtLayerB_implies_Prop {n : Nat}
   have hP := tokensMatchOneRuleB_implies_Prop _ _ _ hcol
   simpa [List.get_eq_getElem] using hP
 
-/-- **Prop → Bool bridge (one node)**: propositional per-node coherence computes
-    to `true` in the executable checker. -/
 lemma tokensMatchOneRule_Prop_implies_B {n : Nat}
     (node : CircuitNode n) (inc : NodeIncoming) (toks : List (Token n))
     (h : TokensMatchOneRule node inc toks) :
@@ -541,8 +520,6 @@ lemma tokensMatchOneRule_Prop_implies_B {n : Nat}
         rw [hdec_s]
         simp [hsrc']
 
-/-- **Prop → Bool bridge (layer)**: propositional layer coherence computes to
-    `true` in the executable checker. -/
 lemma tokensCoherentAtLayer_Prop_implies_B {n : Nat}
     (layer : GridLayer n) (toks : List (Token n))
     (hlen : layer.incoming.length = layer.nodes.length)
@@ -575,11 +552,13 @@ lemma tokensCoherentAtLayer_Prop_implies_B {n : Nat}
       have hB := tokensMatchOneRule_Prop_implies_B _ _ _ hmatch
       simpa [List.getElem?_eq_getElem hN, hIopt, List.get_eq_getElem] using hB
 
-/-- The concrete token list at descent depth `k`: the `k`-fold `propagate_tokens`
+/--
+ The concrete token list at descent depth `k`: the `k`-fold `propagate_tokens`
     iteration starting from `initialize_tokens`, threading each layer's
     `evaluate_layer` output exactly as `eval_from_level`/`tokenTraceAux` do. This is
     the actual token stream the evaluator carries; the cascade threads it so the
-    decidable route-coherence certificate `routeCoherentB` applies layer by layer. -/
+    decidable route-coherence certificate `routeCoherentB` applies layer by layer.
+-/
 def descentTokens (d : Graph) : Nat → List (Token (buildFormulas d).length)
   | 0 => initialize_tokens (initialVectorsFromDLDS d) (buildGridFromDLDS d).length
   | k + 1 =>
@@ -588,8 +567,6 @@ def descentTokens (d : Graph) : Nat → List (Token (buildFormulas d).length)
         (evaluate_layer ((buildGridFromDLDS d).getD k { nodes := [], incoming := [] })
           (descentTokens d k)).1
 
-/-- Non-circular raw descent invariant: the concrete `descentTokens` stream is
-    route-aligned and has exact live-origin presence at every grid depth. -/
 lemma descent_route_aligned_presence
     (d : Graph) (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d) :
     ∀ depth, depth < (buildGridFromDLDS d).length →
@@ -640,16 +617,17 @@ lemma descent_route_aligned_presence
             (evaluate_layer ((buildGridFromDLDS d).get ⟨depth, hi⟩)
               (descentTokens d depth)).1 houts_len
         simpa [hstepTok] using hpres_next
-/-- **Decidable singleton Flow-condition certificate.** At every descent depth,
+/--
+ **Decidable singleton Flow-condition certificate.** At every descent depth,
     each column's token group covers its selected rule's slots exactly once.
     Scope: simple-tree singleton routing only; no colour fan-out, λ-edges, or
-    collapsed-node branching from the full Definition 3 setting. -/
+    collapsed-node branching from the full Definition 3 setting.
+-/
 def routeCoherentB (d : Graph) : Bool :=
   (List.range (buildGridFromDLDS d).length).all (fun depth =>
     tokensCoherentAtLayerB ((buildGridFromDLDS d).getD depth { nodes := [], incoming := [] })
       (descentTokens d depth))
 
-/-- Extract one layer's coherence from the certificate. -/
 lemma routeCoherentB_layer (d : Graph) (hcert : routeCoherentB d = true)
     (depth : Nat) (hd : depth < (buildGridFromDLDS d).length) :
     tokensCoherentAtLayerB ((buildGridFromDLDS d).getD depth { nodes := [], incoming := [] })
@@ -658,8 +636,6 @@ lemma routeCoherentB_layer (d : Graph) (hcert : routeCoherentB d = true)
   rw [List.all_eq_true] at hcert
   exact hcert depth (List.mem_range.mpr hd)
 
-/-- Assemble the decidable route-coherence certificate from a structural proof
-    that every descent layer is coherent. -/
 lemma routeCoherentB_of_layers (d : Graph)
     (h :
       ∀ depth, depth < (buildGridFromDLDS d).length →
@@ -672,8 +648,6 @@ lemma routeCoherentB_of_layers (d : Graph)
   intro depth hmem
   exact h depth (List.mem_range.mp hmem)
 
-/-- Prop-level assembly of `routeCoherentB`: it is enough to prove
-    `TokensCoherentAtLayer` for every concrete descent layer. -/
 lemma routeCoherentB_of_layer_props (d : Graph)
     (h :
       ∀ depth, depth < (buildGridFromDLDS d).length →
@@ -699,15 +673,16 @@ lemma routeCoherentB_of_layer_props (d : Graph)
     exact hwf.2.1.trans hwf.1.symm
   exact tokensCoherentAtLayer_Prop_implies_B _ _ hlen (h depth hd)
 
-/-- Base case for the structural `descent_coherent` induction. -/
 lemma descent_coherent_base (d : Graph) (hvalid : ValidDLDS d) :
     TokensCoherentAtLayer
       ((buildGridFromDLDS d).getD 0 { nodes := [], incoming := [] })
       (descentTokens d 0) := by
   simpa [descentTokens] using (coherent_base_exact d hvalid).coherent
 
-/-- Induction assembly for `descent_coherent`: once the structural one-step
-    coherence theorem is proved, all descent layers are coherent. -/
+/--
+ Induction assembly for `descent_coherent`: once the structural one-step
+    coherence theorem is proved, all descent layers are coherent.
+-/
 lemma descent_coherent_of_step (d : Graph) (hvalid : ValidDLDS d)
     (hstep :
       ∀ depth,
@@ -729,13 +704,15 @@ lemma descent_coherent_of_step (d : Graph) (hvalid : ValidDLDS d)
   | succ depth ih =>
       exact hstep depth hd (ih (by omega))
 
-/-- **Per-slot uniqueness** (coherence propagation step), discharged from the
+/--
+ **Per-slot uniqueness** (coherence propagation step), discharged from the
     decidable certificate `routeCoherentB`.
 
     Given the descent tokens at depth `i` (`htok`), one `propagate_tokens` step lands
     exactly the descent tokens at depth `i+1` (definitional), whose layer coherence
     is asserted by the certificate and transported `Bool → Prop` by
-    `tokensCoherentAtLayerB_implies_Prop`. -/
+    `tokensCoherentAtLayerB_implies_Prop`.
+-/
 lemma unique_token_per_slot (d : Graph) (hcert : routeCoherentB d = true)
     (i level : Nat) (hi : i < (buildGridFromDLDS d).length)
     (hlvl : level = (buildGridFromDLDS d).length - 1 - i)
@@ -746,11 +723,9 @@ lemma unique_token_per_slot (d : Graph) (hcert : routeCoherentB d = true)
       ((buildGridFromDLDS d).get ⟨i + 1, hj⟩)
       (propagate_tokens tokens (pathsFromDLDS d) level (buildGridFromDLDS d).length
         (evaluate_layer ((buildGridFromDLDS d).get ⟨i, hi⟩) tokens).1) := by
-  -- grid.get ⟨i, hi⟩ = grid.getD i default
   have hgetD_i : (buildGridFromDLDS d).get ⟨i, hi⟩ =
       (buildGridFromDLDS d).getD i { nodes := [], incoming := [] } := by
     rw [List.get_eq_getElem]; exact List.getElem_eq_getD _
-  -- The propagated tokens equal `descentTokens d (i+1)` by definition.
   have hstep : propagate_tokens tokens (pathsFromDLDS d) level (buildGridFromDLDS d).length
       (evaluate_layer ((buildGridFromDLDS d).get ⟨i, hi⟩) tokens).1 = descentTokens d (i + 1) := by
     subst htok
@@ -758,7 +733,6 @@ lemma unique_token_per_slot (d : Graph) (hcert : routeCoherentB d = true)
     rw [show level = (buildGridFromDLDS d).length - 1 - i from hlvl]
     rfl
   rw [hstep]
-  -- certificate gives the Bool coherence of `descentTokens d (i+1)` at layer (i+1)
   have hB := routeCoherentB_layer d hcert (i + 1) hj
   have hgetD_j : (buildGridFromDLDS d).getD (i + 1) { nodes := [], incoming := [] } =
       (buildGridFromDLDS d).get ⟨i + 1, hj⟩ := by
@@ -766,9 +740,11 @@ lemma unique_token_per_slot (d : Graph) (hcert : routeCoherentB d = true)
   rw [hgetD_j] at hB
   exact tokensCoherentAtLayerB_implies_Prop _ _ hB
 
-/-- Certificate-free per-slot step, assuming the structural descent-coherence
+/--
+ Certificate-free per-slot step, assuming the structural descent-coherence
     theorem directly rather than `routeCoherentB`. This is the downstream shape
-    used once `descent_coherent` is proved. -/
+    used once `descent_coherent` is proved.
+-/
 lemma unique_token_per_slot_of_descent_coherent (d : Graph)
     (hdesc :
       ∀ depth, depth < (buildGridFromDLDS d).length →
@@ -800,8 +776,10 @@ lemma unique_token_per_slot_of_descent_coherent (d : Graph)
   rw [← hgetD_j]
   exact hdesc (i + 1) hj
 
-/-- Exact step: composes (a) well-routed half, (b) per-slot coherence from the
-    certificate, (c) exact presence. -/
+/--
+ Exact step: composes (a) well-routed half, (b) per-slot coherence from the
+    certificate, (c) exact presence.
+-/
 lemma coherent_step_exact (d : Graph) (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d)
     (hcert : routeCoherentB d = true)
     (i level : Nat) (hi : i < (buildGridFromDLDS d).length)
@@ -816,20 +794,19 @@ lemma coherent_step_exact (d : Graph) (htree : IsSimpleTreeDLDS d) (hvalid : Val
         (propagate_tokens tokens (pathsFromDLDS d) level (buildGridFromDLDS d).length outs) := by
   dsimp only
   intro hj
-  -- `TokensExactAtLayer = TokensWellRoutedAtLayer ∧ TokensPresenceAtDepth`
   refine ⟨⟨?_, ?_⟩, ?_⟩
-  · -- (a) ∀ t ∈ new_tokens, TokenWellRoutedAtDepth d (i+1) t
+  ·
     exact coherent_step_wellRouted d htree hvalid i level hi hlvl tokens hexact.1 hj
-  · -- (b) TokensCoherentAtLayer — the per-slot uniqueness fact from the certificate.
+  ·
     exact unique_token_per_slot d hcert i level hi hlvl tokens htok hj
-  · -- (c) TokensPresenceAtDepth d (i+1) new_tokens — from the proved `tokensPresence_step`.
+  ·
     have houts_len : (evaluate_layer ((buildGridFromDLDS d).get ⟨i, hi⟩) tokens).1.length =
         (buildFormulas d).length := by
       have := evaluate_layer_outputs_length ((buildGridFromDLDS d).get ⟨i, hi⟩) tokens
       rwa [buildGridFromDLDS_get_nodes_length] at this
     exact tokensPresence_step d htree hvalid i level hj hlvl tokens hexact.2 hexact.1.1 _ houts_len
 
-/-- Exact step with the certificate replaced by structural descent coherence. -/
+/--  Exact step with the certificate replaced by structural descent coherence.  -/
 lemma coherent_step_exact_of_descent_coherent
     (d : Graph) (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d)
     (hdesc :
@@ -859,7 +836,7 @@ lemma coherent_step_exact_of_descent_coherent
       rwa [buildGridFromDLDS_get_nodes_length] at this
     exact tokensPresence_step d htree hvalid i level hj hlvl tokens hexact.2 hexact.1.1 _ houts_len
 
-/-- Exact propagation step parameterized by next-layer coherence. -/
+/--  Exact propagation step parameterized by next-layer coherence.  -/
 lemma coherent_step_exact_of_next_coherence
     (d : Graph) (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d)
     (i level : Nat) (hi : i < (buildGridFromDLDS d).length)
@@ -894,9 +871,11 @@ private lemma formula_implication_ne_left (a b : Formula) : Formula.implication 
   | implication a1 a2 ih1 _ =>
       exact ih1 a2 (Formula.implication.inj h).1
 
-/-- Route fact for the major-carrier invariant: at a destination `⊃E`, the
+/--
+ Route fact for the major-carrier invariant: at a destination `⊃E`, the
     major premise is not the minor, so the carrier tail follows the conclusion
-    route from the elimination node. -/
+    route from the elimination node.
+-/
 lemma routeFrom_major_tail_continues
     (d : Graph) (formulas : List Formula) (fuel : Nat)
     (φ : Formula) (v : Vertex) (e : Deduction) (es : List Deduction)
@@ -917,8 +896,10 @@ lemma routeFrom_major_tail_continues
   rw [hmajor, hmaj_shape] at hminorEq
   exact formula_implication_ne_left minor.START.FORMULA e.END.FORMULA hminorEq
 
-/-- At an `⊃E` node, the major premise uses slot 0 and the minor premise uses
-    slot 1. -/
+/--
+ At an `⊃E` node, the major premise uses slot 0 and the minor premise uses
+    slot 1.
+-/
 lemma slotForEdge_major_minor_distinct (d : Graph)
     (w : Vertex) (major minor : Deduction)
     (hclass : classifyRule? w d = some (DLDSRuleClass.elim major minor)) :
@@ -1011,7 +992,7 @@ lemma inputLabelForEdge_decodes_elim_minor
   · rfl
   · exact hslots.2
 
-/-- Generic projection: `TokensExactAlong → TokensMatchAlong`. -/
+/--  Generic projection: `TokensExactAlong → TokensMatchAlong`.  -/
 lemma exactAlong_implies_matchAlong_aux (d : Graph) (nl : Nat) :
     ∀ (layers : List (GridLayer (buildFormulas d).length)) (depth level : Nat)
       (tokens : List (Token (buildFormulas d).length)),
@@ -1043,7 +1024,7 @@ private lemma List.get_zero_eq_getD_zero {α : Type*}
   | nil => simp at h
   | cons x xs => rfl
 
-/-- Exactness along the evaluator descent. -/
+/--  Exactness along the evaluator descent.  -/
 lemma tokens_exact_along (d : Graph)
     (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d)
     (hcert : routeCoherentB d = true) :
@@ -1131,8 +1112,10 @@ lemma tokens_exact_along (d : Graph)
     hstep 0 (nl - 1) hgrid_nonempty
       (initialize_tokens (initialVectorsFromDLDS d) nl) rfl htok0 hheadExact
 
-/-- `tokens_exact_along` with the route-coherence certificate derived from the
-    structural descent-coherence theorem, not assumed. -/
+/--
+ `tokens_exact_along` with the route-coherence certificate derived from the
+    structural descent-coherence theorem, not assumed.
+-/
 lemma tokens_exact_along_of_descent_coherent (d : Graph)
     (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d)
     (hdesc :
@@ -1147,7 +1130,7 @@ lemma tokens_exact_along_of_descent_coherent (d : Graph)
       (buildGridFromDLDS d) := by
   exact tokens_exact_along d htree hvalid (routeCoherentB_of_layer_props d hdesc)
 
-/-- Exactness implies the node-match invariant. -/
+/--  Exactness implies the node-match invariant.  -/
 lemma tokens_exact_implies_match_along (d : Graph) :
     TokensExactAlong d ((buildGridFromDLDS d).length)
       0
@@ -1161,7 +1144,8 @@ lemma tokens_exact_implies_match_along (d : Graph) :
   intro h
   exact exactAlong_implies_matchAlong_aux d _ (buildGridFromDLDS d) 0 _ _ h
 
-/-- Along the evaluator descent induced by `pathsFromDLDS d`, every nonempty
+/--
+ Along the evaluator descent induced by `pathsFromDLDS d`, every nonempty
     token group currently present at a single grid column matches one decoded
     rule and fills that rule's slots exactly once; empty columns are permitted.
     This intentionally covers padding/repetition layers as well as logical DLDS
@@ -1169,7 +1153,8 @@ lemma tokens_exact_implies_match_along (d : Graph) :
 
     Assembly: `coherent_base` gives layer 0; `coherent_step` (+ induction)
     carries coherence down every layer; wrapping into `TokensMatchAlong`'s
-    recursive shape closes the goal. -/
+    recursive shape closes the goal.
+-/
 lemma tokens_at_node_match_one_rule (d : Graph)
     (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d)
     (hcert : routeCoherentB d = true) :
@@ -1193,18 +1178,19 @@ lemma tokens_at_node_match_one_rule_of_descent_coherent (d : Graph)
   tokens_exact_implies_match_along d
     (tokens_exact_along_of_descent_coherent d htree hvalid hdesc)
 
-/-- Bridge 1: `nodeError = false` on a token group implies the `evaluate_node` error
+/--
+ Bridge 1: `nodeError = false` on a token group implies the `evaluate_node` error
     flag is also `false`.  Follows because the `else if nodeError` branch is bypassed
-    and `selectedRuleIndex?` succeeds (decode can't fail when nodeError is false). -/
+    and `selectedRuleIndex?` succeeds (decode can't fail when nodeError is false).
+-/
 private lemma evaluate_node_snd_false_of_noError {n : Nat}
     (cnode : CircuitNode n) (incoming : NodeIncoming) (toks : List (Token n))
     (h : nodeError cnode incoming toks = false) :
     (evaluate_node cnode incoming toks).2 = false := by
   simp only [evaluate_node]
   cases hemp : toks.isEmpty
-  · -- non-empty case: `else if nodeError` is false, so we reach `match selectedRuleIndex?`
+  ·
     simp only [Bool.false_eq_true, ↓reduceIte, h]
-    -- selectedRuleIndex? must be `some` because decode succeeds when nodeError = false
     suffices hs : ∃ r, selectedRuleIndex? incoming toks = some r by
       obtain ⟨r, hr⟩ := hs; simp [hr]
     cases toks with
@@ -1218,8 +1204,10 @@ private lemma evaluate_node_snd_false_of_noError {n : Nat}
         | some triple => exact ⟨triple.1, by simp⟩
   · simp   -- isEmpty = true → snd = false immediately
 
-/-- Bridge 2: when all columns of a DLDS grid layer have `nodeError = false`,
-    `evaluate_layer` reports no error. -/
+/--
+ Bridge 2: when all columns of a DLDS grid layer have `nodeError = false`,
+    `evaluate_layer` reports no error.
+-/
 private lemma evaluate_layer_snd_false_of_noError_DLDS (d : Graph)
     (i : Nat) (hi : i < (buildGridFromDLDS d).length)
     (tokens : List (Token (buildFormulas d).length))
@@ -1263,8 +1251,10 @@ private lemma evaluate_layer_snd_false_of_noError_DLDS (d : Graph)
     (tokens.filter (fun t => t.current_column = col_idx)) hnodeErr'
   simpa [List.getElem!_eq_getElem?_getD, Bool.not_eq_true] using hev
 
-/-- General layer version of the previous bridge, parameterized by the only
-    shape fact `evaluate_layer` needs: every node column has an incoming entry. -/
+/--
+ General layer version of the previous bridge, parameterized by the only
+    shape fact `evaluate_layer` needs: every node column has an incoming entry.
+-/
 private lemma evaluate_layer_snd_false_of_noError {n : Nat}
     (layer : GridLayer n)
     (tokens : List (Token n))
@@ -1307,8 +1297,10 @@ private lemma evaluate_layer_snd_false_of_noError {n : Nat}
     (tokens.filter (fun t => t.current_column = col_idx)) hnodeErr'
   simpa [List.getElem!_eq_getElem?_getD, Bool.not_eq_true] using hev
 
-/-- General: `NodeErrorFalseAlong` follows from `TokensMatchAlong` by
-    `coherentLayer_implies_noError` at each step. -/
+/--
+ General: `NodeErrorFalseAlong` follows from `TokensMatchAlong` by
+    `coherentLayer_implies_noError` at each step.
+-/
 private lemma NodeErrorFalseAlong_of_TokensMatchAlong {n : Nat}
     (paths : PathInput) (nl : Nat) :
     ∀ level tokens (layers : List (GridLayer n)),
@@ -1321,11 +1313,13 @@ private lemma NodeErrorFalseAlong_of_TokensMatchAlong {n : Nat}
       obtain ⟨hcoh, hrest⟩ := hmatch
       exact ⟨coherentLayer_implies_noError layer tokens hcoh, ih _ _ hrest⟩
 
-/-- Bridge 3: `TokensMatchAlong` ⟹ `NoLayerError`.
+/--
+ Bridge 3: `TokensMatchAlong` ⟹ `NoLayerError`.
     Connection: `TokensCoherentAtLayer` → `nodeError = false` (`coherentLayer_implies_noError`)
     → `evaluate_layer.snd = false` (`evaluate_layer_snd_false_of_noError`, which needs the
     per-layer `incoming.length = nodes.length` hypothesis `hlen` to align `incoming[col]!`
-    with `.get ⟨col, _⟩`). Induction mirrors the `NoLayerError` recursion. -/
+    with `.get ⟨col, _⟩`). Induction mirrors the `NoLayerError` recursion.
+-/
 private lemma NoLayerError_of_TokensMatchAlong_DLDS (d : Graph) :
     ∀ (level : Nat) (tokens : List (Token (buildFormulas d).length))
       (layers : List (GridLayer (buildFormulas d).length)),
@@ -1346,7 +1340,7 @@ private lemma NoLayerError_of_TokensMatchAlong_DLDS (d : Graph) :
       exact evaluate_layer_snd_false_of_noError layer tokens hhead_len
         (coherentLayer_implies_noError layer tokens hcoh)
 
-/-- Combining the bridges: `TokensMatchAlong` ⟹ `NodeErrorFalseAlong ∧ NoLayerError`. -/
+/--  Combining the bridges: `TokensMatchAlong` ⟹ `NodeErrorFalseAlong ∧ NoLayerError`.  -/
 lemma nodeError_false_along_descent (d : Graph)
     (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d)
     (hcert : routeCoherentB d = true) :
@@ -1384,9 +1378,11 @@ lemma nodeError_false_along_descent_of_descent_coherent (d : Graph)
   exact nodeError_false_along_descent d htree hvalid
     (routeCoherentB_of_layer_props d hdesc)
 
-/-- **Per-evaluation no-conflict**. With semantics (c) the
+/--
+ **Per-evaluation no-conflict**. With semantics (c) the
     detector is real again, so this is no longer a one-line consequence of
-    one-hot activation. -/
+    one-hot activation.
+-/
 lemma tree_routing_unique (d : Graph) (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d)
     (hcert : routeCoherentB d = true) :
     NoLayerError (pathsFromDLDS d) ((buildGridFromDLDS d).length)
@@ -1408,9 +1404,11 @@ lemma tree_routing_unique_of_descent_coherent (d : Graph)
       (buildGridFromDLDS d) := by
   exact (nodeError_false_along_descent_of_descent_coherent d htree hvalid hdesc).2
 
-/-- **Structural sublemma**: the DLDS-derived path on a simple tree produces no
+/--
+ **Structural sublemma**: the DLDS-derived path on a simple tree produces no
     routing conflict, so `had_error = false`. Reduced to `tree_routing_unique` via
-    the glue lemma. -/
+    the glue lemma.
+-/
 lemma no_routing_error (d : Graph) (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d)
     (hcert : routeCoherentB d = true) :
     PathHasNoRoutingError (pathsFromDLDS d) (buildGridFromDLDS d)
@@ -1436,14 +1434,14 @@ lemma no_routing_error_of_descent_coherent (d : Graph)
       (initialVectorsFromDLDS d) := by
   exact no_routing_error d htree hvalid (routeCoherentB_of_layer_props d hdesc)
 
-/-- Executable check that the evaluated goal vector is all-false. -/
+/--  Executable check that the evaluated goal vector is all-false.  -/
 def dischargedB (d : Graph) : Bool :=
   match (get_eval_result (buildGridFromDLDS d) (initialVectorsFromDLDS d)
           (pathsFromDLDS d)).1[goalColumn d]? with
   | none => true
   | some v => v.toList.all (fun b => !b)
 
-/-- The executable discharge check implies semantic discharge. -/
+/--  The executable discharge check implies semantic discharge.  -/
 lemma discharge (d : Graph) (_htree : IsTreeDLDS d) (_hvalid : ValidDLDS d)
     (hdis : dischargedB d = true) :
     AllAssumptionsDischarged (pathsFromDLDS d) (buildGridFromDLDS d)
@@ -1468,20 +1466,24 @@ lemma discharge (d : Graph) (_htree : IsTreeDLDS d) (_hvalid : ValidDLDS d)
     simpa using hb
   · exact Or.inl (not_lt.mp hg)
 
-/-- **Tree bridge (forward)**: a valid tree DLDS yields genuine circuit acceptance
+/--
+ **Tree bridge (forward)**: a valid tree DLDS yields genuine circuit acceptance
     of its extracted path. In particular this implies
     `evaluateDLDS d (pathsFromDLDS d) (goalColumn d) = true` (via
     `dlds_evaluation_complete`), i.e. the DLDS-derived path is a genuine,
-    non-erroring witness of the paper's global Accept — not a vacuous / conflict
-    acceptance. -/
+    non-erroring witness of the paper's global Accept ; not a vacuous / conflict
+    acceptance.
+-/
 theorem tree_bridge_forward (d : Graph) (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d)
     (hcert : routeCoherentB d = true) (hdis : dischargedB d = true) :
     GenuinelyAccepts d (pathsFromDLDS d) (goalColumn d) :=
   ⟨no_routing_error d htree hvalid hcert, discharge d htree.1 hvalid hdis⟩
 
-/-- Forward bridge with route coherence supplied structurally (`hdesc`) rather
+/--
+ Forward bridge with route coherence supplied structurally (`hdesc`) rather
     than by the `routeCoherentB` certificate.  The discharge certificate remains
-    intentionally unchanged for the later discharge phase. -/
+    intentionally unchanged for the later discharge phase.
+-/
 theorem tree_bridge_forward_of_descent_coherent
     (d : Graph) (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d)
     (hdesc :
@@ -1495,15 +1497,13 @@ theorem tree_bridge_forward_of_descent_coherent
     discharge d htree.1 hvalid hdis⟩
 
 /-!
-## Simple-tree route-coherence lemmas
-
 The forward bridge `tree_bridge_forward` currently uses two decidable
 certificates: `routeCoherentB d = true` (per-slot carrier coherence) and
 `dischargedB d = true` (goal vector all-false).
 -/
 
 
-/-- A hypothesis column is its own principal carrier. -/
+/--  A hypothesis column is its own principal carrier.  -/
 lemma principalCarrierForSourceColumn?_hyp (d : Graph)
     (col : Nat) (v : Vertex)
     (hsrc : sourceNodeAtColumn? d col = some v)
@@ -1569,7 +1569,6 @@ lemma pathsFromDLDS_step_principal_zero (d : Graph)
     hprev, hsteps, hstep0, htarget, htriple⟩ :=
     routeStateAfter_live_succ (pathsFromDLDS d) (by simpa using hstep)
   cases htriple
-  -- At depth zero, any live token is at its own origin column.
   by_cases hpath : origin < (pathsFromDLDS d).length
   · simp [routeStateAfter, hpath] at hprev
     rcases hprev with ⟨rfl, _hprevSource, _hprevLabel⟩
@@ -1618,9 +1617,11 @@ lemma pathsFromDLDS_step_principal_zero (d : Graph)
               (by simpa [hsteps_eq] using hstep0) htarget)
   · simp [routeStateAfter, hpath] at hprev
 
-/-- General delay/self-loop replay: a path whose entry begins with `D` copies of
+/--
+ General delay/self-loop replay: a path whose entry begins with `D` copies of
     the self-loop step `(origin+1, 0)` keeps the route resting at its own column
-    through the first `D` depths. -/
+    through the first `D` depths.
+-/
 lemma routeStateAfter_replicate_prefix_self
     (paths : PathInput) (origin D : Nat) (rest : List (Nat × Nat))
     (horigin : origin < paths.length)
@@ -1643,9 +1644,11 @@ lemma routeStateAfter_replicate_prefix_self
       simp only [routeStateAfter, hprev, hentry, hstepk]
       simp
 
-/-- `principalCarrierFormula?` is monotone in fuel for `some` results: extra fuel
+/--
+ `principalCarrierFormula?` is monotone in fuel for `some` results: extra fuel
     never changes a settled principal-carrier formula. Used to reconcile the
-    `d.NODES.length + 1` fuel of `principalCarrierColumn?` across one spine step. -/
+    `d.NODES.length + 1` fuel of `principalCarrierColumn?` across one spine step.
+-/
 lemma principalCarrierFormula?_fuel_mono (d : Graph) :
     ∀ (fuel : Nat) (v : Vertex) (φ : Formula),
       principalCarrierFormula? d fuel v = some φ →
@@ -2670,8 +2673,10 @@ lemma carrier_preservation_step (d : Graph)
           (replicate_zero_get_nonzero_false
             (by simpa [hsteps_eq] using hstep) htarget)
 
-/-- Every positive-depth live step is carried by the principal carrier of its
-    recorded source column. -/
+/--
+ Every positive-depth live step is carried by the principal carrier of its
+    recorded source column.
+-/
 lemma pathsFromDLDS_step_principal (d : Graph)
     (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d) :
     ∀ (depth origin col src lbl : Nat),
@@ -2690,11 +2695,13 @@ lemma pathsFromDLDS_step_principal (d : Graph)
         ih origin src prevSource prevLbl hprev
       exact carrier_preservation_step d htree hvalid hprev hstep hPrevPrincipal
 
-/-- Positive-depth arrival form of `pathsFromDLDS_step_principal`.
+/--
+ Positive-depth arrival form of `pathsFromDLDS_step_principal`.
 
 This is the route-level source/principal fact needed by the no-extra-carrier
 argument: once a token has taken at least one live step, its recorded
-`source_column` is carried by exactly that origin. -/
+`source_column` is carried by exactly that origin.
+-/
 lemma arriving_state_positive_principal_source (d : Graph)
     (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d)
     {depth origin col src lbl : Nat}
@@ -2711,10 +2718,12 @@ lemma arriving_state_positive_principal_source (d : Graph)
 
 
 
-/-- If vertex `v` has an outgoing edge `e` to vertex `w`, and `φ = v.FORMULA`,
+/--
+ If vertex `v` has an outgoing edge `e` to vertex `w`, and `φ = v.FORMULA`,
     then `inputLabelForEdge d formulas φ w` decodes to source `idxOf φ` with the
     rule index pinned to `w`'s `ruleIndexForNode?` (the rule applied AT column `w`).
-    Exposing the rule index is what makes `decodedRuleAtColumn?` unique per column. -/
+    Exposing the rule index is what makes `decodedRuleAtColumn?` unique per column.
+-/
 private lemma inputLabelForEdge_decodes_to_src (d : Graph) (hvalid : ValidDLDS d)
     {v w : Vertex} {e : Deduction} {φ : Formula} {ruleIdx : Nat}
     (_hv : v ∈ d.NODES) (hw : w ∈ d.NODES)
@@ -2763,10 +2772,12 @@ private lemma inputLabelForEdge_decodes_to_src (d : Graph) (hvalid : ValidDLDS d
               rw [← hφmin]
               exact inputLabelForEdge_decodes_elim_minor d w major minor ruleIdx hclass hsel
 
-/-- First step of `routeFrom` from `φ`: its label decodes to source = `idxOf φ`,
+/--
+ First step of `routeFrom` from `φ`: its label decodes to source = `idxOf φ`,
     with the rule index pinned to the landing node's `ruleIndexForNode?` (the node
     at `col`). Exposes the landing node `w` so callers can identify the column's
-    rule uniformly across arrivals. -/
+    rule uniformly across arrivals.
+-/
 private lemma routeFrom_step0_label_decode_src (d : Graph) (hvalid : ValidDLDS d)
     (hinj : InjFormulas d) :
     ∀ (fuel : Nat) (φ : Formula) (col lbl : Nat),
@@ -2811,7 +2822,6 @@ private lemma routeFrom_step0_label_decode_src (d : Graph) (hvalid : ValidDLDS d
               have heout : e ∈ get_rule.outgoing v d := by rw [hout]; simp
               have hw : e.END ∈ d.NODES :=
                 (hvalid.hygiene.2.1 (mem_outgoing_mem_edges v d heout)).2
-              -- col's node is e.END (by injectivity)
               have hsrcNode : sourceNodeAtColumn? d ((buildFormulas d).idxOf e.END.FORMULA) =
                   some e.END := sourceNodeAtColumn?_idxOf_of_mem d hinj hw
               obtain ⟨ruleIdx, hsel⟩ := ruleIndexForNode?_isSome_of_valid_node d hvalid hw
@@ -2829,8 +2839,10 @@ private lemma routeFrom_step0_label_decode_src (d : Graph) (hvalid : ValidDLDS d
               rw [hgetD]
               exact hdec
 
-/-- Consecutive steps of `routeFrom`: label at step `j+1` decodes to source =
-    target of step `j`, with rule index pinned to the landing node at `col`. -/
+/--
+ Consecutive steps of `routeFrom`: label at step `j+1` decodes to source =
+    target of step `j`, with rule index pinned to the landing node at `col`.
+-/
 private lemma routeFrom_consec_label_decode_src (d : Graph) (hvalid : ValidDLDS d)
     (hinj : InjFormulas d) :
     ∀ (fuel : Nat) (φ : Formula) (j src col prevLbl lbl : Nat),
@@ -2881,7 +2893,7 @@ private lemma routeFrom_consec_label_decode_src (d : Graph) (hvalid : ValidDLDS 
               by_cases hminor : (match classifyRule? e.END d with
                   | some (DLDSRuleClass.elim _ minor) => decide (φ = minor.START.FORMULA)
                   | _ => false) = true
-              · -- minor-stop: tail = replicate fuel (0,0)
+              ·
                 have hr :=
                   routeFrom_minor_match_tail_replicate d (buildFormulas d) fuel
                     φ v e es hfind hout hminor
@@ -2900,7 +2912,7 @@ private lemma routeFrom_consec_label_decode_src (d : Graph) (hvalid : ValidDLDS 
                       simpa using hstep'
                     rw [List.getElem?_replicate] at this
                     split at this <;> simp at this
-              · -- non-minor: tail = routeFrom fuel e.END.FORMULA
+              ·
                 have hnotminor :
                     (match classifyRule? e.END d with
                     | some (DLDSRuleClass.elim _ minor) => decide (φ = minor.START.FORMULA)
@@ -2914,7 +2926,6 @@ private lemma routeFrom_consec_label_decode_src (d : Graph) (hvalid : ValidDLDS 
                     φ v e es hfind hout hnotminor
                 cases j with
                 | zero =>
-                    -- step 0 is head; src = idxOf e.END.FORMULA; step 1 = routeFrom[0]
                     have hsrc : src = (buildFormulas d).idxOf e.END.FORMULA := by
                       have hhead : some ((buildFormulas d).idxOf e.END.FORMULA + 1,
                             inputLabelForEdge d (buildFormulas d) φ e.END) =
@@ -2946,11 +2957,13 @@ private lemma routeFrom_consec_label_decode_src (d : Graph) (hvalid : ValidDLDS 
                       simpa [Nat.succ_eq_add_one, Nat.add_assoc] using hnext''
                     exact ih e.END.FORMULA j src col prevLbl lbl hstep' hnext'
 
-/-- **G2 core — `route_label_decodes_node`.**  At any live route state at
+/--
+ **G2 core ; `route_label_decodes_node`.**  At any live route state at
     `depth > 0`, the carried label decodes at column `col` to a triple whose rule
     index is pinned to the rule applied at the column's node (`ruleIndexForNode?`)
     and whose source is exactly the recorded `src`. Exposing the landing node `w`
-    is what makes `decodedRuleAtColumn?` uniform across all arrivals at a column. -/
+    is what makes `decodedRuleAtColumn?` uniform across all arrivals at a column.
+-/
 lemma route_label_decodes_node (d : Graph)
     (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d)
     {depth origin col src lbl : Nat} {φ : Formula}
@@ -2963,7 +2976,6 @@ lemma route_label_decodes_node (d : Graph)
       decodeInputLabel (buildIncomingMapForFormula (buildFormulas d) φ) lbl =
         some (ruleIdx, slot, src) := by
   obtain ⟨n, rfl⟩ : ∃ n, depth = n + 1 := ⟨depth - 1, by omega⟩
-  -- Peel one live step
   obtain ⟨cur_n, _src_n, _lbl_n, steps, target_n, inputLabel_n,
     hprev, hsteps, hstep_n, htarget_n, htriple⟩ :=
     routeStateAfter_live_succ (pathsFromDLDS d) hstate
@@ -3007,7 +3019,7 @@ lemma route_label_decodes_node (d : Graph)
             some (List.replicate D (origin + 1, 0) ++ rest) := by
           rw [hsteps]; simp [hsteps_eq, hidx_origin]
         by_cases hdelay : n < D
-        · -- Delay region: step n = (origin+1, 0) → col = origin, lbl = 0, rep rule
+        ·
           have hstep_delay : steps[n]? = some (origin + 1, 0) := by
             rw [hsteps_origin, List.getElem?_append_left (by simpa using hdelay),
                 List.getElem?_replicate]; simp [hdelay]
@@ -3020,11 +3032,9 @@ lemma route_label_decodes_node (d : Graph)
               (pathsFromDLDS d) origin D rest horiginPath hentry_path n (by omega)
             rw [hprev] at hself
             exact (congrArg (fun p : Nat × Nat × Nat => p.1) (Option.some.inj hself))
-          -- φ = φ_origin (both are the formula at col = origin)
           have hφφ : φ = φ_origin := by
             have : (buildFormulas d)[col]? = some φ_origin := by rw [hcol_orig]; exact hφ_origin
             exact Option.some.inj (hcol.symm.trans this)
-          -- col's node is the hypothesis v
           have hidxv : (buildFormulas d).idxOf v.FORMULA = col := by
             rw [hvφ, hidx_origin]; exact hcol_orig.symm
           have hsrcNode : sourceNodeAtColumn? d col = some v := by
@@ -3039,17 +3049,15 @@ lemma route_label_decodes_node (d : Graph)
             unfold ruleIndexForNode?
             rw [hclass, hvφ']
             rw [if_pos hincLen]
-          -- decode lbl=0 = (last, 0, idxOf φ) and idxOf φ = col = src
           have hdec0 := decodeInputLabel_zero_buildIncomingMapForFormula (buildFormulas d) φ
           have hidxφ : (buildFormulas d).idxOf φ = col := by
             rw [hφφ, hidx_origin]; exact hcol_orig.symm
           refine ⟨(buildIncomingMapForFormula (buildFormulas d) φ).length - 1, 0, v,
             hsrcNode, hsel, ?_⟩
           rw [hlbl_zero, hdec0, hidxφ]
-          -- src = col (= cur_n = origin = col)
           have : src = col := by rw [hsrc_eq, hsrc_delay, hcol_orig]
           rw [this]
-        · -- routeFrom region (n ≥ D)
+        ·
           have hge : D ≤ n := by omega
           have hstep_rest : rest[n - D]? = some (col + 1, lbl) := by
             have hright := getElem?_append_right_sub
@@ -3059,7 +3067,7 @@ lemma route_label_decodes_node (d : Graph)
             rw [hright] at hstep_col
             simpa [List.length_replicate] using hstep_col
           by_cases hn_D : n = D
-          · -- First routeFrom step: rest[0], src = origin = idxOf φ_origin
+          ·
             have hrest0 : rest[0]? = some (col + 1, lbl) := by
               simpa [hn_D, Nat.sub_self] using hstep_rest
             have hsrc_orig : cur_n = origin := by
@@ -3077,11 +3085,10 @@ lemma route_label_decodes_node (d : Graph)
               routeFrom_step0_label_decode_src d hvalid htree.2 _ φ_origin col lbl hrest0
             rw [hgetD_col] at hdec'
             refine ⟨ruleIdx', slot', w', hsrcNode', hsel', ?_⟩
-            -- decode = (ruleIdx', slot', idxOf φ_origin); idxOf φ_origin = origin = cur_n = src
             have : (buildFormulas d).idxOf φ_origin = src := by
               rw [hidx_origin, ← hsrc_orig, ← hsrc_eq]
             rw [this] at hdec'; exact hdec'
-          · -- Later routeFrom step: rest[n-D-1] and rest[n-D]
+          ·
             have hn_gt_D : D < n := by omega
             have hn_pos : 0 < n := by omega
             obtain ⟨cur_nm1, _src_nm1, _lbl_nm1, steps2, target_nm1, inputLabel_nm1,
@@ -3112,19 +3119,20 @@ lemma route_label_decodes_node (d : Graph)
                 hstep_nm1_rest (by rwa [show n - D - 1 + 1 = n - D from by omega])
             rw [hgetD_col] at hdec'
             refine ⟨ruleIdx', slot', w', hsrcNode', hsel', ?_⟩
-            -- decode = (ruleIdx', slot', cur_n); cur_n = src
             rw [hsrc_eq]; exact hdec'
-      · -- Non-hypothesis: steps = replicate zeros → contradiction
+      ·
         have hsteps_eq : steps = List.replicate ((buildGridFromDLDS d).length - 1) (0, 0) := by
           rw [hentry] at hsteps
           exact (Option.some.inj (by simpa [hfind, hhyp] using hsteps)).symm
         exact False.elim (replicate_zero_get_nonzero_false
           (by simpa [hsteps_eq] using hstep_col) (by omega))
 
-/-- **G2 — `route_label_source_agree`.**  At any live route state, if the label
+/--
+ **G2 ; `route_label_source_agree`.**  At any live route state, if the label
     `lbl` decodes at column `col` to `(ruleIdx, slot, decodedSrc)`, then
     `decodedSrc = src`. Depth 0 is the rep self-token; depth > 0 reuses
-    `route_label_decodes_node`. -/
+    `route_label_decodes_node`.
+-/
 lemma route_label_source_agree (d : Graph)
     (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d)
     {depth origin col src lbl ruleIdx slot decodedSrc : Nat} {φ : Formula}
@@ -3161,9 +3169,11 @@ lemma route_label_source_agree (d : Graph)
       simp only [Prod.mk.injEq] at heq
       exact heq.2.2
 
-/-- For a non-hypothesis node `w`, the applied rule index is never the final
+/--
+ For a non-hypothesis node `w`, the applied rule index is never the final
     (repetition) index `length - 1`: intro sits at 0 with `length ≥ 2`, and elim
-    sits at an entry of width 2 whereas the repetition entry has width 1. -/
+    sits at an entry of width 2 whereas the repetition entry has width 1.
+-/
 lemma ruleIndexForNode?_succ_ne_length_of_nonhyp (d : Graph) {w : Vertex} {r : Nat}
     (hnhyp : classifyRule? w d ≠ some DLDSRuleClass.hypothesis)
     (hsel : ruleIndexForNode? d (buildFormulas d) w = some r) :
@@ -3202,21 +3212,24 @@ lemma ruleIndexForNode?_succ_ne_length_of_nonhyp (d : Graph) {w : Vertex} {r : N
               rw [hentry2] at hrep1
               exact absurd hrep1 (by decide)
 
-/-- If a node's applied rule index is the final (repetition) index, the node is a
-    hypothesis. Contrapositive of `ruleIndexForNode?_succ_ne_length_of_nonhyp`. -/
+/--
+ If a node's applied rule index is the final (repetition) index, the node is a
+    hypothesis. Contrapositive of `ruleIndexForNode?_succ_ne_length_of_nonhyp`.
+-/
 lemma classifyRule?_hyp_of_ruleIndex_last (d : Graph) {w : Vertex}
     (hsel : ruleIndexForNode? d (buildFormulas d) w =
       some ((buildIncomingMapForFormula (buildFormulas d) w.FORMULA).length - 1)) :
     classifyRule? w d = some DLDSRuleClass.hypothesis := by
   by_contra hnhyp
   have hne := ruleIndexForNode?_succ_ne_length_of_nonhyp d hnhyp hsel
-  -- ruleIdx = length - 1, and length > 0 (incoming nonempty), so ruleIdx + 1 = length
   have hpos : 0 < (buildIncomingMapForFormula (buildFormulas d) w.FORMULA).length := by
     unfold buildIncomingMapForFormula; cases w.FORMULA <;> simp
   exact hne (by omega)
 
-/-- **Rule uniqueness per column.** At `depth > 0`, every origin arriving at `col`
-    pins `decodedRuleAtColumn? d depth col` to the rule index of the column's node. -/
+/--
+ **Rule uniqueness per column.** At `depth > 0`, every origin arriving at `col`
+    pins `decodedRuleAtColumn? d depth col` to the rule index of the column's node.
+-/
 lemma decodedRuleAtColumn?_eq_node (d : Graph)
     (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d)
     {depth col origin ruleIdx : Nat} {wv : Vertex}
@@ -3227,15 +3240,13 @@ lemma decodedRuleAtColumn?_eq_node (d : Graph)
     decodedRuleAtColumn? d depth col = some ruleIdx := by
   have horigin := mem_arrivingOriginsAt_origin_lt hmem
   obtain ⟨src, lbl, hstate⟩ := mem_arrivingOriginsAt_state hmem
-  -- the find? predicate holds for `origin`
   have hpred_origin :
       (fun o => match routeStateAfter (pathsFromDLDS d) o depth with
         | some (current, _, _) => current == col
         | none => false) origin = true := by
     simp only; rw [hstate]; simp
-  -- Case on the result value, mirroring the clean `decodedRuleAtColumn?_some_route` style.
   rcases hdc : decodedRuleAtColumn? d depth col with _ | r
-  · -- none is impossible: `origin` qualifies for `find?`, and its decode succeeds.
+  · -- The origin supplies a successful witness for `find?`.
     exfalso
     rcases hfs : (List.range (buildFormulas d).length).find? (fun o =>
         match routeStateAfter (pathsFromDLDS d) o depth with
@@ -3280,27 +3291,27 @@ lemma decodedRuleAtColumn?_eq_node (d : Graph)
           simp [hstate0, hφ, hdec0]
         rw [hsomeDec] at hdc
         contradiction
-  · -- some r: identify r with `ruleIdx` via `_some_route` + rule uniqueness.
+  ·
     obtain ⟨o0, s0, l0, φ0, slot0, src0, ho0lt, hstate0, hφ0, hdec0⟩ :=
       decodedRuleAtColumn?_some_route hdc
     obtain ⟨r', slot', w', hw', hsel', hdec'⟩ :=
       route_label_decodes_node d htree hvalid hpos hstate0 hφ0
-    -- both decode the same label: r = r'
     have hrr' : r = r' := by
       have hh := hdec0.symm.trans hdec'
       simp only [Option.some.injEq, Prod.mk.injEq] at hh
       exact hh.1
-    -- w' is col's node = wv, so r' = ruleIdx
     have hw'eq : w' = wv := Option.some.inj (hw'.symm.trans hw)
     have hr'rule : r' = ruleIdx := by
       rw [hw'eq] at hsel'; exact Option.some.inj (hsel'.symm.trans hsel)
     rw [hrr', hr'rule]
 
-/-- At `depth > 0`, every origin arriving
+/--
+ At `depth > 0`, every origin arriving
     at `col` lies in the expected carrier list of the column's decoded rule.
     Non-rep slots: the decoded source is a real premise column and `origin` is its
     principal carrier (`mem_expectedCarrierOriginsForRule?_of_nonrep_source`). Rep
-    slot: the column is a hypothesis carrying itself, so `origin = col ∈ [col]`. -/
+    slot: the column is a hypothesis carrying itself, so `origin = col ∈ [col]`.
+-/
 lemma no_extra_origin (d : Graph)
     (htree : IsSimpleTreeDLDS d) (hvalid : ValidDLDS d)
     {depth col origin ruleIdx : Nat} {expected : List Nat}
@@ -3382,4 +3393,7 @@ lemma carrier_arrival_from_expected_rep (d : Graph)
   subst origin
   rwa [horigin0_col] at harr0
 
+
+#print axioms tree_bridge_forward
+#print axioms tree_bridge_forward_of_descent_coherent
 end Semantic

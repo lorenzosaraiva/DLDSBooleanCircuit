@@ -16,6 +16,12 @@ def exClosedAA : Graph :=
   let c : Vertex := Vertex.node 2 1 (#"A" >> #"A") false false []  -- conclusion A⊃A (root, level 1)
   Graph.dlds [h, c] [Deduction.edge h c 0 [#"A"]] []
 
+/-- Tiny closed DLDS for `A >> A`: one hypothesis edge and one intro root. -/
+def dClosed : Graph :=
+  let h : Vertex := Vertex.node 1 1 (#"A") true false []
+  let r : Vertex := Vertex.node 2 0 (#"A" >> #"A") false false []
+  Graph.dlds [h, r] [Deduction.edge h r 0 [#"A"]] []
+
 theorem valid_exClosedAA : ValidDLDS exClosedAA := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · -- check_dlds (manual: implicit-binder ∀ is not auto-decidable)
@@ -115,12 +121,13 @@ example : GenuinelyAccepts exClosedABA (pathsFromDLDS exClosedABA) (goalColumn e
   · exact absurd hinv hnoerr
   · exact hgood
 /-- `exClosedABA` is a simple tree DLDS (each node ≤ 1 outgoing edge; distinct
-    formulas per node; no collapse; no ancestral paths). -/
+    formulas per node; no collapse; no ancestral paths; all edges colour 0). -/
 theorem isSimpleTree_exClosedABA : IsSimpleTreeDLDS exClosedABA := by
-  refine ⟨⟨?_, ?_, ?_⟩, ?_⟩
+  refine ⟨⟨?_, ?_, ?_, ?_⟩, ?_⟩
   · intro v hv; fin_cases hv <;> native_decide
   · intro v hv; fin_cases hv <;> native_decide
   · rfl
+  · intro e he; fin_cases he <;> native_decide
   · intro u hu v hv; fin_cases hu <;> fin_cases hv <;> native_decide
 
 /-- Non-vacuity witness: the forward bridge `tree_bridge_forward` applies to
@@ -401,6 +408,7 @@ def simpleTreeB (d : Graph) : Bool :=
   d.NODES.all (fun v => decide ((get_rule.outgoing v d).length ≤ 1)) &&
   d.NODES.all (fun v => decide (v.COLLAPSED = false)) &&
   decide (d.PATHS = []) &&
+  d.EDGES.all (fun e => decide (e.COLOUR = 0)) &&
   (d.NODES.all fun u =>
     d.NODES.all fun v =>
       decide (u.FORMULA = v.FORMULA → u = v))

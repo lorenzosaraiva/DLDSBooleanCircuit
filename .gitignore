@@ -5,3 +5,4 @@
 *.cache
 overnight_progress.md
 .claude/
+/private_material/

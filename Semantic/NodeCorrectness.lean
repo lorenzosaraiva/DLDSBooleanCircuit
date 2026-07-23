@@ -147,4 +147,6 @@ theorem node_correct {n} (c : CircuitNode n)
   · exact hr0_mem
   · exact eq
 
+
+#print axioms node_correct
 end Semantic
