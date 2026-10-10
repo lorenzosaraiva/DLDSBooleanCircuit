@@ -1,3 +1,26 @@
+import Robustness.BitLocality
+import Robustness.Density
+import Robustness.ExpandedRoutes
+import Robustness.JustifiedRoutes
+import Robustness.Sanity
+import Robustness.ShapeJustification
+import Robustness.SelectedProducers.Decoder
+import Robustness.SelectedProducers.OrdinaryComponents
+import Robustness.SelectedProducers.ProvenanceDecoder
+import Robustness.SelectedProducers.Sanity
+import Robustness.SelectedProducers.SeedCompiler
+import Robustness.SelectedProducers.SeedDensity
+import Robustness.SelectedProducers.SeedSemantics
+import Robustness.SelectedProducers.Selected
+import Robustness.SelectedProducers.SingleOutput
+import Robustness.RuleCompilation.ElimCompiler
+import Robustness.RuleCompilation.ElimDensity
+import Robustness.RuleCompilation.ElimSemantics
+import Robustness.RuleCompilation.IntroCompiler
+import Robustness.RuleCompilation.IntroDensity
+import Robustness.RuleCompilation.IntroSemantics
+import Robustness.RuleCompilation.ResidualGuards
+import Robustness.RuleCompilation.Sanity
 import Certificate.Encoding.Canonical
 import Certificate.Encoding.Export
 import Robustness.Certificate.Support
@@ -464,3 +487,108 @@ set_option pp.fullNames true
 #print axioms DLDS.ValidityDecomposition.validDLDS_hc_roots_iff_declarative_hc_exists_strongCertificate
 #print axioms DLDS.ValidityDecomposition.validDLDS_hc_roots_iff_declarative_hc_flowGrid
 #print axioms DLDS.ValidityDecomposition.validDLDS_to_flowCompiledGridValid
+
+/-! Axioms of positive-route soundness and bounded Boolean rule checks. -/
+#print axioms Robustness.BitLocality.guard_failure_witness
+#print axioms Robustness.BitLocality.program_failure_witness
+#print axioms Robustness.BitLocality.coded_failure_witness
+#print axioms Robustness.BitLocality.W_logarithmic
+#print axioms Robustness.BitLocality.polynomial_denominator
+#print axioms Robustness.BitLocality.coded_failure_density
+#print axioms Robustness.BitLocality.coded_failure_inverse_polynomial
+#print axioms Robustness.expanded_stored_subset_flow
+#print axioms Robustness.flowStepFrom_mono
+#print axioms Robustness.justification_sound
+#print axioms Robustness.stored_subset_flow
+#print axioms Robustness.Sanity.valid_passes
+#print axioms Robustness.Sanity.corrupt_fails
+#print axioms Robustness.Sanity.corrupt_has_bounded_witness
+#print axioms Robustness.shapeFixed_stored_subset_flow
+#print axioms Robustness.SelectedProducers.word_roundtrip
+#print axioms Robustness.SelectedProducers.decoded_membership
+#print axioms Robustness.SelectedProducers.dependency_roundtrip
+#print axioms Robustness.SelectedProducers.routes_roundtrip
+#print axioms Robustness.SelectedProducers.header_roundtrip
+#print axioms Robustness.SelectedProducers.decodeDependency_injective
+#print axioms Robustness.SelectedProducers.decode_union
+#print axioms Robustness.SelectedProducers.decode_remove
+#print axioms Robustness.SelectedProducers.unionDependencyProgram_check
+#print axioms Robustness.SelectedProducers.selection_roundtrip
+#print axioms Robustness.SelectedProducers.pointer_roundtrip
+#print axioms Robustness.SelectedProducers.certificate_bits_roundtrip
+#print axioms Robustness.SelectedProducers.Sanity.default_listed
+#print axioms Robustness.SelectedProducers.Sanity.ancestor_listed
+#print axioms Robustness.SelectedProducers.Sanity.default_passes
+#print axioms Robustness.SelectedProducers.Sanity.ancestor_passes
+#print axioms Robustness.SelectedProducers.Sanity.dependency_fails
+#print axioms Robustness.SelectedProducers.Sanity.residual_fails
+#print axioms Robustness.SelectedProducers.Sanity.index_fails
+#print axioms Robustness.SelectedProducers.Sanity.wrong_mode_fails
+#print axioms Robustness.SelectedProducers.Sanity.dependency_witness
+#print axioms Robustness.SelectedProducers.Sanity.residual_witness
+#print axioms Robustness.SelectedProducers.Sanity.actual_seed_density
+#print axioms Robustness.SelectedProducers.atomGuard_check
+#print axioms Robustness.SelectedProducers.constantAtom_eval
+#print axioms Robustness.SelectedProducers.formulaAtom_eval
+#print axioms Robustness.SelectedProducers.pathAtom_eval
+#print axioms Robustness.SelectedProducers.formulaRepresentedB_iff
+#print axioms Robustness.SelectedProducers.targetGuards_check
+#print axioms Robustness.SelectedProducers.seed_compiler_check_eq
+#print axioms Robustness.SelectedProducers.seed_compiler_failure_eq
+#print axioms Robustness.SelectedProducers.wordWidth_positive
+#print axioms Robustness.SelectedProducers.seed_failure_witness
+#print axioms Robustness.SelectedProducers.seed_failure_density
+#print axioms Robustness.SelectedProducers.seed_failure_inverse_polynomial
+#print axioms Robustness.SelectedProducers.seed_acceptance_eq
+#print axioms Robustness.SelectedProducers.decode_dependency_represented
+#print axioms Robustness.SelectedProducers.dependency_singleton_iff
+#print axioms Robustness.SelectedProducers.decoded_path_eq_iff
+#print axioms Robustness.SelectedProducers.pick_mem
+#print axioms Robustness.SelectedProducers.chosenElim_subset
+#print axioms Robustness.SelectedProducers.chosenIntro_subset
+#print axioms Robustness.SelectedProducers.chosenMixed_subset
+#print axioms Robustness.SelectedProducers.chosenElimReseed_subset
+#print axioms Robustness.SelectedProducers.chosenIntroReseed_subset
+#print axioms Robustness.SelectedProducers.selectedRows_sound
+#print axioms Robustness.SelectedProducers.selected_implies_old
+#print axioms Robustness.SelectedProducers.selected_certificate_sound
+#print axioms Robustness.SelectedProducers.pick_thin
+#print axioms Robustness.SelectedProducers.selectedRows_atMostOne
+#print axioms Robustness.RuleCompilation.unionGuards_check
+#print axioms Robustness.RuleCompilation.elim_compiler_check_eq
+#print axioms Robustness.RuleCompilation.elim_compiler_failure_eq
+#print axioms Robustness.RuleCompilation.elim_failure_witness
+#print axioms Robustness.RuleCompilation.elim_failure_density
+#print axioms Robustness.RuleCompilation.elim_failure_inverse_polynomial
+#print axioms Robustness.RuleCompilation.ElimFrame.pair_member
+#print axioms Robustness.RuleCompilation.ElimFrame.predecessors
+#print axioms Robustness.RuleCompilation.ElimFrame.distinct
+#print axioms Robustness.RuleCompilation.elim_acceptance_eq
+#print axioms Robustness.RuleCompilation.removeGuards_check
+#print axioms Robustness.RuleCompilation.intro_compiler_check_eq
+#print axioms Robustness.RuleCompilation.intro_compiler_failure_eq
+#print axioms Robustness.RuleCompilation.intro_failure_witness
+#print axioms Robustness.RuleCompilation.intro_failure_density
+#print axioms Robustness.RuleCompilation.intro_failure_inverse_polynomial
+#print axioms Robustness.RuleCompilation.intro_acceptance_eq
+#print axioms Robustness.RuleCompilation.route_path_cons
+#print axioms Robustness.RuleCompilation.wordPredicateAtom_eval
+#print axioms Robustness.RuleCompilation.wordPairAtom_eval
+#print axioms Robustness.RuleCompilation.routeContinuable_cons
+#print axioms Robustness.RuleCompilation.continuationGuards_check
+#print axioms Robustness.RuleCompilation.consume_length
+#print axioms Robustness.RuleCompilation.consumeGuards_check
+#print axioms Robustness.RuleCompilation.Sanity.intro_empty_passes
+#print axioms Robustness.RuleCompilation.Sanity.intro_dependency_rejects
+#print axioms Robustness.RuleCompilation.Sanity.intro_consumed_head_passes
+#print axioms Robustness.RuleCompilation.Sanity.intro_corrupt_head_rejects
+#print axioms Robustness.RuleCompilation.Sanity.elim_empty_passes
+#print axioms Robustness.RuleCompilation.Sanity.elim_union_rejects
+#print axioms Robustness.RuleCompilation.Sanity.intro_nonempty_root_rejects
+#print axioms Robustness.RuleCompilation.Sanity.consumed_tail_rejects
+#print axioms Robustness.RuleCompilation.Sanity.intro_bad_fixed_lengths_reject
+#print axioms Robustness.RuleCompilation.Sanity.intro_corruption_witness
+#print axioms Robustness.RuleCompilation.Sanity.elim_corruption_witness
+#print axioms Robustness.RuleCompilation.Sanity.intro_corruption_density
+#print axioms Robustness.RuleCompilation.Sanity.elim_corruption_density
+#print axioms Robustness.SelectedProducers.seedTarget?_dependency

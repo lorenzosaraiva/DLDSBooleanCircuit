@@ -66,6 +66,14 @@ The results below hold under the assumptions stated in the linked declarations.
 | [encodedDerivation_density](ProofSearch/Grid/Counting.lean) | A certified successful assignment gives a lower bound on the fraction of assignments for which grid search succeeds. |
 | [formation_invalid_semantic_amplification](Certificate/Encoding/Canonical.lean) | Every invalid certificate has a failing check that persists on at least a 1 / A^r fraction of encodings, where A counts field choices and r bounds fields read. |
 | [missingRoute_minimumFailureWitnessSize](Robustness/AbsenceBoundary.lean) | In the abstract list model, forcing a route to remain absent requires fixing all n list entries. |
+| [selected_certificate_sound](Robustness/SelectedProducers/Selected.lean) | Pointer-justified certificates are sound under the stated structural hypotheses. |
+| [coded_failure_inverse_polynomial](Robustness/Density.lean) | A failed bounded bit check rejects at least an inverse-polynomial fraction of encodings. |
+| [intro_failure_inverse_polynomial](Robustness/RuleCompilation/IntroDensity.lean) | A misapplied introduction step, with structure and pointers fixed, fails on at least 1 / (2^23 M^11) of encodings. |
+| [elim_failure_inverse_polynomial](Robustness/RuleCompilation/ElimDensity.lean) | A misapplied elimination step, with structure and pointers fixed, fails on at least 1 / (2^23 M^11) of encodings. |
+
+## Not proved here
+
+- Robustness for mixed and reseeded rules, for corrupted structure or pointers, and for missing routes (which cannot be made local).
 
 ## Building
 
