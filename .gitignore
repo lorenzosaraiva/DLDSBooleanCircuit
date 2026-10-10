@@ -1,8 +1,1 @@
 .lake/
-*.log
-*.bak
-*.tmp
-*.cache
-overnight_progress.md
-.claude/
-/private_material/

@@ -1,184 +1,119 @@
-# DLDS Boolean Circuits in Lean
+# DLDS: verifying horizontally compressed proofs in Lean
 
-This repository contains a Lean 4 formalization of Boolean-circuit evaluation
-for dag-like derivability structures (DLDS), together with bridges from DLDS
-structure to circuit acceptance. It accompanies the LSFA paper *From Dag-Like
-Proofs to Boolean Circuits in Lean* and includes a post-publication extension
-for horizontally compressed derivations.
+Lean 4 formalization accompanying my PhD work at PUC-Rio, advised by Edward Hermann Haeusler, on checking compressed Natural Deduction proofs.
 
-## Published LSFA artifact
+Natural Deduction proofs in purely implicational minimal logic can be exponentially large. Horizontal compression (Gordeev and Haeusler) merges repeated formula occurrences into a Dag-Like Derivability Structure (DLDS) of polynomial size, whose validity is decided by Flow, a recursive computation over the whole graph. This development records Flow's routes as a certificate whose correctness reduces to local checks, and studies the verification and search problems that follow: a Boolean grid for proof search, readings of a fixed DLDS, and verification positions of a certificate. The motivating application is certifying that a graph has no Hamiltonian cycle.
 
-The published development formalizes a Boolean evaluator over DLDS path
-assignments and proves its pointwise and universally quantified correctness
-specifications. It also proves an unconditional bridge for the uncompressed
-simple-tree fragment.
+## Main results
 
-The simple-tree theorem `tree_bridge_forward` takes a valid simple-tree DLDS
-and executable route and discharge certificates, and concludes genuine circuit
-acceptance of the path extracted by `pathsFromDLDS`. Genuine acceptance
-includes absence of a routing error and discharge of the goal.
+The results below hold under the assumptions stated in the linked declarations.
 
-The published evaluator correctness results and simple-tree bridge are
-sorry-free and unconditional. Their axiom audits use no axioms beyond
-`propext`, `Classical.choice`, and `Quot.sound`.
+### Boolean evaluator
 
-## Post-publication extension
+| Theorem | Meaning |
+| --- | --- |
+| [node_correct](Evaluator/CellCorrectness.lean) | When exactly one rule is active, the Boolean node computes that rule's dependency update. |
+| [dlds_evaluation_iff](Evaluator/Grid.lean) | A path evaluates to true exactly when it is malformed, or routes correctly and leaves no open assumptions at the goal. |
+| [dlds_global_iff](Evaluator/Grid.lean) | All path assignments are accepted exactly when each is malformed or routes correctly with no open goal assumptions. |
+| [tree_bridge_forward](Evaluator/TreeCorrespondence.lean) | A valid proof tree passes the evaluator when its routing and discharge checks pass. |
 
-1. `compressed_universally_accepted'` is the compressed universal bridge. It
-   is sorry-free and conditional on eight invariants supplied by the
-   horizontal-compression construction: `EDGES.Nodup`,
-   `OneEdgePerColourPerNode`, `RouteFanUnique`, `FaithfulDecoration`,
-   `RouteHeadCoverage`, `LevelFormulaUnique`, `ReseedFree`, and
-   `FlowTailClosure`. Its remaining computational premise is the executable
-   certificate `dischargedMultiB`. The counterexample `exGap2` establishes
-   that `FlowTailClosure` is independent of the other legality conditions.
+### Grid proof search
 
-2. The formalization adopts the edge encoding produced by
-   `HorizontalCompressionEXEC.lean`. A collapse produces parallel deduction
-   edges with a fresh colour for each route, and each edge carries a static
-   dependency decoration. Under this encoding every Flow colour class is a
-   singleton.
+| Theorem | Meaning |
+| --- | --- |
+| [gridMarked_extracts](ProofSearch/Grid/Soundness.lean) | A marked assignment yields a well-formed derivation of the goal with no open assumptions, within the grid's height bound. |
+| [gridMarked_sound](ProofSearch/Grid/Soundness.lean) | A marked grid assignment proves the goal without assumptions, when the formula list has no repeats and contains the goal. |
+| [exists_marked_iff_exists_closed_gridSchedulable](ProofSearch/Grid/Schedulability.lean) | With a distinct formula list containing the goal, search succeeds exactly when a closed derivation can be represented within the grid's height bound. |
+| [branchingGridMarked_sound](ProofSearch/BranchingGrid/Soundness.lean) | A marked branching-grid assignment proves the goal without assumptions, when the formula list has no repeats and contains the goal. |
+| [branchingGridMarked_complete](ProofSearch/BranchingGrid/Completeness.lean) | Every well-formed closed derivation whose formulas are in the chosen list has a successful branching-grid encoding with sufficient space. |
 
-3. Fully compressed executable output satisfies the construction invariants,
-   which are checked executably. The hypothesis package of
-   `compressed_universally_accepted'` therefore describes the implemented
-   construction's actual output.
+### Readings
 
-4. `Semantic/EndToEnd.lean` instantiates the bridge on output from the
-   executable itself. It closes the source derivation, fully compresses it, and
-   discharges every theorem hypothesis by verified computation.
-   `compressed_universally_accepted_exec`, the eleven-check executable wrapper,
-   carries the three core axioms `propext`, `Classical.choice`, and
-   `Quot.sound`. The fixture theorem `end_to_end` additionally records the
-   theorem-local axioms generated by `native_decide`. Build this module with:
+| Theorem | Meaning |
+| --- | --- |
+| [labelDefectB_sound](Readings/Explicit/LabelValidity.lean) | Every marked reading exposes an incorrect rule or dependency label in the graph. |
+| [explicitOutputLabelsCorrect_iff_no_labelDefect](Readings/Explicit/LabelValidity.lean) | If permitted readings can select every output, correct output labels are equivalent to no reading being marked. |
+| [badCylinder_raw_density](Readings/Explicit/FanFamily.lean) | A proved set of failing readings occupies exactly 1 / (width + 2) of the choices in the constructed branching family. |
 
-   ```bash
-   lake build Semantic.EndToEnd
-   ```
+### Certificates
 
-   The module is intentionally outside the root import, and its build takes a
-   few minutes.
+| Theorem | Meaning |
+| --- | --- |
+| [storedRoutes_setEq_flow](Certificate/Flow/Soundness.lean) | The local checks guarantee equality, ignoring order and repeats, between stored routes and the usable routes computed by Flow. |
+| [compressed_universally_accepted_certificateB](Certificate/Flow/Soundness.lean) | If the certificate, routing and discharge checks pass, every permitted reading ends with all goal assumptions discharged. |
+| [formationValid_iff_no_semanticMarked](Certificate/Flow/Positions.lean) | A certificate satisfies its formation conditions exactly when none of its verification positions reports a failure. |
+| [compressed_universally_accepted'](Flow/UniversalDischarge.lean) | Under the stated structural and discharge assumptions, every permitted reading ends with all goal assumptions discharged. |
 
-The LSFA paper presents the compressed case as future work. Readers following
-the paper's repository link will find this post-publication compressed result
-in addition to the published artifact.
+### Non-Hamiltonicity
 
-## Open items
+| Theorem | Meaning |
+| --- | --- |
+| [checked_request_sound](NonHamiltonicity/Certificate/Input.lean) | An input accepted by the certificate checker certifies that its source graph has no Hamiltonian cycle. |
+| [supplied_graph_no_hamiltonian_cycle](Examples/FourVertex/Occurrence/NonHamiltonicity.lean) | The supplied certificate proves that the four-vertex star has no Hamiltonian cycle. |
 
-- An unfolding theorem relating the merged-edge presentation of Flow in
-  Definition 22 of the horizontal-compression paper, with lambda-labelled
-  edges, to the parallel-edge encoding formalized here.
-- The reseeding clauses of Definition 22, with `ReseedFree` delimiting their
-  inapplicability in the current fragment.
-- A generic derivation of `dischargedMultiB` from the construction.
-- Mechanized preservation of the invariants by the horizontal-compression
-  rules.
+### Examples
+
+| Theorem | Meaning |
+| --- | --- |
+| [closed_3v_self_certifying](Examples/ThreeVertex/Flow/Acceptance.lean) | Every permitted reading of the closed three-vertex compressed proof ends with all goal assumptions discharged. |
+| [closed_4v_self_certifying](Examples/FourVertex/Flow/EndToEnd.lean) | Every permitted reading of the closed four-vertex compressed proof ends with all goal assumptions discharged. |
+
+### Robustness
+
+| Theorem | Meaning |
+| --- | --- |
+| [readOrbit_card](ProofSearch/Grid/Counting.lean) | Counts exactly how many assignments agree on all cells read by a given evaluation. |
+| [encodedDerivation_density](ProofSearch/Grid/Counting.lean) | A certified successful assignment gives a lower bound on the fraction of assignments for which grid search succeeds. |
+| [formation_invalid_semantic_amplification](Certificate/Encoding/Canonical.lean) | Every invalid certificate has a failing check that persists on at least a 1 / A^r fraction of encodings, where A counts field choices and r bounds fields read. |
+| [missingRoute_minimumFailureWitnessSize](Robustness/AbsenceBoundary.lean) | In the abstract list model, forcing a route to remain absent requires fixing all n list entries. |
 
 ## Building
 
-Install Lean through `elan`, then run:
+Pinned toolchain `leanprover/lean4:v4.29.0-rc7` and Mathlib (see `lake-manifest.json`).
 
-```bash
+```sh
+lake exe cache get
 lake build
+lake env lean Checks.lean   # prints the axioms of the main results
 ```
 
-The compatibility entry point is:
+## Trust
 
-```bash
-lake env lean DLDSBooleanCircuit.lean
-```
+The general theorems depend only on `propext`, `Classical.choice` and `Quot.sound`. Concrete examples and regression tests use `native_decide`, which also trusts the Lean compiler; `Checks.lean` shows exactly which results depend on it.
 
-The end-to-end executable fixture is built separately:
+<details>
+<summary>Modules containing native_decide</summary>
 
-```bash
-lake build Semantic.EndToEnd
-```
+- [Certificate.Encoding.Canonical](Certificate/Encoding/Canonical.lean)
+- [Certificate.Flow.Soundness](Certificate/Flow/Soundness.lean)
+- [DLDS.Compression.Domain](DLDS/Compression/Domain.lean)
+- [DLDS.ValidityDecomposition](DLDS/ValidityDecomposition.lean)
+- [Examples.Circuit](Examples/Circuit.lean)
+- [Examples.Flow.ClosedImplication](Examples/Flow/ClosedImplication.lean)
+- [Examples.FourVertex.Flow.CachedDischarge](Examples/FourVertex/Flow/CachedDischarge.lean)
+- [Examples.FourVertex.Flow.CertificateDecision](Examples/FourVertex/Flow/CertificateDecision.lean)
+- [Examples.FourVertex.Flow.Closed](Examples/FourVertex/Flow/Closed.lean)
+- [Examples.FourVertex.Flow.Slots](Examples/FourVertex/Flow/Slots.lean)
+- [Examples.FourVertex.Occurrence.NonHamiltonicity](Examples/FourVertex/Occurrence/NonHamiltonicity.lean)
+- [Examples.ThreeVertex.Flow.Acceptance](Examples/ThreeVertex/Flow/Acceptance.lean)
+- [Examples.ThreeVertex.Flow.Certificate](Examples/ThreeVertex/Flow/Certificate.lean)
+- [ProofSearch.Grid.Completeness](ProofSearch/Grid/Completeness.lean)
+- [ProofSearch.Grid.Counting](ProofSearch/Grid/Counting.lean)
+- [ProofSearch.Grid.Schedulability](ProofSearch/Grid/Schedulability.lean)
+- [ProofSearch.Grid.Soundness](ProofSearch/Grid/Soundness.lean)
+- [Readings.Explicit.LabelValidity](Readings/Explicit/LabelValidity.lean)
+- [Readings.FailurePersistence](Readings/FailurePersistence.lean)
+- [Robustness.Certificate.Support](Robustness/Certificate/Support.lean)
+- [Search.Certificate.Definitions](Search/Certificate/Definitions.lean)
 
-## Modules
+</details>
 
-Core evaluator:
+## References
 
-- `Semantic/Core.lean`: circuit types and rule constructors.
-- `Semantic/Boolean.lean`: Boolean semantics and exactly-one activation.
-- `Semantic/VectorLemmas.lean`: list and fixed-length vector lemmas.
-- `Semantic/NodeCorrectness.lean`: local circuit-node correctness.
-- `Semantic/Routing.lean`: tokens, path inputs, routing, and structural errors.
-- `Semantic/Evaluator.lean`: layer and circuit evaluation theorems.
-- `Semantic/DLDS.lean`: DLDS extraction, structural predicates, and evaluator
-  wrappers.
-
-Simple-tree bridge:
-
-- `Semantic/TreeBridge.lean`: canonical-path coherence, discharge, and the
-  forward bridge.
-- `Semantic/UniversalBridge.lean`: admissibility, canonical reduction, and
-  universal simple-tree acceptance.
-- `Semantic/Examples.lean`: executable simple-tree examples.
-
-Flow and compressed structure:
-
-- `Semantic/FlowModel.lean`: executable Flow semantics.
-- `Semantic/FlowValidity.lean`: Flow-based `CorrectRuleApp` and root discharge.
-- `Semantic/FlowTreeProof.lean`: Flow correctness on simple trees and general
-  Flow induction support.
-- `Semantic/FlowCollapsedProof.lean`: collapsed elimination, route-fan
-  invariants, and `ReseedFree`.
-- `Semantic/FlowEdgeDepChar.lean`: route-edge dependency characterization and
-  local collapsed Flow correctness.
-- `Semantic/CompressedBridge.lean`: level/formula uniqueness and compressed
-  lookup primitives.
-- `Semantic/CompressedRouting.lean`: Flow-coloured routing primitives and
-  compressed fixtures.
-
-Multi-token compressed bridge:
-
-- `Semantic/MultiTokenModel.lean`: one-token-per-route evaluator.
-- `Semantic/MultiTokenAdmissible.lean`: multi-path admissibility.
-- `Semantic/MultiTokenReduction.lean`: permutation congruence and canonical
-  multi-path reduction.
-- `Semantic/MultiTokenBridge.lean`: certificate-based compressed universal and
-  genuine-acceptance theorems.
-- `Semantic/FlowClosure.lean`: `FlowTailClosure`, `canonicalSlotOK`, and the
-  strengthened compressed bridge.
-- `Semantic/EndToEnd.lean`: executable invariant reflection and the closed,
-  fully compressed fixture theorem.
-
-Infrastructure and entry points:
-
-- `HorizontalCompressionEXEC.lean`: graph and horizontal-compression
-  infrastructure.
-- `Semantic.lean`: aggregate library entry point.
-- `DLDSBooleanCircuit.lean`: compatibility entry point.
-
-## Main theorems and axioms
-
-| Theorem | Axioms reported by `#print axioms` |
-|---|---|
-| `node_correct` | `propext`, `Quot.sound` |
-| `circuit_correctness` | `propext`, `Quot.sound` |
-| `circuit_completeness` | `propext`, `Quot.sound` |
-| `circuit_iff` | `propext`, `Quot.sound` |
-| `dlds_evaluation_correct` | `propext`, `Quot.sound` |
-| `dlds_evaluation_complete` | `propext`, `Quot.sound` |
-| `dlds_evaluation_iff` | `propext`, `Quot.sound` |
-| `dlds_global_soundness` | `propext`, `Quot.sound` |
-| `dlds_global_completeness` | `propext`, `Quot.sound` |
-| `dlds_global_iff` | `propext`, `Quot.sound` |
-| `tree_bridge_forward` | `propext`, `Classical.choice`, `Quot.sound` |
-| `simpleTree_universally_accepted` | `propext`, `Classical.choice`, `Quot.sound` |
-| `flowRuleCorrect_of_simpleTree` | `propext`, `Classical.choice`, `Quot.sound` |
-| `flowRuleCorrect_collapsed` | `propext`, `Classical.choice`, `Quot.sound` |
-| `admissibleMultiReducesToCanonical` | `propext`, `Classical.choice`, `Quot.sound` |
-| `compressed_universally_accepted` | `propext`, `Classical.choice`, `Quot.sound` |
-| `flowAt_tail_closure` | `propext`, `Classical.choice`, `Quot.sound` |
-| `canonicalSlotOK` | `propext`, `Classical.choice`, `Quot.sound` |
-| `compressed_universally_accepted'` | `propext`, `Classical.choice`, `Quot.sound` |
-| `compressed_universally_accepted_exec` | `propext`, `Classical.choice`, `Quot.sound` |
-| `end_to_end` | core axioms plus eleven theorem-local `native_decide` axioms |
-
-The executable examples in `Semantic/Examples.lean` likewise use
-`native_decide` and record theorem-local native-code axioms.
+- L. Gordeev and E. H. Haeusler. *Proof Compression and NP Versus PSPACE II: Addendum.* Bulletin of the Section of Logic 51(2), 2022.
+- L. Saraiva and E. H. Haeusler. *From Dag-Like Proofs to Boolean Circuits in Lean.* Proceedings of LSFA 2026, EPTCS, 2026.
+- L. Saraiva and E. H. Haeusler. *Quantum Verification of Compressed Proofs through DLDS-to-Circuit Compilation*, Anais do Simpósio Brasileiro de Computação e Comunicação Quântico, 2026
 
 ## License
 
-This project is released under the MIT License. See `LICENSE`.
+MIT; see [LICENSE](LICENSE).
