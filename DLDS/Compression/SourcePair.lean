@@ -17,7 +17,7 @@ The hypotheses below are deliberately local.  This is not a claim that every
 compression input has this shape.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open Evaluator.Mixed Evaluator.Occurrence
 
 namespace DLDS.Compression.SourcePair
@@ -166,7 +166,7 @@ theorem actualSourcePair_candidateSourceRoutes
         [ (normalizeDep [input.left.FORMULA], [input.right.NUMBER]),
           (normalizeDep [input.left.FORMULA], [input.left.NUMBER]) ] := by
     simp [List.eraseDups_cons, List.filter, routeBeqRaw]
-  simp [candidateSourceRoutes, Flow.ancestorsInto,
+  simp [candidateSourceRoutes, FlowSemantics.ancestorsInto,
     get_rule.outgoing, get_rule.outgoing.loop,
     producedLocalGraph, DLDS.Compression.Mixed.EliminationSource.neighborhoodGraph,
     producedNeighborhood, producedCenter, producedRightTrace,
@@ -188,7 +188,7 @@ theorem actualSourcePair_occurrenceStep
   have sourceRoutes := actualSourcePair_candidateSourceRoutes input
   have noPredecessors :
       predsOf (producedLocalGraph input) (producedCenter input) = [] := by
-    simp [Flow.predsOf_eq, producedLocalGraph,
+    simp [FlowSemantics.predsOf_eq, producedLocalGraph,
       DLDS.Compression.Mixed.EliminationSource.neighborhoodGraph, producedNeighborhood,
       producedCenter, producedRightEdge, producedLeftEdge,
       get_rule.incoming, get_rule.incoming.loop,
@@ -339,7 +339,7 @@ def localGraph {d : Graph} (input : Input d) : Graph :=
 theorem candidateSourceRoutes_eq_singleton {d : Graph} (input : Input d) :
     candidateSourceRoutes (localGraph input) (center input) =
       [(normalizeDep [input.left.FORMULA], [])] := by
-  simp [candidateSourceRoutes, Flow.ancestorsInto,
+  simp [candidateSourceRoutes, FlowSemantics.ancestorsInto,
     get_rule.outgoing, get_rule.outgoing.loop,
     localGraph, DLDS.Compression.Mixed.EliminationSource.neighborhoodGraph,
     neighborhood, center, rightEdge, leftEdge,
@@ -353,7 +353,7 @@ theorem occurrenceStep_eq_singleton
       .ok [(normalizeDep [input.left.FORMULA], [])] := by
   have sourceRoutes := candidateSourceRoutes_eq_singleton input
   have noPredecessors : predsOf (localGraph input) (center input) = [] := by
-    simp [Flow.predsOf_eq, localGraph,
+    simp [FlowSemantics.predsOf_eq, localGraph,
       DLDS.Compression.Mixed.EliminationSource.neighborhoodGraph, neighborhood,
       center, rightEdge, leftEdge,
       get_rule.incoming, get_rule.incoming.loop,

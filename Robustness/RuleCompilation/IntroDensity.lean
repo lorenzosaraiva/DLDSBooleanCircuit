@@ -2,8 +2,8 @@ import Robustness.RuleCompilation.IntroCompiler
 
 /-! Positive local failures on the explicitly fixed-shape RuleCoord product.
 No pointer, producer, edge or graph corruption is quantified here. -/
-open DLDS Flow Robustness.BitLocality Robustness.SelectedProducers
-open Search.Certificate.Robustness
+open DLDS FlowSemantics Robustness.BitLocality Robustness.SelectedProducers
+open CertificateSearch.Robustness
 namespace Robustness.RuleCompilation
 
 theorem intro_failure_witness {r f : Nat} (shape : RouteShape r f)

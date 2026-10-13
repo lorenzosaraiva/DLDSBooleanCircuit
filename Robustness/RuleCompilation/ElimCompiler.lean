@@ -2,7 +2,7 @@ import Robustness.RuleCompilation.ElimSemantics
 
 /-! Two consumed premises must both yield the exact stored residual.
 This enforces their compatibility without an additional compatibility premise. -/
-open DLDS Flow Robustness.BitLocality Robustness.SelectedProducers
+open DLDS FlowSemantics Robustness.BitLocality Robustness.SelectedProducers
 namespace Robustness.RuleCompilation
 
 def unionGuards {r f : Nat} (shape : RouteShape r f) (size k : Nat)

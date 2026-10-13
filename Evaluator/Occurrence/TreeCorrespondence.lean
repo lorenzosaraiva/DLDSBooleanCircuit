@@ -10,7 +10,7 @@ recomputes exactly one route at every encoded occurrence: the normalized open
 dependencies of the corresponding ND subtree and an exhausted residual.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open ProofSearch.Grid DLDS.ValidityDecomposition
 open Evaluator.Mixed Evaluator.Occurrence
 
@@ -21,7 +21,7 @@ lemma edgesBetween_eq_incoming (d : Graph) (start finish : Vertex) :
       (get_rule.incoming finish d).filter fun deduction =>
         decide (deduction.START = start) := by
   unfold edgesBetween
-  rw [Flow.incoming_eq_filter, List.filter_filter]
+  rw [FlowSemantics.incoming_eq_filter, List.filter_filter]
   apply List.filter_congr
   intro deduction member
   simp
@@ -35,7 +35,7 @@ lemma occurrenceStep_congr_of_incoming_paths_empty
     occurrenceStep left vertex premiseFlow =
       occurrenceStep right vertex premiseFlow := by
   have predecessors : predsOf left vertex = predsOf right vertex := by
-    simp only [Flow.predsOf_eq, incoming]
+    simp only [FlowSemantics.predsOf_eq, incoming]
   have between : ∀ start,
       edgesBetween left start vertex = edgesBetween right start vertex := by
     intro start
@@ -78,7 +78,7 @@ lemma occurrenceStep_congr_of_incoming_paths_empty
   change predsOf
       (dlds (encodeNDTreeAt (.intro alpha beta premise) level next).nodes
         (encodeNDTreeAt (.intro alpha beta premise) level next).edges []) _ = _
-  rw [Flow.predsOf_eq, encodeNDTreeAt_intro_root_incoming]
+  rw [FlowSemantics.predsOf_eq, encodeNDTreeAt_intro_root_incoming]
   rfl
 
 theorem encoded_elim_roots_ne
@@ -102,8 +102,8 @@ theorem encoded_elim_roots_ne
   change predsOf
       (dlds (encodeNDTreeAt (.elim alpha beta major minor) level next).nodes
         (encodeNDTreeAt (.elim alpha beta major minor) level next).edges []) _ = _
-  rw [Flow.predsOf_eq, encodeNDTreeAt_elim_root_incoming]
-  exact Flow.eraseDups_pair (encoded_elim_roots_ne major minor level next)
+  rw [FlowSemantics.predsOf_eq, encodeNDTreeAt_elim_root_incoming]
+  exact FlowSemantics.eraseDups_pair (encoded_elim_roots_ne major minor level next)
 
 @[simp] theorem encoded_hyp_occurrenceStep
     (formula : Formula) (level next : Nat)
@@ -147,7 +147,7 @@ theorem encoded_intro_occurrenceStep
     simp
   have eliminations : elimPairsAt graph root = [] := by
     simp [elimPairsAt, predecessors, childFormula, rootFormula,
-      Flow.formula_ne_implication_self]
+      FlowSemantics.formula_ne_implication_self]
   have noAncestors : ancestorsInto graph root = [] := by
     rfl
   have childRoutes : premiseFlow child =
@@ -158,7 +158,7 @@ theorem encoded_intro_occurrenceStep
     candidateEliminationOutputs, eliminations,
     separatedIntroductionOutputs, introductionCandidates,
     rootFormula, childFormula, candidateIntroductionOutputs,
-    childEdges, childRoutes, Flow.consume, residualOccursB,
+    childEdges, childRoutes, FlowSemantics.consume, residualOccursB,
     rootHypothesis, List.eraseDups, List.eraseDupsBy,
     List.eraseDupsBy.loop]
 
@@ -209,7 +209,7 @@ theorem encoded_elim_occurrenceStep
     rw [edgesBetween_eq_incoming, incoming]
     simp [rootsNe]
   have eliminations : elimPairsAt graph root = [(majorRoot, minorRoot)] := by
-    simp [elimPairsAt, predecessors, majorFormula, minorFormula, rootFormula, Flow.formula_ne_implication_self, Flow.not_mutual_implication]
+    simp [elimPairsAt, predecessors, majorFormula, minorFormula, rootFormula, FlowSemantics.formula_ne_implication_self, FlowSemantics.not_mutual_implication]
   have noAncestors : ancestorsInto graph root = [] := by
     rfl
   have majorRoutes : premiseFlow majorRoot =
@@ -223,7 +223,7 @@ theorem encoded_elim_occurrenceStep
         [(depUnion (normalizeDep minor.dependencies)
           (normalizeDep major.dependencies), [])] := by
     simp [candidateEliminationOutputs, eliminations, majorEdges, minorEdges,
-      majorRoutes, minorRoutes, Flow.consume]
+      majorRoutes, minorRoutes, FlowSemantics.consume]
   have separatedIntroductions :
       separatedIntroductionOutputs graph root premiseFlow = [] := by
     unfold separatedIntroductionOutputs
@@ -232,7 +232,7 @@ theorem encoded_elim_occurrenceStep
       simp [introductionCandidates, predecessors, rootFormula,
         majorFormula, minorFormula, candidateIntroductionOutputs,
         majorEdges, minorEdges, majorRoutes, minorRoutes,
-        Flow.consume, residualOccursB]
+        FlowSemantics.consume, residualOccursB]
   change occurrenceStep graph root premiseFlow = _
   simp [occurrenceStep, predecessors, noAncestors, derivedOutputs,
     eliminationOutputs, separatedIntroductions,
@@ -271,7 +271,7 @@ theorem encodeNDTreeAt_occurrenceReplayAt_in_context
             calc
               predsOf graph root = predsOf
                   (encodedGraphAt (.hyp formula) level next) root := by
-                    simp only [Flow.predsOf_eq, rootIncoming]
+                    simp only [FlowSemantics.predsOf_eq, rootIncoming]
               _ = [] := by rfl
           let emptyFlow : Vertex → List FlowPair :=
             Evaluator.Occurrence.routesFor []
@@ -323,7 +323,7 @@ theorem encodeNDTreeAt_occurrenceReplayAt_in_context
               predsOf graph root = predsOf
                   (encodedGraphAt (.intro alpha beta premise) level next)
                   root := by
-                    simp only [Flow.predsOf_eq, rootIncoming]
+                    simp only [FlowSemantics.predsOf_eq, rootIncoming]
               _ = [child] := encoded_intro_root_preds alpha beta premise
                 level next
           let expected : List FlowPair :=
@@ -412,7 +412,7 @@ theorem encodeNDTreeAt_occurrenceReplayAt_in_context
               predsOf graph root = predsOf
                   (encodedGraphAt (.elim alpha beta major minor) level next)
                   root := by
-                    simp only [Flow.predsOf_eq, rootIncoming]
+                    simp only [FlowSemantics.predsOf_eq, rootIncoming]
               _ = [majorRoot, minorRoot] := encoded_elim_root_preds
                 alpha beta major minor level next
           let majorExpected : List FlowPair :=

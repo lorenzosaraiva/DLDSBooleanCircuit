@@ -6,7 +6,7 @@ import Init.Data.BitVec.Lemmas
 The shape fixes route owners, formula formulaAt, path lengths and word widths.
 Dependency *vector* width is fixed; decoded list cardinality can vary.
 No equality with the old fixed Formula-list-entry product is asserted. -/
-open DLDS Flow
+open DLDS FlowSemantics
 set_option maxHeartbeats 2000000
 namespace Robustness.SelectedProducers
 

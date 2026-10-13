@@ -22,7 +22,7 @@ open DLDS
 
 namespace DLDS
 
-open Flow
+open FlowSemantics
 open DLDS.Examples.BinaryFan DLDS.Examples.TernaryFan
 
 
@@ -77,10 +77,6 @@ def cursorRouteHeadCoverageAtB (d : Graph) (v : Vertex) : Bool :=
         outgoing.any fun edge => edge.COLOUR == headColour route.2) &&
   (outgoing.all fun edge =>
     (flowAt d (stdFuel d) v).any fun route => headColour route.2 == edge.COLOUR)
-
-def cursorRouteHeadCoverageB (d : Graph) : Bool :=
-  d.NODES.all fun v =>
-    (get_rule.outgoing v d).isEmpty || cursorRouteHeadCoverageAtB d v
 
 
 /-- A tail obtained by consuming an incoming edge is an exhausted arrival at
@@ -302,6 +298,35 @@ def cursorCarrierAccountedAtB (d : Graph) (w u : Vertex) : Bool :=
                   (flowAt d (stdFuel d) w).any fun result => result.2 == tail
   | _ => false
 
+def cursorRouteHeadCoverageB (d : Graph) : Bool :=
+  d.NODES.all fun v =>
+    (get_rule.outgoing v d).isEmpty || cursorRouteHeadCoverageAtB d v
+
+def cursorFlowContinuationClosureB (d : Graph) : Bool :=
+  d.NODES.all fun w =>
+    match elimPairsAt d w with
+    | [] => true
+    | pairs =>
+        (predsOf d w).all (fun u =>
+          elimPremiseAtB d w u || cursorCarrierAccountedAtB d w u) &&
+        pairs.all fun (major, minor) =>
+          ((flowAt d (stdFuel d) minor).all fun route =>
+            (edgesBetween d minor w).all fun edge =>
+              match consume edge route.2 with
+              | none => true
+              | some tail => exhaustedConsumedTailAtB d w tail ||
+                  (flowAt d (stdFuel d) major).any fun partner =>
+                    (edgesBetween d major w).any fun other =>
+                      consume other partner.2 == some tail) &&
+          ((flowAt d (stdFuel d) major).all fun route =>
+            (edgesBetween d major w).all fun edge =>
+              match consume edge route.2 with
+              | none => true
+              | some tail => exhaustedConsumedTailAtB d w tail ||
+                  (flowAt d (stdFuel d) minor).any fun partner =>
+                    (edgesBetween d minor w).any fun other =>
+                      consume other partner.2 == some tail)
+
 lemma elimPremiseAtB_sound (d : Graph) (w u : Vertex)
     (h : elimPremiseAtB d w u = true) : ElimPremiseAt d w u := by
   unfold elimPremiseAtB at h
@@ -471,6 +496,53 @@ lemma cursorCarrierAccountedAtB_sound (d : Graph) (w u : Vertex)
         have htail' : residual = tail := by simpa using htail
         subst tail
         exact ⟨dependency, hresultMem⟩
+
+theorem cursorFlowContinuationClosureB_sound (d : Graph) (h : cursorFlowContinuationClosureB d = true) :
+    CursorFlowContinuationClosure d := by
+  classical
+  unfold cursorFlowContinuationClosureB at h
+  rw [List.all_eq_true] at h
+  intro w hw hpairsNe
+  have hw' := h w hw
+  cases hpairs : elimPairsAt d w with
+  | nil => exact (hpairsNe hpairs).elim
+  | cons pair pairs =>
+      rw [hpairs] at hw'
+      simp only [Bool.and_eq_true, List.all_eq_true] at hw'
+      constructor
+      · intro u hu
+        have hu' := hw'.1 u hu
+        rw [Bool.or_eq_true] at hu'
+        rcases hu' with helim | hcarrier
+        · exact Or.inl (elimPremiseAtB_sound d w u helim)
+        · exact Or.inr (cursorCarrierAccountedAtB_sound d w u hcarrier)
+      · intro major minor hpair
+        have checked := hw'.2 (major, minor) (by simpa [hpairs] using hpair)
+        constructor
+        · intro route hroute edge hedge tail hconsume
+          have result := checked.1 route hroute edge hedge
+          simp only [hconsume] at result
+          rw [Bool.or_eq_true] at result
+          rcases result with hexhausted | hpartner
+          · exact Or.inl (exhaustedConsumedTailAtB_sound d w tail hexhausted)
+          · rw [List.any_eq_true] at hpartner
+            obtain ⟨partner, hpartnerMem, hother⟩ := hpartner
+            rw [List.any_eq_true] at hother
+            obtain ⟨other, hotherMem, hagree⟩ := hother
+            exact Or.inr ⟨partner, hpartnerMem, other, hotherMem,
+              by simpa using hagree⟩
+        · intro route hroute edge hedge tail hconsume
+          have result := checked.2 route hroute edge hedge
+          simp only [hconsume] at result
+          rw [Bool.or_eq_true] at result
+          rcases result with hexhausted | hpartner
+          · exact Or.inl (exhaustedConsumedTailAtB_sound d w tail hexhausted)
+          · rw [List.any_eq_true] at hpartner
+            obtain ⟨partner, hpartnerMem, hother⟩ := hpartner
+            rw [List.any_eq_true] at hother
+            obtain ⟨other, hotherMem, hagree⟩ := hother
+            exact Or.inr ⟨partner, hpartnerMem, other, hotherMem,
+              by simpa using hagree⟩
 
 theorem cursorFlowTailClosureB_sound (d : Graph) :
     cursorFlowTailClosureB d = true → CursorFlowTailClosure d := by

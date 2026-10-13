@@ -8,7 +8,7 @@ Despite the `Probe` filename, this core module defines `ExpandedCertificate`,
 certificate is the distinct `SuccessorCertificate` family.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 
 namespace Certificate.Flow.Foundation
 

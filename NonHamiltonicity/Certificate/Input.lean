@@ -10,7 +10,7 @@ open Certificate.Occurrence.Positions
 namespace NonHamiltonicity.Certificate.Input
 
 def actualDomainB (proofGraph : _root_.Graph) : Bool :=
-  proofGraph.NODES.all fun vertex => (Flow.predsOf proofGraph vertex).all fun premise =>
+  proofGraph.NODES.all fun vertex => (FlowSemantics.predsOf proofGraph vertex).all fun premise =>
     proofGraph.NODES.contains premise && decide (premise.LEVEL = vertex.LEVEL + 1)
 
 theorem actualDomainB_sound (proofGraph : _root_.Graph)

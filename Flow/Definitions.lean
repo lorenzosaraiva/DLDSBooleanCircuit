@@ -2,7 +2,7 @@ import Evaluator.Grid
 
 /-! # Historical Flow reference
 
-This module's authoritative historical entry point is `Flow.flowAt`. It is
+This module's authoritative historical entry point is `FlowSemantics.flowAt`. It is
 not the successor occurrence-aware semantics and must not be substituted for
 `Evaluator.Occurrence.occurrenceReplayAt` without a named bridge theorem.
 
@@ -13,7 +13,7 @@ recorded `START`; the unique-root predecessor set supplies the scope guard. -/
 
 open DLDS
 
-namespace Flow
+namespace FlowSemantics
 
 abbrev Dep        := List Formula
 abbrev ColourPath := List Nat
@@ -108,11 +108,11 @@ lemma Formula.lt_trichotomy : ∀ left right : Formula,
 lemma Formula.lt_asymm {left right : Formula} (h : left < right) :
     ¬ right < left := by
   intro reverse
-  exact Flow.Formula.lt_irrefl left (Flow.Formula.lt_trans h reverse)
+  exact FlowSemantics.Formula.lt_irrefl left (FlowSemantics.Formula.lt_trans h reverse)
 
 lemma Formula.le_total (left right : Formula) :
     (left < right ∨ left = right) ∨ (right < left ∨ right = left) := by
-  rcases Flow.Formula.lt_trichotomy left right with h | h | h
+  rcases FlowSemantics.Formula.lt_trichotomy left right with h | h | h
   · exact Or.inl (Or.inl h)
   · exact Or.inl (Or.inr h)
   · exact Or.inr (Or.inl h)
@@ -122,7 +122,7 @@ lemma Formula.le_trans {left middle right : Formula} :
     (middle < right ∨ middle = right) →
     (left < right ∨ left = right) := by
   rintro (hLeftMiddle | rfl) (hMiddleRight | rfl)
-  · exact Or.inl (Flow.Formula.lt_trans hLeftMiddle hMiddleRight)
+  · exact Or.inl (FlowSemantics.Formula.lt_trans hLeftMiddle hMiddleRight)
   · exact Or.inl hLeftMiddle
   · exact Or.inl hMiddleRight
   · exact Or.inr rfl
@@ -131,7 +131,7 @@ lemma Formula.le_antisymm {left right : Formula} :
     (left < right ∨ left = right) →
     (right < left ∨ right = left) → left = right := by
   rintro (hLeftRight | rfl) (hRightLeft | hRightLeft)
-  · exact (Flow.Formula.lt_asymm hLeftRight hRightLeft).elim
+  · exact (FlowSemantics.Formula.lt_asymm hLeftRight hRightLeft).elim
   · exact hRightLeft.symm
   · rfl
   · rfl
@@ -139,20 +139,20 @@ lemma Formula.le_antisymm {left right : Formula} :
 lemma Formula.leB_total (left right : Formula) :
     (Formula.leB left right || Formula.leB right left) = true := by
   simp only [Formula.leB, decide_eq_true_eq, Bool.or_eq_true]
-  exact Flow.Formula.le_total left right
+  exact FlowSemantics.Formula.le_total left right
 
 lemma Formula.leB_trans (left middle right : Formula)
     (hLeftMiddle : Formula.leB left middle = true)
     (hMiddleRight : Formula.leB middle right = true) :
     Formula.leB left right = true := by
   simp only [Formula.leB, decide_eq_true_eq] at hLeftMiddle hMiddleRight ⊢
-  exact Flow.Formula.le_trans hLeftMiddle hMiddleRight
+  exact FlowSemantics.Formula.le_trans hLeftMiddle hMiddleRight
 
 lemma Formula.leB_antisymm {left right : Formula}
     (hLeftRight : Formula.leB left right = true)
     (hRightLeft : Formula.leB right left = true) : left = right := by
   simp only [Formula.leB, decide_eq_true_eq] at hLeftRight hRightLeft
-  exact Flow.Formula.le_antisymm hLeftRight hRightLeft
+  exact FlowSemantics.Formula.le_antisymm hLeftRight hRightLeft
 
 /-- A dependency list is canonical when it has no repetitions and is sorted by
 the structural formula order. -/
@@ -182,7 +182,7 @@ theorem normalizeDep_canonical (dependency : Dep) :
     CanonicalDep (normalizeDep dependency) := by
   constructor
   · exact List.nodup_mergeSort.mpr (nodup_eraseDups_formula dependency)
-  · exact List.pairwise_mergeSort Flow.Formula.leB_trans Flow.Formula.leB_total _
+  · exact List.pairwise_mergeSort FlowSemantics.Formula.leB_trans FlowSemantics.Formula.leB_total _
 
 @[simp] theorem normalizeDep_nil : normalizeDep [] = [] := by
   simp [normalizeDep]
@@ -238,7 +238,7 @@ theorem canonicalDep_eq_of_depSetEq {left right : Dep}
     (List.perm_ext_iff_of_nodup hLeft.1 hRight.1).mpr hMembership
   exact List.Perm.eq_of_pairwise
     (fun first second _ _ hFirstSecond hSecondFirst =>
-      Flow.Formula.leB_antisymm hFirstSecond hSecondFirst)
+      FlowSemantics.Formula.leB_antisymm hFirstSecond hSecondFirst)
     hLeft.2 hRight.2 hPermutation
 
 
@@ -666,4 +666,4 @@ def edgeFlowDeps (d : Graph) (e : Deduction) : List Dep :=
       (Flow d w e.START).filterMap (fun bp =>
         (consume e bp.2).map (fun _ => bp.1)))).eraseDups)
 
-end Flow
+end FlowSemantics

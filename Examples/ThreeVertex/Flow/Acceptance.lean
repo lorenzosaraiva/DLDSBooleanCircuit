@@ -1,7 +1,7 @@
 import Examples.ThreeVertex.Flow.Certificate
 import Certificate.Flow.Cache
 
-open DLDS Flow Certificate.Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow Certificate.Flow.Foundation
 
 set_option maxHeartbeats 0
 set_option maxRecDepth 100000
@@ -92,7 +92,8 @@ theorem closed_3v_self_certifying :
       DischargedMulti graph P (goalColumn graph) := by
   apply compressed_universally_accepted_certificateB graph certificate
     expanded_true localChecks_true cursorRouteHeadCoverage_true
-  · unfold cursorCarrierAccountedAtB
+  · simp only [cursorFlowContinuationClosureB]
+    unfold cursorCarrierAccountedAtB
     have hflow : flowAt graph (stdFuel graph) =
         cachedFlowAt graph (flowTable graph) :=
       (funext (DLDS.Certificate.Flow.Cache.cachedFlowAt_flowTable graph)).symm

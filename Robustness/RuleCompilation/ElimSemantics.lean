@@ -2,7 +2,7 @@ import Robustness.RuleCompilation.IntroDensity
 
 /-! Ordinary elimination with fixed pair/edge indices and two fixed pointers.
 Distinct owners and predecessor fidelity follow from the actual selected pair. -/
-open DLDS Flow Robustness.BitLocality Robustness.SelectedProducers
+open DLDS FlowSemantics Robustness.BitLocality Robustness.SelectedProducers
 namespace Robustness.RuleCompilation
 set_option maxHeartbeats 2000000
 

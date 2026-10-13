@@ -1,7 +1,7 @@
 import Robustness.SelectedProducers.Selected
 
 /-! Every selected branch recomputes at most one output, including bad indices. -/
-open DLDS Flow
+open DLDS FlowSemantics
 namespace Robustness.SelectedProducers
 
 theorem pick_thin {α : Type} (xs : List α) (index : Nat) :

@@ -5,7 +5,7 @@ import Robustness.Density
 /-! Exact seed-producer semantics after the Boolean route decoder.
 These definitions specialize the existing selected checker, without an oracle
 equality or compiler-correctness premise. -/
-open DLDS Flow Robustness.BitLocality
+open DLDS FlowSemantics Robustness.BitLocality
 namespace Robustness.SelectedProducers
 set_option maxHeartbeats 2000000
 

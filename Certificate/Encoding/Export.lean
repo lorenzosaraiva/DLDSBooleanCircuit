@@ -2,7 +2,7 @@ import Certificate.Flow.Definitions
 import Examples.ThreeVertex.Flow.Open
 import Lean.Data.Json
 
-open DLDS Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow.Foundation
 open Lean
 
 /-!

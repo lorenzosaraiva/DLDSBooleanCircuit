@@ -1,6 +1,6 @@
 import Certificate.Flow.IntroductionSuffix
 
-open DLDS Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow.Foundation
 
 set_option maxHeartbeats 0
 set_option maxRecDepth 100000

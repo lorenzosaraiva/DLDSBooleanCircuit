@@ -22,7 +22,7 @@ the compressed modules.
 
 open DLDS
 
-namespace Flow
+namespace FlowSemantics
 
 
 
@@ -551,4 +551,4 @@ theorem flowRuleCorrect_of_simpleTree (d : Graph)
 
 
 
-end Flow
+end FlowSemantics

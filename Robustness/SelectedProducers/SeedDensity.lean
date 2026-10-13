@@ -3,7 +3,7 @@ import Robustness.SelectedProducers.SeedCompiler
 /-! Failure cylinders and density for the actual decoded selected seed checker.
 Both SeedMode.default and SeedMode.ancestor are covered. No coverage, absence
 or root-discharge conclusion follows from these positive local results. -/
-open DLDS Flow Robustness.BitLocality Search.Certificate.Robustness
+open DLDS FlowSemantics Robustness.BitLocality CertificateSearch.Robustness
 namespace Robustness.SelectedProducers
 
 theorem wordWidth_positive (formulas colours : Nat) : 0 < wordWidth formulas colours := by

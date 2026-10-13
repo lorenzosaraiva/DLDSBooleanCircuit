@@ -9,7 +9,7 @@ number.  Therefore a theorem for `(derived, source)` does not cover an executed
 `(source, derived)` call.  This module calculates the latter calls directly.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 
 namespace DLDS.Compression.Mixed.SourceDerived
 

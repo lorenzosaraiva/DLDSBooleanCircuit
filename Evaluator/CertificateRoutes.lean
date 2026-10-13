@@ -1,6 +1,6 @@
 import Evaluator.RouteIndexed.FlowCorrespondence
 
-open DLDS Flow Certificate.Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow Certificate.Flow.Foundation
 
 namespace Evaluator.CertificateRoutes
 

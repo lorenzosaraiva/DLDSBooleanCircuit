@@ -2,7 +2,7 @@ import Robustness.JustifiedRoutes
 
 /-! Direct fixed-index view of the existing expanded certificate records.
 Only record scope is required; no missing-record coverage is used. -/
-open DLDS Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow.Foundation
 namespace Robustness
 
 def expandedRows (c : ExpandedCertificate) : List (Vertex × FlowPair) :=

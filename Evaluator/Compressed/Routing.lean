@@ -9,7 +9,7 @@ open DLDS
 
 namespace DLDS
 
-open Flow
+open FlowSemantics
 
 
 /-- Which premise slot of w's rule the premise formula φ fills, collapsed- aware: -/

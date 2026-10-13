@@ -19,7 +19,7 @@ inductive logical occurrence judgment; successful operational evaluation and
 both directions of route membership are conclusions.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open Evaluator.Mixed Evaluator.Occurrence DLDS.Compression.ClassIteration
 
 namespace Evaluator.Occurrence.LocalRules

@@ -4,7 +4,7 @@ import Robustness.ExpandedRoutes
 /-! Kernel-reduced sanity for the bounded bit grammar only.
 A dependency-union bit reads exactly the output bit and two premise bits.
 This is not an instantiation of the unfinished certificate/bit compiler. -/
-open Search.Certificate.Robustness
+open CertificateSearch.Robustness
 namespace Robustness.Sanity
 open BitLocality
 

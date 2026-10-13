@@ -10,7 +10,7 @@ remove the former fixture-only assumptions about allocation, root metadata,
 and number uniqueness.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open ProofSearch.Grid
 
 namespace DLDS.Compression.Domain
@@ -332,7 +332,7 @@ private theorem encodeNDTreeAt_no_edge_ends_below
       [edge (encodeNDTreeAt premise (level + 1) (next + 1)).root
         (encodeNDTreeAt (.intro alpha beta premise) level next).root 0
         (normalizeDep premise.dependencies)] := by
-  rw [Flow.incoming_eq_filter]
+  rw [FlowSemantics.incoming_eq_filter]
   simp [encodeNDTreeAt]
   intro deduction deductionMember endAtRoot
   have lower := (encodeNDTreeAt_edge_end_number_bounds
@@ -353,7 +353,7 @@ private theorem encodeNDTreeAt_no_edge_ends_below
             (encodeNDTreeAt major (level + 1) (next + 1)).next).root
           (encodeNDTreeAt (.elim alpha beta major minor) level next).root 0
           (normalizeDep minor.dependencies)] := by
-  rw [Flow.incoming_eq_filter]
+  rw [FlowSemantics.incoming_eq_filter]
   simp [encodeNDTreeAt]
   constructor
   · intro deduction deductionMember endAtRoot
@@ -590,7 +590,7 @@ theorem encodeNDTreeAt_outgoing_length_le_one
         (dlds (encodeNDTreeAt tree level next).nodes
           (encodeNDTreeAt tree level next).edges [])).length ≤ 1 := by
   intro vertex _
-  rw [Flow.outgoing_eq_filter]
+  rw [FlowSemantics.outgoing_eq_filter]
   exact filter_key_eq_length_le_one Deduction.START vertex
     (encodeNDTreeAt tree level next).edges
     (encodeNDTreeAt_edge_starts_nodup tree level next)
@@ -650,7 +650,7 @@ theorem encodeNDTreeAt_root_outgoing_empty
     get_rule.outgoing (encodeNDTreeAt tree level next).root
       (dlds (encodeNDTreeAt tree level next).nodes
         (encodeNDTreeAt tree level next).edges []) = [] := by
-  rw [Flow.outgoing_eq_filter, List.filter_eq_nil_iff]
+  rw [FlowSemantics.outgoing_eq_filter, List.filter_eq_nil_iff]
   intro deduction deductionMember selected
   simp only [decide_eq_true_eq] at selected
   have greater := encodeNDTreeAt_edge_start_number_gt
@@ -675,7 +675,7 @@ theorem encodeNDTreeAt_uniqueRootAt
           get_rule.outgoing candidate
             (dlds (encodeNDTreeAt tree level next).nodes
               (encodeNDTreeAt tree level next).edges []) := by
-        rw [Flow.outgoing_eq_filter, List.mem_filter]
+        rw [FlowSemantics.outgoing_eq_filter, List.mem_filter]
         exact ⟨deductionMember, by simp [starts]⟩
       rw [terminal] at outgoingMember
       contradiction
@@ -787,7 +787,7 @@ theorem encodeNDTreeAt_root_rule_correct
       unfold RuleShapeOK ruleShapeOKB outDep classifyRule?
       rw [encodeNDTreeAt_intro_root_incoming]
       simp [encodeNDTreeAt, consequent?, antecedent?,
-        Flow.depRemove, wellFormed.2]
+        FlowSemantics.depRemove, wellFormed.2]
   | elim alpha beta major minor =>
       simp only [ProofSearch.Grid.NDTree.wellFormedB, Bool.and_eq_true, beq_iff_eq] at wellFormed
       rw [ProofSearch.FlowCorrespondence.normalize_dependencies_elim]
@@ -796,7 +796,7 @@ theorem encodeNDTreeAt_root_rule_correct
       dsimp only
       unfold RuleShapeOK ruleShapeOKB outDep classifyRule?
       rw [encodeNDTreeAt_elim_root_incoming]
-      simp [encodeNDTreeAt, Flow.depUnion,
+      simp [encodeNDTreeAt, FlowSemantics.depUnion,
         majorConclusion, minorConclusion]
 
 def encodedGraphAt (tree : NDTree) (level next : Nat) : Graph :=
@@ -848,7 +848,7 @@ theorem encodeNDTreeAt_intro_child_incoming
         (encodedGraphAt (.intro alpha beta premise) level next) =
       get_rule.incoming vertex
         (encodedGraphAt premise (level + 1) (next + 1)) := by
-  rw [Flow.incoming_eq_filter, Flow.incoming_eq_filter]
+  rw [FlowSemantics.incoming_eq_filter, FlowSemantics.incoming_eq_filter]
   have lower := (encodeNDTreeAt_node_number_bounds member).1
   have parentNe :
       (encodeNDTreeAt (.intro alpha beta premise) level next).root ≠ vertex := by
@@ -868,7 +868,7 @@ theorem encodeNDTreeAt_elim_major_incoming
         (encodedGraphAt (.elim alpha beta major minor) level next) =
       get_rule.incoming vertex
         (encodedGraphAt major (level + 1) (next + 1)) := by
-  rw [Flow.incoming_eq_filter, Flow.incoming_eq_filter]
+  rw [FlowSemantics.incoming_eq_filter, FlowSemantics.incoming_eq_filter]
   have bounds := encodeNDTreeAt_node_number_bounds member
   have parentNe :
       (encodeNDTreeAt (.elim alpha beta major minor) level next).root ≠ vertex := by
@@ -893,7 +893,7 @@ theorem encodeNDTreeAt_elim_minor_incoming
       get_rule.incoming vertex
         (encodedGraphAt minor (level + 1)
           (encodeNDTreeAt major (level + 1) (next + 1)).next) := by
-  rw [Flow.incoming_eq_filter, Flow.incoming_eq_filter]
+  rw [FlowSemantics.incoming_eq_filter, FlowSemantics.incoming_eq_filter]
   have bounds := encodeNDTreeAt_node_number_bounds member
   have parentNe :
       (encodeNDTreeAt (.elim alpha beta major minor) level next).root ≠ vertex := by
@@ -1137,7 +1137,7 @@ theorem encodeNDTreeAt_hypothesesHaveNoIncoming
       (dlds (encodeNDTreeAt tree level next).nodes
         (encodeNDTreeAt tree level next).edges []) := by
   intro vertex vertexMember hypothesis
-  rw [Flow.incoming_eq_filter, List.filter_eq_nil_iff]
+  rw [FlowSemantics.incoming_eq_filter, List.filter_eq_nil_iff]
   intro deduction deductionMember selected
   simp only [decide_eq_true_eq] at selected
   have endDerived :=

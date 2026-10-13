@@ -16,7 +16,7 @@ canonical-generator completeness theorem. This is fixed-graph verification,
 not general preservation by HC or the persistence refinement.
 -/
 
-open DLDS Flow Evaluator.Occurrence Certificate.Flow
+open DLDS FlowSemantics Evaluator.Occurrence Certificate.Flow
 open Evaluator.Occurrence.Relation Certificate.Occurrence
 open Certificate.Occurrence.Positions Certificate.Occurrence.Soundness
 open Certificate.Occurrence.Generator Evaluator.Occurrence.Fuel

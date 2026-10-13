@@ -4,7 +4,7 @@ import Evaluator.Mixed.Recursive
 # Successor occurrence-aware replay kernel
 
 The successor occurrence-aware evaluator is
-`occurrenceReplayAt`; historical `Flow.flowAt` remains a separate model.
+`occurrenceReplayAt`; historical `FlowSemantics.flowAt` remains a separate model.
 
 This is a successor semantics; it does not change historical `flowAt` or the
 restricted candidate replay.  Its local rule kernel is shared by ordinary and
@@ -38,7 +38,7 @@ open DLDS
 
 namespace Evaluator.Occurrence
 
-open Flow Evaluator.Mixed
+open FlowSemantics Evaluator.Mixed
 
 inductive OccurrenceReplayError where
   | fuelExhausted (vertex : Vertex)

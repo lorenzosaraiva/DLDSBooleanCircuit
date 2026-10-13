@@ -19,7 +19,7 @@ once a selected obligation fails, later checks cannot clear the error.
 namespace DLDS
 namespace Readings.Explicit
 
-open Flow
+open FlowSemantics
 open Readings.Selection
 open DLDS.Readings.LocalLabels
 

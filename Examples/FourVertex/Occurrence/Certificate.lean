@@ -3,7 +3,7 @@ import Lean.Data.Json
 
 /-! Lossless serialization of supplied data, with full vertex endpoint records.
 No proof-body value, generator, replay, or acceptance decision is used here. -/
-open Lean Flow Certificate.Occurrence Certificate.Occurrence.Positions
+open Lean FlowSemantics Certificate.Occurrence Certificate.Occurrence.Positions
 open NonHamiltonicity.Context NonHamiltonicity.Certificate.Input
 
 namespace Examples.FourVertex.Occurrence.Certificate

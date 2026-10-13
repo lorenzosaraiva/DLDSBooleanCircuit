@@ -40,7 +40,7 @@ The results below hold under the assumptions stated in the linked declarations.
 | Theorem | Meaning |
 | --- | --- |
 | [storedRoutes_setEq_flow](Certificate/Flow/Soundness.lean) | The local checks guarantee equality, ignoring order and repeats, between stored routes and the usable routes computed by Flow. |
-| [compressed_universally_accepted_certificateB](Certificate/Flow/Soundness.lean) | If the certificate, cursor and discharge checks pass, every permitted reading ends with all goal assumptions discharged; the routing condition is derived from the checked invariants. The 4-vertex instance is closed via the computed routing and discharge checks; the certificate route (compressed_universally_accepted_certificateB) is exercised on the 3-vertex instance. |
+| [compressed_universally_accepted_certificateB](Certificate/Flow/Soundness.lean) | If the certificate checks, cursor head and continuation checks, and discharge check pass, every permitted reading ends with all goal assumptions discharged; routing is derived from the checked invariants. The 4-vertex instance is closed via the computed routing and discharge checks; the certificate route (compressed_universally_accepted_certificateB) is exercised on the 3-vertex instance. |
 | [formationValid_iff_no_semanticMarked](Certificate/Flow/Positions.lean) | A certificate satisfies its formation conditions exactly when none of its verification positions reports a failure. |
 | [compressed_universally_accepted'](Flow/UniversalDischarge.lean) | Under the stated structural and discharge assumptions, every permitted reading ends with all goal assumptions discharged. |
 

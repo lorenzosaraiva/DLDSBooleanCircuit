@@ -21,9 +21,9 @@ extra dependency/residual/metadata entry within those explicit bounds, and it
 exactly round-trips every anchor certificate.
 -/
 
-open DLDS Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow.Foundation
 
-namespace Search.Certificate
+namespace CertificateSearch
 namespace Robustness
 
 inductive CanonicalDeductionOccurrence where
@@ -1279,7 +1279,7 @@ theorem canonicalAlphabet_card_le_fieldBudget_add_one (d : Graph)
   rw [Fintype.card_coe]
   unfold canonicalAtomSet
   calc
-    (insert (Search.Certificate.Robustness.CanonicalAtom.flag false)
+    (insert (CertificateSearch.Robustness.CanonicalAtom.flag false)
         ((canonicalSlots c).map Prod.snd).toFinset).card ≤
         ((canonicalSlots c).map Prod.snd).toFinset.card + 1 :=
       Finset.card_insert_le _ _
@@ -1627,7 +1627,7 @@ theorem total_formation_invalid_canonical_amplification (d : Graph)
           (certificateFieldBudget c + 1) ^ certificateFieldBudget c ≤
         canonicalTotalMalformationDensity d c position := by
   obtain ⟨position, position_lt, failure⟩ :=
-    Search.Certificate.total_formation_invalid_implies_marked d c invalid
+    CertificateSearch.total_formation_invalid_implies_marked d c invalid
   exact ⟨position, position_lt, failure,
     canonicalSupportOfTotalPosition_card_le_fieldBudget d c position,
     canonicalTotalMarkedAt_density_lower_bound d c failure,
@@ -1646,7 +1646,7 @@ theorem total_formation_invalid_syntactic_amplification (d : Graph)
             canonicalPositionReadBound d c position ≤
         canonicalTotalMalformationDensity d c position := by
   obtain ⟨position, position_lt, failure⟩ :=
-    Search.Certificate.total_formation_invalid_implies_marked d c invalid
+    CertificateSearch.total_formation_invalid_implies_marked d c invalid
   exact ⟨position, position_lt, failure,
     canonicalSupportOfTotalPosition_card_le_positionReadBound d c position,
     canonicalTotalMarkedAt_positionReadBound_density_lower_bound d c failure⟩
@@ -2597,4 +2597,4 @@ theorem formation_invalid_semantic_multiplicity_amplification
 
 
 end Robustness
-end Search.Certificate
+end CertificateSearch

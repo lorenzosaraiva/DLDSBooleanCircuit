@@ -11,7 +11,7 @@ the generated colour and `[0,k]` trace from the real `pre_collapse` and
 `collapseWithOccurrences` definitions.
 -/
 
-open DLDS Flow DLDS.Compression.Mixed.LocalRules
+open DLDS FlowSemantics DLDS.Compression.Mixed.LocalRules
 
 namespace DLDS.Compression.Mixed.IntroductionSource
 

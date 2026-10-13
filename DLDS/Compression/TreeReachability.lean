@@ -8,7 +8,7 @@ This module connects the occurrence-sensitive relational paths constructed by
 not replace `Pre` with a declarative reachability predicate.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open ProofSearch.Grid DLDS.ValidityDecomposition
 
 namespace DLDS.Compression.Domain
@@ -38,15 +38,15 @@ theorem DeductionPath.mono
 
 theorem mem_pre_go_of_mem_acc (d : Graph) :
     forall fuel frontier acc vertex,
-      vertex ∈ acc -> vertex ∈ Flow.Pre.go d fuel frontier acc := by
+      vertex ∈ acc -> vertex ∈ FlowSemantics.Pre.go d fuel frontier acc := by
   intro fuel
   induction fuel with
   | zero =>
       intro frontier acc vertex member
-      simpa [Flow.Pre.go] using member
+      simpa [FlowSemantics.Pre.go] using member
   | succ fuel ih =>
       intro frontier acc vertex member
-      simp only [Flow.Pre.go]
+      simp only [FlowSemantics.Pre.go]
       split
       · exact member
       · apply ih
@@ -84,7 +84,7 @@ theorem deductionPath_mem_pre_go
     (accLevel : ∀ vertex ∈ acc, vertex.LEVEL ≤ finish.LEVEL)
     (zeroSeen : length = 0 → finish ∈ acc)
     (enoughFuel : length ≤ fuel) :
-    start ∈ Flow.Pre.go d fuel frontier acc := by
+    start ∈ FlowSemantics.Pre.go d fuel frontier acc := by
   induction path generalizing fuel frontier acc with
   | refl vertex =>
       exact mem_pre_go_of_mem_acc d fuel frontier acc vertex (zeroSeen rfl)
@@ -141,7 +141,7 @@ theorem deductionPath_mem_pre_go
             · have := accLevel vertex old
               omega
             · exact Nat.le_of_eq (freshLevel vertex new)
-          simp only [Flow.Pre.go]
+          simp only [FlowSemantics.Pre.go]
           rw [show
             ((frontier.flatMap (predsOf d)).eraseDups).filter
                 (fun vertex => !(acc.any (fun seen => seen = vertex))) = fresh

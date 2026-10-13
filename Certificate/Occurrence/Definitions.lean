@@ -17,7 +17,7 @@ used by the soundness theorem below.  Global coherence between premise claims
 and recursively justified routes is a separate, still-required layer.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open Evaluator.Mixed Evaluator.Occurrence
 open Evaluator.Occurrence.Relation
 open Certificate.Flow.Foundation Certificate.Flow

@@ -15,7 +15,7 @@ open DLDS
 
 namespace Evaluator.Mixed
 
-open Flow
+open FlowSemantics
 
 inductive CandidateReplayError where
   | fuelExhausted (vertex : Vertex)

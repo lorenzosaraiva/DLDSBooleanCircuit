@@ -8,7 +8,7 @@ for `flowAt`. It is distinct from the current successor certificate and its
 `successorFormationB` checker.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open Certificate.Flow.Foundation
 
 namespace Certificate.Flow
@@ -1504,80 +1504,14 @@ theorem compressed_universally_accepted_certificateB (d : Graph)
     (c : Certificate) (hexp : expandedCertB d c = true)
     (hloc : localChecksB d c = true)
     (hcoverage : cursorRouteHeadCoverageB d = true)
-    (hcontinuation :
-      (d.NODES.all fun w =>
-         match elimPairsAt d w with
-         | [] => true
-         | pairs =>
-             (predsOf d w).all (fun u =>
-               elimPremiseAtB d w u || cursorCarrierAccountedAtB d w u) &&
-             pairs.all fun (major, minor) =>
-               ((flowAt d (stdFuel d) minor).all fun route =>
-                 (edgesBetween d minor w).all fun edge =>
-                   match consume edge route.2 with
-                   | none => true
-                   | some tail => exhaustedConsumedTailAtB d w tail ||
-                       (flowAt d (stdFuel d) major).any fun partner =>
-                         (edgesBetween d major w).any fun other =>
-                           consume other partner.2 == some tail) &&
-               ((flowAt d (stdFuel d) major).all fun route =>
-                 (edgesBetween d major w).all fun edge =>
-                   match consume edge route.2 with
-                   | none => true
-                   | some tail => exhaustedConsumedTailAtB d w tail ||
-                       (flowAt d (stdFuel d) minor).any fun partner =>
-                         (edgesBetween d minor w).any fun other =>
-                           consume other partner.2 == some tail)) = true)
+    (hcontinuation : cursorFlowContinuationClosureB d = true)
     (hdis : dischargedMultiB d = true) :
     ∀ P, ¬ AdmissibleMultiPath d P ∨ DischargedMulti d P (goalColumn d) := by
   have hexp' := expandedCertB_sound d c hexp
   have hloc' := localChecksB_sound d c hexp' hloc
   obtain ⟨hstruct, hnodup, hone, hlfu, hhyp⟩ :=
     retained_invariants_of_local d c hloc'
-  have hcontinuation' : CursorFlowContinuationClosure d := by
-    classical
-    rw [List.all_eq_true] at hcontinuation
-    intro w hw hpairsNe
-    have hw' := hcontinuation w hw
-    cases hpairs : elimPairsAt d w with
-    | nil => exact (hpairsNe hpairs).elim
-    | cons pair pairs =>
-        rw [hpairs] at hw'
-        simp only [Bool.and_eq_true, List.all_eq_true] at hw'
-        constructor
-        · intro u hu
-          have hu' := hw'.1 u hu
-          rw [Bool.or_eq_true] at hu'
-          rcases hu' with helim | hcarrier
-          · exact Or.inl (elimPremiseAtB_sound d w u helim)
-          · exact Or.inr (cursorCarrierAccountedAtB_sound d w u hcarrier)
-        · intro major minor hpair
-          have checked := hw'.2 (major, minor) (by simpa [hpairs] using hpair)
-          constructor
-          · intro route hroute edge hedge tail hconsume
-            have result := checked.1 route hroute edge hedge
-            simp only [hconsume] at result
-            rw [Bool.or_eq_true] at result
-            rcases result with hexhausted | hpartner
-            · exact Or.inl (exhaustedConsumedTailAtB_sound d w tail hexhausted)
-            · rw [List.any_eq_true] at hpartner
-              obtain ⟨partner, hpartnerMem, hother⟩ := hpartner
-              rw [List.any_eq_true] at hother
-              obtain ⟨other, hotherMem, hagree⟩ := hother
-              exact Or.inr ⟨partner, hpartnerMem, other, hotherMem,
-                by simpa using hagree⟩
-          · intro route hroute edge hedge tail hconsume
-            have result := checked.2 route hroute edge hedge
-            simp only [hconsume] at result
-            rw [Bool.or_eq_true] at result
-            rcases result with hexhausted | hpartner
-            · exact Or.inl (exhaustedConsumedTailAtB_sound d w tail hexhausted)
-            · rw [List.any_eq_true] at hpartner
-              obtain ⟨partner, hpartnerMem, hother⟩ := hpartner
-              rw [List.any_eq_true] at hother
-              obtain ⟨other, hotherMem, hagree⟩ := hother
-              exact Or.inr ⟨partner, hpartnerMem, other, hotherMem,
-                by simpa using hagree⟩
+  have hcontinuation' := cursorFlowContinuationClosureB_sound d hcontinuation
   exact compressed_universally_accepted' d hstruct hnodup hone
     (cursorRouteHeadCoverageB_sound d hcoverage) hlfu hhyp hcontinuation' hdis
 

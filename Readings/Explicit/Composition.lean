@@ -20,7 +20,7 @@ namespace DLDS
 namespace Readings.Explicit
 namespace TwoStageComposition
 
-open Flow
+open FlowSemantics
 open Readings.Selection
 open DLDS.Readings.LocalLabels
 open DLDS.Readings.Explicit.UniformElimFanFamily

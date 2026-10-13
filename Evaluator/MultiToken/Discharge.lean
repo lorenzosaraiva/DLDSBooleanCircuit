@@ -11,7 +11,7 @@ open DLDS
 
 namespace DLDS
 
-open Flow
+open FlowSemantics
 open DLDS.Examples.BinaryFan DLDS.Examples.TernaryFan
 
 

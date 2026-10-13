@@ -1,6 +1,6 @@
 import Evaluator.CertificateRoutes
 
-open DLDS Flow Certificate.Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow Certificate.Flow.Foundation
 open Evaluator.RouteIndexed Evaluator.CertificateRoutes
 
 namespace Evaluator.RouteIndexed.Tabulation

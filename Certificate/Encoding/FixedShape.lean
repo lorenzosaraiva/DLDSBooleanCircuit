@@ -9,12 +9,12 @@ residual values.  Its embedding into the canonical product fixes every graph,
 record-owner, record-presence, and list-presence coordinate at the anchor.
 -/
 
-open DLDS Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow.Foundation
 
 set_option maxHeartbeats 0
 set_option maxRecDepth 100000
 
-namespace Search.Certificate
+namespace CertificateSearch
 namespace Robustness
 
 /-- Exactly the canonical scalar addresses which are proof payload rather than
@@ -1333,8 +1333,8 @@ private theorem filteredWitnessRecord_length
     (c : Certificate) (vertices : List Vertex)
     (entry : EdgeRouteWitness × Nat)
     (member : entry ∈ c.edgeRoutes.zipIdx) :
-    ((([(Search.Certificate.Robustness.CanonicalRawCoord.witnessPresent entry.2,
-          Search.Certificate.Robustness.CanonicalAtom.flag true)] : List CanonicalSlot) ++
+    ((([(CertificateSearch.Robustness.CanonicalRawCoord.witnessPresent entry.2,
+          CertificateSearch.Robustness.CanonicalAtom.flag true)] : List CanonicalSlot) ++
         witnessSlots entry.2 entry.1).filter fun slot =>
           shapeFixedRawRelevantAtVerticesB c vertices slot.1).length =
       if vertices.contains entry.1.edge.START then
@@ -1358,8 +1358,8 @@ private theorem filteredTerminalRecord_length
     (c : Certificate) (vertices : List Vertex)
     (entry : TerminalOutput × Nat)
     (member : entry ∈ c.terminalOutputs.zipIdx) :
-    ((([(Search.Certificate.Robustness.CanonicalRawCoord.terminalPresent entry.2,
-          Search.Certificate.Robustness.CanonicalAtom.flag true)] : List CanonicalSlot) ++
+    ((([(CertificateSearch.Robustness.CanonicalRawCoord.terminalPresent entry.2,
+          CertificateSearch.Robustness.CanonicalAtom.flag true)] : List CanonicalSlot) ++
         terminalSlots entry.2 entry.1).filter fun slot =>
           shapeFixedRawRelevantAtVerticesB c vertices slot.1).length =
       if vertices.contains entry.1.node then
@@ -1414,8 +1414,8 @@ theorem localPayloadSlotBound_eq_recordBound
           (fun entry =>
             (List.filter
               (fun slot => shapeFixedRawRelevantAtVerticesB c vertices slot.1)
-              ([(Search.Certificate.Robustness.CanonicalRawCoord.witnessPresent entry.2,
-                  Search.Certificate.Robustness.CanonicalAtom.flag true)] ++
+              ([(CertificateSearch.Robustness.CanonicalRawCoord.witnessPresent entry.2,
+                  CertificateSearch.Robustness.CanonicalAtom.flag true)] ++
                 witnessSlots entry.2 entry.1)).length)
           c.edgeRoutes.zipIdx).sum =
           (c.edgeRoutes.zipIdx.map fun entry =>
@@ -1440,8 +1440,8 @@ theorem localPayloadSlotBound_eq_recordBound
           (fun entry =>
             (List.filter
               (fun slot => shapeFixedRawRelevantAtVerticesB c vertices slot.1)
-              ([(Search.Certificate.Robustness.CanonicalRawCoord.terminalPresent entry.2,
-                  Search.Certificate.Robustness.CanonicalAtom.flag true)] ++
+              ([(CertificateSearch.Robustness.CanonicalRawCoord.terminalPresent entry.2,
+                  CertificateSearch.Robustness.CanonicalAtom.flag true)] ++
                 terminalSlots entry.2 entry.1)).length)
           c.terminalOutputs.zipIdx).sum =
           (c.terminalOutputs.zipIdx.map fun entry =>
@@ -1951,4 +1951,4 @@ theorem formation_invalid_shapeFixed_amplification (d : Graph)
 
 
 end Robustness
-end Search.Certificate
+end CertificateSearch

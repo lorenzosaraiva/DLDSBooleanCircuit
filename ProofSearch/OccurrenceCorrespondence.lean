@@ -13,7 +13,7 @@ The Grid does not inspect residual routing.  Residual completion therefore
 remains an explicit successor-side conjunct.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open Evaluator.Mixed Evaluator.Occurrence
 open Evaluator.Occurrence.LocalRules Evaluator.Occurrence.Relation
 open DLDS.ProofSearch.BranchingGrid ProofSearch.Grid

@@ -13,7 +13,7 @@ Those stability/success hypotheses are explicit.  Establishing them for every
 actual HC output is the remaining changing-graph fuel obligation.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open Evaluator.Occurrence
 open Certificate.Flow.Foundation
 open Evaluator.Occurrence.Relation Certificate.Occurrence

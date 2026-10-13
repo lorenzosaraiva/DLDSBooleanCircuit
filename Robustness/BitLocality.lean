@@ -3,7 +3,7 @@ import Mathlib.Data.Nat.Log
 
 /-! Bounded bit-program grammar. A semantic compiler to the Flow checker is
 a separate obligation; no such compiler is postulated in these theorems. -/
-open Search.Certificate.Robustness
+open CertificateSearch.Robustness
 namespace Robustness.BitLocality
 
 /-- An atom reads at most three words, each of k bits. -/

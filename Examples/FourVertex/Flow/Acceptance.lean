@@ -2,7 +2,7 @@ import Examples.FourVertex.Flow.CertificateDecision
 import Examples.FourVertex.Flow.Slots
 import Certificate.Flow.Cache
 
-open DLDS Flow Certificate.Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow Certificate.Flow.Foundation
 
 set_option maxHeartbeats 0
 set_option maxRecDepth 100000

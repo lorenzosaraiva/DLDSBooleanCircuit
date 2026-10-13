@@ -10,7 +10,7 @@ compares an actual transformed graph with an independently verified base graph;
 it never assumes that replay on the transformed premise succeeds.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open Evaluator.Mixed Evaluator.Occurrence
 open DLDS.Compression.Domain
 open DLDS.Compression.Mixed.LocalRules DLDS.Compression.Mixed.ContextualElimination
@@ -28,7 +28,7 @@ theorem derivedOutputs_congr_of_incoming
     derivedOutputs left vertex premiseFlow =
       derivedOutputs right vertex premiseFlow := by
   have predecessors : predsOf left vertex = predsOf right vertex := by
-    simp only [Flow.predsOf_eq, incoming]
+    simp only [FlowSemantics.predsOf_eq, incoming]
   have between : forall start,
       edgesBetween left start vertex = edgesBetween right start vertex := by
     intro start
@@ -63,7 +63,7 @@ theorem occurrenceStep_congr_of_local_data
     occurrenceStep left vertex premiseFlow =
       occurrenceStep right vertex premiseFlow := by
   have predecessors : predsOf left vertex = predsOf right vertex := by
-    simp only [Flow.predsOf_eq, incoming]
+    simp only [FlowSemantics.predsOf_eq, incoming]
   have derived := derivedOutputs_congr_of_incoming left right vertex incoming
     premiseFlow
   simp only [occurrenceStep, predecessors, ancestors, sources, derived]
@@ -137,7 +137,7 @@ theorem occurrenceReplayAt_congr_of_frame
   | succ fuel ih =>
       rcases frame with ⟨incoming, ancestors, sources, premiseFrames⟩
       have predecessors : predsOf left vertex = predsOf right vertex := by
-        simp only [Flow.predsOf_eq, incoming]
+        simp only [FlowSemantics.predsOf_eq, incoming]
       have premiseCalls : forall premise, premise ∈ predsOf left vertex ->
           occurrenceReplayAt left fuel premise =
             occurrenceReplayAt right fuel premise := by
@@ -221,7 +221,7 @@ theorem occurrenceReplayAt_reseed_derived_from_base
     occurrenceReplayAt actual (fuel + 1) vertex =
       .ok (tracedRoutes dependency traces) := by
   have predecessors : predsOf actual vertex = predsOf base vertex := by
-    simp only [Flow.predsOf_eq, incoming]
+    simp only [FlowSemantics.predsOf_eq, incoming]
   have premiseCalls : forall premise, premise ∈ predsOf actual vertex ->
       occurrenceReplayAt actual fuel premise =
         occurrenceReplayAt base fuel premise := by
@@ -325,7 +325,7 @@ theorem occurrenceReplayAt_transport_derived_from_current
     occurrenceReplayAt actual (fuel + 1) vertex =
       .ok (reseedDerivedRoutes traces routes) := by
   have predecessors : predsOf actual vertex = predsOf current vertex := by
-    simp only [Flow.predsOf_eq, incoming]
+    simp only [FlowSemantics.predsOf_eq, incoming]
   have premiseCalls : forall premise, premise ∈ predsOf actual vertex ->
       occurrenceReplayAt actual fuel premise =
         occurrenceReplayAt current fuel premise := by
@@ -754,7 +754,7 @@ theorem AccumulatorInvariant.occurrenceReplayAt
   have predecessorEq : predsOf actual current.CENTER =
       predsOf (DLDS.Compression.Mixed.EliminationSource.neighborhoodGraph current)
         current.CENTER := by
-    simp only [Flow.predsOf_eq, centerIncoming]
+    simp only [FlowSemantics.predsOf_eq, centerIncoming]
   have graphEqual : accumulatedGraph current.CENTER processed =
       DLDS.Compression.Mixed.EliminationSource.neighborhoodGraph current := by
     unfold accumulatedGraph

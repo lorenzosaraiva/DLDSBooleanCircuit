@@ -22,7 +22,7 @@ cross-routings do not create extra boundary observations; this is not an
 assumption hidden in a pairing supplied by the caller.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open DLDS.Compression.Mixed.LocalRules DLDS.Compression.Mixed.EliminationSource
 
 namespace DLDS.Compression.Mixed.ContextualElimination

@@ -15,7 +15,7 @@ actual compressor output satisfies any HC applicability invariant or that the
 production caller supplies adequate fuel.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open Evaluator.Mixed Evaluator.Occurrence
 open Evaluator.Occurrence.LocalRules
 

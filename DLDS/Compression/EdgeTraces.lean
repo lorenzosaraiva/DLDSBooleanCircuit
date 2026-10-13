@@ -11,7 +11,7 @@ only established relationship remains the endpoint-relative path theorem in
 `LocalSpecificationCandidate`.
 -/
 
-open DLDS Flow DLDS.Compression.Mixed.LocalRules
+open DLDS FlowSemantics DLDS.Compression.Mixed.LocalRules
 
 namespace DLDS.Compression.EdgeTraces
 

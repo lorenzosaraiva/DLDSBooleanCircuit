@@ -1,7 +1,7 @@
 import DLDS.Compression.FixedPoints
 import ProofSearch.BranchingGrid.Completeness
 
-open DLDS Flow
+open DLDS FlowSemantics
 open ProofSearch.Grid
 open DLDS.ValidityDecomposition
 open Certificate.Flow.GeneratorCompleteness ProofSearch.FlowCorrespondence

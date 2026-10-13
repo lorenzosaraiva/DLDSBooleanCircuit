@@ -1,7 +1,7 @@
 import Evaluator.RouteIndexed.Tabulation
 import ProofSearch.BranchingGrid.Completeness
 
-open DLDS Flow Certificate.Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow Certificate.Flow.Foundation
 open Evaluator.RouteIndexed Evaluator.RouteIndexed.Tabulation
 open DLDS.ProofSearch.BranchingGrid ProofSearch.Grid
 

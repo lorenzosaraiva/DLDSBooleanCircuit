@@ -2,7 +2,7 @@ import Robustness.RuleCompilation.ElimDensity
 
 /-! Literal kernel-reduced positive/negative ordinary-rule controls.
 These are local route checks, with no coverage or root-discharge assertion. -/
-open DLDS Flow Robustness.BitLocality Robustness.SelectedProducers
+open DLDS FlowSemantics Robustness.BitLocality Robustness.SelectedProducers
 namespace Robustness.RuleCompilation.Sanity
 set_option maxHeartbeats 2000000
 
@@ -189,14 +189,14 @@ theorem intro_bad_fixed_lengths_reject :
 
 
 theorem intro_corruption_witness :
-    ∃ witness : Search.Certificate.Robustness.FailureWitness
+    ∃ witness : CertificateSearch.Robustness.FailureWitness
         (introFailure (introShape 0 0) 2 (introFrame 0)) (introBits 0 0 true false),
       witness.support.card ≤ W 2 1 2 :=
   intro_failure_witness (introShape 0 0) 2 2 (by decide +kernel)
     (introFrame 0) (introBits 0 0 true false) intro_dependency_rejects
 
 theorem elim_corruption_witness :
-    ∃ witness : Search.Certificate.Robustness.FailureWitness
+    ∃ witness : CertificateSearch.Robustness.FailureWitness
         (elimFailure elimShape 3 elimFrame) (elimBits true),
       witness.support.card ≤ W 3 2 2 :=
   elim_failure_witness elimShape 3 2 (by decide +kernel)
@@ -204,14 +204,14 @@ theorem elim_corruption_witness :
 
 theorem intro_corruption_density :
     (1 : ℚ) / (2 ^ 23 * (M 2 1 2 : ℚ) ^ 11) ≤
-      Search.Certificate.Robustness.oracleFailureDensity
+      CertificateSearch.Robustness.oracleFailureDensity
         (introFailure (introShape 0 0) 2 (introFrame 0)) :=
   intro_failure_inverse_polynomial (introShape 0 0) 2 2 (by decide +kernel)
     (introFrame 0) (introBits 0 0 true false) intro_dependency_rejects
 
 theorem elim_corruption_density :
     (1 : ℚ) / (2 ^ 23 * (M 3 2 2 : ℚ) ^ 11) ≤
-      Search.Certificate.Robustness.oracleFailureDensity
+      CertificateSearch.Robustness.oracleFailureDensity
         (elimFailure elimShape 3 elimFrame) :=
   elim_failure_inverse_polynomial elimShape 3 2 (by decide +kernel)
     elimFrame (elimBits true) elim_union_rejects

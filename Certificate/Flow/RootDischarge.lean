@@ -1,6 +1,6 @@
 import Certificate.Flow.Soundness
 
-open DLDS Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow.Foundation
 
 namespace Certificate.Flow
 

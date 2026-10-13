@@ -3,7 +3,7 @@ import Robustness.SelectedProducers.SeedDensity
 
 /-! Fixed graph, ownership and producer/premise addresses; only canonical route
 bitmaps and fixed-length colour words vary. Padding coordinates are ignored. -/
-open DLDS Flow Robustness.BitLocality Robustness.SelectedProducers
+open DLDS FlowSemantics Robustness.BitLocality Robustness.SelectedProducers
 namespace Robustness.RuleCompilation
 set_option maxHeartbeats 2000000
 

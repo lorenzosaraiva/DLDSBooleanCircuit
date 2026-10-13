@@ -5,7 +5,7 @@ import Examples.Circuit
 
 open DLDS
 
-namespace Flow
+namespace FlowSemantics
 
 /-- Standard fuel for the fuelled Flow machinery. -/
 def stdFuel (d : Graph) : Nat := d.NODES.length + 1
@@ -62,4 +62,4 @@ abbrev FlowCorrect (d : Graph) : Prop :=
 
 
 
-end Flow
+end FlowSemantics

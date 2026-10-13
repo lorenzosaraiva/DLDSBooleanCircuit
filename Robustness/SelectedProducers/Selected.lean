@@ -3,7 +3,7 @@ import Robustness.JustifiedRoutes
 /-! One explicitly selected producer for every clause of historical Flow.
 Each pick is an indexed singleton (or empty on a bad index), never the final
 Flow output list. Unused kinds and failed structural branches reject. -/
-open DLDS Flow
+open DLDS FlowSemantics
 namespace Robustness.SelectedProducers
 
 inductive SelectedKind where

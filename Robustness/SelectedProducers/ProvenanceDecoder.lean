@@ -6,7 +6,7 @@ None pointers use zero; Some slot uses slot+1. Invalid tags decode to None;
 raw invalid pointers also decode to None, so a future general checker must use
 pointerValidB before interpreting them. These round trips do not compile
 the non-seed checks, and make no old Formula-list-entry shape identification. -/
-open DLDS Flow
+open DLDS FlowSemantics
 namespace Robustness.SelectedProducers
 
 def selectionWords (kind : SelectedKind) : Fin 7 → Nat :=

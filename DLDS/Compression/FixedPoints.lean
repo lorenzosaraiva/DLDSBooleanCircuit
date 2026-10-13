@@ -1,7 +1,7 @@
 import DLDS.ValidityDecomposition
 import DLDS.Compression.IndexedClasses
 
-open DLDS Flow Certificate.Flow.Foundation Certificate.Flow
+open DLDS FlowSemantics Certificate.Flow.Foundation Certificate.Flow
 open Certificate.Flow.GeneratorCompleteness ProofSearch.FlowCorrespondence
 open DLDS.ValidityDecomposition
 

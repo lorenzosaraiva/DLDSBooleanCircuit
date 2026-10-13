@@ -4,7 +4,7 @@ import Robustness.SelectedProducers.SeedCompiler
 The proved equations below cover normalized dependency production only.
 These equations concern dependencies; residual constraints and premise-address
 decoding are separate properties. -/
-open DLDS Flow Robustness.BitLocality
+open DLDS FlowSemantics Robustness.BitLocality
 namespace Robustness.SelectedProducers
 set_option maxHeartbeats 2000000
 

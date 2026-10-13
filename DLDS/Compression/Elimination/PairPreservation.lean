@@ -17,7 +17,7 @@ are retained only because they are fields of the historical graph; they are
 not used as operational dependencies.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open Evaluator.Mixed Evaluator.Occurrence
 open DLDS.Compression.Mixed.ContextualElimination
 
@@ -359,7 +359,7 @@ theorem local_predecessors {d : Graph} (input : Input d) :
     predsOf (localGraph input) (center input) =
       [input.rightMajor, input.rightMinor,
        input.leftMajor, input.leftMinor] := by
-  rw [Flow.predsOf_eq, local_incoming input]
+  rw [FlowSemantics.predsOf_eq, local_incoming input]
   change List.eraseDups
       [input.rightMajor, input.rightMinor,
        input.leftMajor, input.leftMinor] = _
@@ -463,11 +463,11 @@ private theorem local_elimPairs {d : Graph} (input : Input d) :
     formulaRM_LM, formulaRM_Lm, formulaRm_LM, formulaRm_Lm,
     Ne.symm formulaRM_LM, Ne.symm formulaRM_Lm,
     Ne.symm formulaRm_LM, Ne.symm formulaRm_Lm,
-    Flow.formula_ne_implication_self,
-    Flow.not_mutual_implication]
+    FlowSemantics.formula_ne_implication_self,
+    FlowSemantics.not_mutual_implication]
   simp [crossRm_LM.1, crossRm_Lm.1, crossRM_Lm.2,
     crossRm_Lm.2, rightMinorNotNested, leftMinorNotNested,
-    Flow.formula_ne_implication_self]
+    FlowSemantics.formula_ne_implication_self]
 
 private theorem flow_rightMajor {d : Graph} (input : Input d)
     (rightMajorDep rightMinorDep leftMajorDep leftMinorDep : Dep) :
@@ -546,7 +546,7 @@ theorem eliminationPairOutputs_zero_edges_distinct_tags
     (distinctTags : minorTag ≠ majorTag) :
     eliminationPairOutputs d v premiseFlow (major, minor) = [] := by
   simp [eliminationPairOutputs, majorFlow, minorFlow, majorEdges, minorEdges,
-    Flow.consume, majorZero, minorZero, distinctTags]
+    FlowSemantics.consume, majorZero, minorZero, distinctTags]
 
 private theorem right_pair_outputs
     {d : Graph} (input : Input d)
@@ -558,7 +558,7 @@ private theorem right_pair_outputs
       [(depUnion rightMinorDep rightMajorDep, [input.right.NUMBER])] := by
   simp [eliminationPairOutputs, flow_rightMajor input,
     flow_rightMinor input, edges_rightMajor input, edges_rightMinor input,
-    Flow.consume, rightMajorEdge, rightMinorEdge]
+    FlowSemantics.consume, rightMajorEdge, rightMinorEdge]
 
 private theorem left_pair_outputs
     {d : Graph} (input : Input d)
@@ -570,7 +570,7 @@ private theorem left_pair_outputs
       [(depUnion leftMinorDep leftMajorDep, [input.left.NUMBER])] := by
   simp [eliminationPairOutputs, flow_leftMajor input,
     flow_leftMinor input, edges_leftMajor input, edges_leftMinor input,
-    Flow.consume, leftMajorEdge, leftMinorEdge]
+    FlowSemantics.consume, leftMajorEdge, leftMinorEdge]
 
 /-- Formula matching may nominate a premise from the right occurrence as
 major and one from the left occurrence as minor.  The independently carried
@@ -590,7 +590,7 @@ private theorem right_left_cross_pair_outputs
       flow_rightMinor input, flow_leftMajor input, flow_leftMinor input,
       edges_rightMajor input, edges_rightMinor input,
       edges_leftMajor input, edges_leftMinor input,
-      Flow.consume, rightMajorEdge, rightMinorEdge,
+      FlowSemantics.consume, rightMajorEdge, rightMinorEdge,
       leftMajorEdge, leftMinorEdge, input.distinctNumbers,
       Ne.symm input.distinctNumbers]
 
@@ -609,7 +609,7 @@ private theorem left_right_cross_pair_outputs
       flow_rightMinor input, flow_leftMajor input, flow_leftMinor input,
       edges_rightMajor input, edges_rightMinor input,
       edges_leftMajor input, edges_leftMinor input,
-      Flow.consume, rightMajorEdge, rightMinorEdge,
+      FlowSemantics.consume, rightMajorEdge, rightMinorEdge,
       leftMajorEdge, leftMinorEdge, input.distinctNumbers,
       Ne.symm input.distinctNumbers]
 
@@ -666,7 +666,7 @@ theorem local_occurrenceStep
         [leftMajorEdge input] by exact edges_leftMajor input]
     rw [show edgesBetween graph input.leftMinor root =
         [leftMinorEdge input] by exact edges_leftMinor input]
-    simp [Flow.consume, rightMajorEdge, rightMinorEdge,
+    simp [FlowSemantics.consume, rightMajorEdge, rightMinorEdge,
       leftMajorEdge, leftMinorEdge, expectedRoutes]
   have separatedIntroductions :
       separatedIntroductionOutputs graph root flow = [] := by
@@ -704,25 +704,25 @@ theorem local_occurrenceStep
               · simp [formulaShape, hRM, hRm, hLM, hLm,
                   candidateIntroductionOutputs, flowRM, flowRm, flowLM,
                   flowLm, edgeRM, edgeRm, edgeLM, edgeLm,
-                  Flow.consume, residualOccursB, expectedRoutes,
+                  FlowSemantics.consume, residualOccursB, expectedRoutes,
                   input.distinctNumbers]
               · simp [formulaShape, hRM, hRm, hLM, hLm,
                   candidateIntroductionOutputs, flowRM, flowRm, flowLM,
                   flowLm, edgeRM, edgeRm, edgeLM, edgeLm,
-                  Flow.consume, residualOccursB, expectedRoutes,
+                  FlowSemantics.consume, residualOccursB, expectedRoutes,
                   input.distinctNumbers]
             · by_cases hLm : input.leftMinor.FORMULA = consequent
               <;> simp [formulaShape, hRM, hRm, hLM, hLm,
                 candidateIntroductionOutputs, flowRM, flowRm, flowLM,
                 flowLm, edgeRM, edgeRm, edgeLM, edgeLm,
-                Flow.consume, residualOccursB, expectedRoutes,
+                FlowSemantics.consume, residualOccursB, expectedRoutes,
                 input.distinctNumbers]
           · by_cases hLM : input.leftMajor.FORMULA = consequent
             <;> by_cases hLm : input.leftMinor.FORMULA = consequent
             <;> simp [formulaShape, hRM, hRm, hLM, hLm,
               candidateIntroductionOutputs, flowRM, flowRm, flowLM,
               flowLm, edgeRM, edgeRm, edgeLM, edgeLm,
-              Flow.consume, residualOccursB, expectedRoutes,
+              FlowSemantics.consume, residualOccursB, expectedRoutes,
               input.distinctNumbers]
         · by_cases hRm : input.rightMinor.FORMULA = consequent
           <;> by_cases hLM : input.leftMajor.FORMULA = consequent
@@ -730,7 +730,7 @@ theorem local_occurrenceStep
           <;> simp [formulaShape, hRM, hRm, hLM, hLm,
             candidateIntroductionOutputs, flowRM, flowRm, flowLM,
             flowLm, edgeRM, edgeRm, edgeLM, edgeLm,
-          Flow.consume, residualOccursB, expectedRoutes,
+          FlowSemantics.consume, residualOccursB, expectedRoutes,
           input.distinctNumbers]
   have routesNodup :
       (expectedRoutes input rightMajorDep rightMinorDep

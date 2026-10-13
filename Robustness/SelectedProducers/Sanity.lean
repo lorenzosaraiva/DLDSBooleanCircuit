@@ -3,7 +3,7 @@ import Robustness.SelectedProducers.SeedDensity
 /-! Small kernel-reduced controls for the actual selected seed checker and its
 proved compiler. They are literal positive local fixtures, not closed proofs,
 coverage certificates or a successor/Hermann application. -/
-open DLDS Flow Robustness.BitLocality Search.Certificate.Robustness
+open DLDS FlowSemantics Robustness.BitLocality CertificateSearch.Robustness
 namespace Robustness.SelectedProducers.Sanity
 
 def atom : Formula := .atom "a"

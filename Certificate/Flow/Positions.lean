@@ -14,9 +14,9 @@ its local occurrence directly.  Natural-number positions are retained below
 only as the serialization of `semanticPositions`.
 -/
 
-open DLDS Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow.Foundation
 
-namespace Search.Certificate
+namespace CertificateSearch
 
 /-- Stable logical names for every component of the complete formation
 checker.  Occurrence numbers distinguish repeated graph records without
@@ -410,12 +410,12 @@ private theorem nodeKeys_nodup (size : Nat) :
 
 private theorem mappedNodePositions_nodup (nodes : List Vertex) :
     ((nodes.zipIdx.flatMap fun entry =>
-      [Search.Certificate.VerificationPosition.structuralNode entry.2 entry.1,
-       Search.Certificate.VerificationPosition.hypothesisSource entry.2 entry.1,
-       Search.Certificate.VerificationPosition.nodeProduction entry.2 entry.1,
-       Search.Certificate.VerificationPosition.routeCoverage entry.2 entry.1,
-       Search.Certificate.VerificationPosition.tailClosure entry.2 entry.1,
-       Search.Certificate.VerificationPosition.rootDischarge entry.2 entry.1]).map
+      [CertificateSearch.VerificationPosition.structuralNode entry.2 entry.1,
+       CertificateSearch.VerificationPosition.hypothesisSource entry.2 entry.1,
+       CertificateSearch.VerificationPosition.nodeProduction entry.2 entry.1,
+       CertificateSearch.VerificationPosition.routeCoverage entry.2 entry.1,
+       CertificateSearch.VerificationPosition.tailClosure entry.2 entry.1,
+       CertificateSearch.VerificationPosition.rootDischarge entry.2 entry.1]).map
         verificationPositionKey).Nodup := by
   rw [List.map_flatMap]
   simp only [verificationPositionKey, List.map_cons, List.map_nil]
@@ -829,7 +829,7 @@ theorem strongFormationValid_iff_no_strongSemanticMarked (d : Graph)
             rw [List.getElem_zipIdx]
             simp [nodeAtSlot]
           have positionMember :
-              Search.Certificate.StrongVerificationPosition.universalRootDischarge slot node ∈
+              CertificateSearch.StrongVerificationPosition.universalRootDischarge slot node ∈
                 strongSemanticPositions d c := by
             rw [strongSemanticPositions, List.mem_append]
             exact Or.inr (List.mem_map.mpr
@@ -856,4 +856,4 @@ theorem strongFormation_invalid_implies_strongSemanticMarked (d : Graph)
   exact noWitness ⟨position, member, marked⟩
 
 
-end Search.Certificate
+end CertificateSearch

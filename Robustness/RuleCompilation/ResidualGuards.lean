@@ -3,7 +3,7 @@ import Robustness.RuleCompilation.IntroSemantics
 /-! Each residual guard reads one or two fixed-address colour words.
 Consumption handles empty paths, incompatible lengths, and exact consumed tails.
 Output witnessability is checked from its head, never assumed by the shape. -/
-open DLDS Flow Robustness.BitLocality Robustness.SelectedProducers
+open DLDS FlowSemantics Robustness.BitLocality Robustness.SelectedProducers
 namespace Robustness.RuleCompilation
 set_option maxHeartbeats 2000000
 set_option maxRecDepth 2000

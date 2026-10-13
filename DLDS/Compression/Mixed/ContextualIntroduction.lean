@@ -8,7 +8,7 @@ This is the introduction analogue of `HCContextualMixedHE`.  It uses the same
 boundary-observation type and the same full route/use Cartesian enumeration.
 -/
 
-open DLDS Flow DLDS.Compression.Mixed.LocalRules
+open DLDS FlowSemantics DLDS.Compression.Mixed.LocalRules
 open DLDS.Compression.Mixed.ContextualElimination DLDS.Compression.Mixed.IntroductionSource
 
 namespace DLDS.Compression.Mixed.ContextualIntroduction

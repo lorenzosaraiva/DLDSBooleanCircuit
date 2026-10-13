@@ -12,7 +12,7 @@ hypothesis occurrence of the same formula/level on the right; both have one
 colour-zero outgoing use and the elimination premises are hypotheses.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open DLDS.Compression.Mixed.LocalRules
 
 namespace DLDS.Compression.Mixed.EliminationSource

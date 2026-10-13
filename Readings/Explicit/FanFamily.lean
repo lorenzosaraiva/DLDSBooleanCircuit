@@ -19,7 +19,7 @@ namespace DLDS
 namespace Readings.Explicit
 namespace UniformElimFanFamily
 
-open Flow
+open FlowSemantics
 open Readings.Selection
 open DLDS.Readings.LocalLabels
 

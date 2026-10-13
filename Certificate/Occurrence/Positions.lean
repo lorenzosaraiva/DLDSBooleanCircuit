@@ -14,7 +14,7 @@ obligation.  The result is local/fixed-graph infrastructure: it does not yet
 prove that a passing certificate equals fuelled recursive reference replay.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open Evaluator.Occurrence
 open Certificate.Flow.Foundation Certificate.Flow
 open Certificate.Occurrence

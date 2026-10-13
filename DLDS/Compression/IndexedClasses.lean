@@ -86,8 +86,7 @@ theorem loop₂_eq_filter_or_empty (level : Nat) (label : Formula)
                 (levelFormulaEqB level label) =
               (before ++ tail).countP
                 (levelFormulaEqB level label) + 1 := by
-          simp [List.countP_append, headMatch, Nat.add_assoc, Nat.add_comm,
-            Nat.add_left_comm]
+          simp [List.countP_append, headMatch, Nat.add_assoc]
         have recursiveCountEq :
             (List.concat before head ++ tail).countP
                 (levelFormulaEqB level label) =

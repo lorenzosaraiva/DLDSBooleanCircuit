@@ -4,7 +4,7 @@ import Robustness.SelectedProducers.SeedSemantics
 The ancestor address is decoded from the header and may be out of range.
 Static guards, canonical dependency equality, exact path equality and local
 witnessability are all included. No replay or oracle-correctness premise occurs. -/
-open DLDS Flow Robustness.BitLocality
+open DLDS FlowSemantics Robustness.BitLocality
 namespace Robustness.SelectedProducers
 set_option maxHeartbeats 2000000
 set_option maxRecDepth 2000

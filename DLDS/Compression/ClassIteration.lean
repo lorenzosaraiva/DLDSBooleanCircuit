@@ -10,7 +10,7 @@ generalizes only the proof-side premise contract; it does not define a new
 evaluator or change the compressor.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open Evaluator.Mixed Evaluator.Occurrence
 open DLDS.Compression.Elimination.ClassPreservation DLDS.Compression.Elimination.Execution
 open DLDS.Compression.Elimination.StepCorrespondence
@@ -149,7 +149,7 @@ theorem ExactRoutedReplacementIncidence.toRoutedEliminationIncidence
     majorEdge := ?_
     minorEdge := ?_ }
   · intro vertex
-    rw [Flow.predsOf_eq, List.mem_eraseDups, List.mem_map]
+    rw [FlowSemantics.predsOf_eq, List.mem_eraseDups, List.mem_map]
     constructor
     · rintro ⟨actualEdge, actualEdgeMember, startEqual⟩
       have skeletonMember : incomingEdgeSkeleton actualEdge ∈
@@ -252,16 +252,16 @@ private theorem routed_same_occurrence_formula_candidate
   · subst major
     subst minor
     exact False.elim
-      (Flow.formula_ne_implication_self occurrence.major.FORMULA
+      (FlowSemantics.formula_ne_implication_self occurrence.major.FORMULA
         center.FORMULA formula)
   · exact ⟨majorEq, minorEq⟩
   · subst major
     subst minor
-    exact False.elim (Flow.not_mutual_implication logical formula)
+    exact False.elim (FlowSemantics.not_mutual_implication logical formula)
   · subst major
     subst minor
     exact False.elim
-      (Flow.formula_ne_implication_self occurrence.minor.FORMULA
+      (FlowSemantics.formula_ne_implication_self occurrence.minor.FORMULA
         center.FORMULA formula)
 
 private theorem routed_major_ne_minor
@@ -272,7 +272,7 @@ private theorem routed_major_ne_minor
   intro equal
   have formulaEqual := congrArg Vertex.FORMULA equal
   rw [logical] at formulaEqual
-  exact Flow.formula_ne_implication_self occurrence.minor.FORMULA
+  exact FlowSemantics.formula_ne_implication_self occurrence.minor.FORMULA
     center.FORMULA formulaEqual.symm
 
 /-- Consuming occurrence-coloured premise routes leaves exactly the logical
@@ -283,8 +283,8 @@ theorem coloured_elimination_result_iff
     (minorColour majorColour : Nat)
     (minorDep majorDep : Dep) (minorTag majorTag : Nat)
     (output : FlowPair) :
-    (match Flow.consume minorEdge [minorColour, minorTag],
-        Flow.consume majorEdge [majorColour, majorTag] with
+    (match FlowSemantics.consume minorEdge [minorColour, minorTag],
+        FlowSemantics.consume majorEdge [majorColour, majorTag] with
       | some minorTail, some majorTail =>
           if minorTail = majorTail then
             some (depUnion minorDep majorDep, minorTail)
@@ -296,9 +296,9 @@ theorem coloured_elimination_result_iff
       output = (depUnion minorDep majorDep, [minorTag]) := by
   by_cases minorMatches : minorEdge.COLOUR = minorColour
   · by_cases majorMatches : majorEdge.COLOUR = majorColour
-    · simp [Flow.consume, minorMatches, majorMatches, eq_comm]
-    · simp [Flow.consume, minorMatches, majorMatches]
-  · simp [Flow.consume, minorMatches]
+    · simp [FlowSemantics.consume, minorMatches, majorMatches, eq_comm]
+    · simp [FlowSemantics.consume, minorMatches, majorMatches]
+  · simp [FlowSemantics.consume, minorMatches]
 
 theorem coloured_elimination_rejects_distinct_tags
     (minorEdge majorEdge : Deduction)
@@ -307,14 +307,14 @@ theorem coloured_elimination_rejects_distinct_tags
     (minorMatches : minorEdge.COLOUR = minorColour)
     (majorMatches : majorEdge.COLOUR = majorColour)
     (differentUses : minorTag ≠ majorTag) :
-    (match Flow.consume minorEdge [minorColour, minorTag],
-        Flow.consume majorEdge [majorColour, majorTag] with
+    (match FlowSemantics.consume minorEdge [minorColour, minorTag],
+        FlowSemantics.consume majorEdge [majorColour, majorTag] with
       | some minorTail, some majorTail =>
           if minorTail = majorTail then
             some (depUnion minorDep majorDep, minorTail)
           else none
       | _, _ => none) = none := by
-  simp [Flow.consume, minorMatches, majorMatches, differentUses]
+  simp [FlowSemantics.consume, minorMatches, majorMatches, differentUses]
 
 /-- Exact membership law for the existing structural prefix reseeding rule.
 The old residual is checked as a prefix; a successful record preserves the
@@ -609,13 +609,13 @@ theorem candidateEliminationOutputs_setEq_expected_zeroSpecialization
 private theorem coloured_introduction_result_iff
     (actualEdge : Deduction) (colour tag : Nat)
     (dependency : Dep) (antecedent : Formula) (output : FlowPair) :
-    (Flow.consume actualEdge [colour, tag]).map
+    (FlowSemantics.consume actualEdge [colour, tag]).map
         (fun tail => (depRemove dependency antecedent, tail)) = some output ↔
       actualEdge.COLOUR = colour ∧
         output = (depRemove dependency antecedent, [tag]) := by
   by_cases colourMatches : actualEdge.COLOUR = colour
-  · simp [Flow.consume, colourMatches, eq_comm]
-  · simp [Flow.consume, colourMatches]
+  · simp [FlowSemantics.consume, colourMatches, eq_comm]
+  · simp [FlowSemantics.consume, colourMatches]
 
 private theorem introductionCandidate_has_routed_residual
     (actual : Graph) (center : Vertex)

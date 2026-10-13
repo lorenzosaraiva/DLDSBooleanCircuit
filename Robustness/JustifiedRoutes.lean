@@ -3,7 +3,7 @@ import Certificate.Encoding.FixedShape
 
 /-! Historical positive production with direct fixed-slot provenance.
 No coverage, reverse inclusion, root discharge, or bit-compiler correctness is assumed. -/
-open DLDS Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow.Foundation
 namespace Robustness
 
 private theorem bind_mono {α β : Type} {xs ys : List α}

@@ -5,7 +5,7 @@ import Certificate.Occurrence.ProductionSoundness
 Chosen implementation: HCSuccessorActualCertificateSoundness, unchanged.
 No original ND proof value, compression history, or recursive verdict is an input. -/
 
-open DLDS Flow ProofSearch.Grid Evaluator.Occurrence
+open DLDS FlowSemantics ProofSearch.Grid Evaluator.Occurrence
 open Evaluator.Occurrence.Relation ProofSearch.OccurrenceCorrespondence
 open Certificate.Occurrence.Positions Evaluator.Occurrence.Fuel Certificate.Occurrence.Generator
 

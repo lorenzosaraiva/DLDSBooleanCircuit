@@ -1,6 +1,6 @@
 import Certificate.Flow.RootDischarge
 
-open DLDS Flow Certificate.Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow Certificate.Flow.Foundation
 
 namespace Evaluator.RouteIndexed
 

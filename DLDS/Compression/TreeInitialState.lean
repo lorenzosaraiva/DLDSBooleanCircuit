@@ -11,7 +11,7 @@ It deliberately does not manufacture an `ActualCompressionTrace`; preservation
 across each real collapse remains the next theorem.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open ProofSearch.Grid
 open Evaluator.Occurrence
 

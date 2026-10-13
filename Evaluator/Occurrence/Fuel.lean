@@ -16,7 +16,7 @@ predecessor is one level higher, `countAbove` strictly decreases along the
 recursive calls made by `occurrenceReplayAt`.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open Evaluator.Occurrence
 open Evaluator.Occurrence.Relation
 open ProofSearch.OccurrenceCorrespondence
@@ -211,14 +211,14 @@ theorem preGo_replaySucceeds_stdFuel
         vertex ∈ d.NODES ∧ ReplaySucceeds d (stdFuel d) vertex) ->
       (∀ vertex, vertex ∈ accumulated ->
         ReplaySucceeds d (stdFuel d) vertex) ->
-      ∀ vertex, vertex ∈ Flow.Pre.go d searchFuel frontier accumulated ->
+      ∀ vertex, vertex ∈ FlowSemantics.Pre.go d searchFuel frontier accumulated ->
         ReplaySucceeds d (stdFuel d) vertex := by
   intro searchFuel
   induction searchFuel with
   | zero =>
       intro frontier accumulated frontierSuccess accumulatedSuccess
         vertex vertexMember
-      simpa [Flow.Pre.go] using accumulatedSuccess vertex vertexMember
+      simpa [FlowSemantics.Pre.go] using accumulatedSuccess vertex vertexMember
   | succ searchFuel ih =>
       intro frontier accumulated frontierSuccess accumulatedSuccess
         vertex vertexMember
@@ -244,7 +244,7 @@ theorem preGo_replaySucceeds_stdFuel
         rcases List.mem_append.mp candidateMember with old | new
         · exact accumulatedSuccess candidate old
         · exact (freshSuccess candidate new).2
-      simp only [Flow.Pre.go] at vertexMember
+      simp only [FlowSemantics.Pre.go] at vertexMember
       rw [show
           ((frontier.flatMap (predsOf d)).eraseDups).filter
               (fun candidate =>

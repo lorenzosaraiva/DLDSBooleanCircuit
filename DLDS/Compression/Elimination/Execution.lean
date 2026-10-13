@@ -12,7 +12,7 @@ the represented logical occurrences and are not read from stored deduction
 payloads.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open Evaluator.Mixed Evaluator.Occurrence
 open DLDS.Compression.Mixed.LocalRules DLDS.Compression.Mixed.ContextualElimination
 open DLDS.Compression.Elimination.ClassPreservation
@@ -84,7 +84,7 @@ theorem accumulated_incoming
   simp only [accumulatedGraph,
     DLDS.Compression.Mixed.EliminationSource.neighborhoodGraph,
     accumulatedNeighborhood, List.nil_append]
-  rw [Flow.incoming_eq_filter]
+  rw [FlowSemantics.incoming_eq_filter]
   rw [List.filter_append]
   have incomingFilter :
       (occurrences.flatMap (DLDS.Compression.Elimination.ClassPreservation.ElimOccurrence.incoming center)).filter
@@ -133,7 +133,7 @@ theorem mem_accumulated_preds_iff
     u ∈ predsOf (accumulatedGraph center occurrences) center <->
       Exists fun occurrence => occurrence ∈ occurrences /\
         PremiseOf occurrence u := by
-  rw [Flow.predsOf_eq,
+  rw [FlowSemantics.predsOf_eq,
     accumulated_incoming center occurrences usesAvoid]
   simp only [List.mem_eraseDups, List.mem_map, List.mem_flatMap]
   constructor
@@ -166,7 +166,7 @@ theorem accumulated_edgesBetween_colour_zero
     candidate.COLOUR = 0 := by
   have incomingMember : candidate ∈
       get_rule.incoming center (accumulatedGraph center occurrences) := by
-    rw [Flow.incoming_eq_filter]
+    rw [FlowSemantics.incoming_eq_filter]
     unfold edgesBetween at member
     simp only [List.mem_filter] at member ⊢
     have endpoints : candidate.START = u /\ candidate.END = center :=
@@ -260,16 +260,16 @@ private theorem same_occurrence_formula_candidate
   · subst major
     subst minor
     exact False.elim
-      (Flow.formula_ne_implication_self occurrence.major.FORMULA
+      (FlowSemantics.formula_ne_implication_self occurrence.major.FORMULA
         center.FORMULA formula)
   · exact ⟨majorEq, minorEq⟩
   · subst major
     subst minor
-    exact False.elim (Flow.not_mutual_implication logical formula)
+    exact False.elim (FlowSemantics.not_mutual_implication logical formula)
   · subst major
     subst minor
     exact False.elim
-      (Flow.formula_ne_implication_self occurrence.minor.FORMULA
+      (FlowSemantics.formula_ne_implication_self occurrence.minor.FORMULA
         center.FORMULA formula)
 
 /-- Every actual candidate is either the intended orientation of one member,
@@ -329,8 +329,8 @@ private theorem zero_pair_result_iff
     (majorZero : majorEdge.COLOUR = 0)
     (minorDep majorDep : Dep) (minorTag majorTag : Nat)
     (output : FlowPair) :
-    (match Flow.consume minorEdge [0, minorTag],
-        Flow.consume majorEdge [0, majorTag] with
+    (match FlowSemantics.consume minorEdge [0, minorTag],
+        FlowSemantics.consume majorEdge [0, majorTag] with
       | some minorTail, some majorTail =>
           if minorTail = majorTail then
             some (depUnion minorDep majorDep, minorTail)
@@ -338,7 +338,7 @@ private theorem zero_pair_result_iff
       | _, _ => none) = some output <->
       minorTag = majorTag /\
         output = (depUnion minorDep majorDep, [minorTag]) := by
-  simp [Flow.consume, minorZero, majorZero, eq_comm]
+  simp [FlowSemantics.consume, minorZero, majorZero, eq_comm]
 
 private theorem major_ne_minor_of_logical
     (center : Vertex) (occurrence : ElimOccurrence)
@@ -348,7 +348,7 @@ private theorem major_ne_minor_of_logical
   intro equal
   have formulaEqual := congrArg Vertex.FORMULA equal
   rw [logical] at formulaEqual
-  exact Flow.formula_ne_implication_self occurrence.minor.FORMULA
+  exact FlowSemantics.formula_ne_implication_self occurrence.minor.FORMULA
     center.FORMULA formulaEqual.symm
 
 /-- No route produced by the full Cartesian enumeration lies outside the
@@ -564,12 +564,12 @@ private theorem introductionCandidate_has_occurrence_residual
         rcases origin with origin | origin
         · rcases origin with ⟨premiseEqual, routeEqual⟩
           rw [routeEqual] at resultEquation
-          simp [Flow.consume, edgeZero] at resultEquation
+          simp [FlowSemantics.consume, edgeZero] at resultEquation
           exact ⟨occurrence, occurrenceMember,
             depRemove occurrence.majorDep antecedent, resultEquation.symm⟩
         · rcases origin with ⟨premiseEqual, routeEqual⟩
           rw [routeEqual] at resultEquation
-          simp [Flow.consume, edgeZero] at resultEquation
+          simp [FlowSemantics.consume, edgeZero] at resultEquation
           exact ⟨occurrence, occurrenceMember,
             depRemove occurrence.minorDep antecedent, resultEquation.symm⟩
       · simp [premiseFormula] at candidateMember

@@ -16,7 +16,7 @@ public compressor preserves structural assumptions or produces passing
 certificates.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open Evaluator.Occurrence
 open Evaluator.Occurrence.Relation Certificate.Occurrence
 open Certificate.Occurrence.Positions

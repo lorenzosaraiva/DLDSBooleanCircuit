@@ -13,7 +13,7 @@ explicit endpoint.  In particular, it is not a list operation which deletes
 zeroes: colour zero is a legitimate branch choice.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 
 namespace DLDS.Compression.Mixed.LocalRules
 

@@ -2,7 +2,7 @@ import Robustness.BitLocality
 
 /-! Density of the bounded bit-program model. These conclusions are not
 transported to certificate checks without a proved bit/semantic compiler. -/
-open Search.Certificate.Robustness
+open CertificateSearch.Robustness
 namespace Robustness.BitLocality
 
 def M (slots formulas colours : Nat) : Nat :=

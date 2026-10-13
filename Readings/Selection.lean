@@ -9,7 +9,7 @@ in the repository identifies this family with successor occurrence replay.
 -/
 
 open DLDS
-open Flow
+open FlowSemantics
 
 namespace Readings.Selection
 

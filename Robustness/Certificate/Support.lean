@@ -8,7 +8,7 @@ import Mathlib.Data.Finset.Update
 `SpaceACounting` concerns the separate proof-search `PathInput` carrier.  This
 file does not identify a rejected path assignment with a malformed DLDS.
 Instead it states the analogous finite-support theorem for the actual expanded-
-certificate oracle, `Search.Certificate.markedAt`.  For every supplied finite
+certificate oracle, `CertificateSearch.markedAt`.  For every supplied finite
 certificate decoder it computes the inclusion-minimal essential-coordinate
 support and proves that agreement there fixes the real verifier result.
 
@@ -18,9 +18,9 @@ file remains representation-parametric so that the orbit/cardinality results
 can also be reused by other finite encodings.
 -/
 
-open DLDS Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow.Foundation
 
-namespace Search.Certificate
+namespace CertificateSearch
 namespace Robustness
 
 /-- A finite encoding of variants of one supplied certificate. -/
@@ -584,7 +584,7 @@ theorem formation_invalid_implies_localMalformation (d : Graph)
     (invalid : ¬ Certificate.Flow.LocalChecks d certificate) :
     ∃ position < numPositions d certificate,
       MarkedAt d certificate position :=
-  Search.Certificate.formation_invalid_implies_marked d certificate expanded invalid
+  CertificateSearch.formation_invalid_implies_marked d certificate expanded invalid
 
 /-- An expanded, locally invalid decoded certificate automatically supplies a
 supported genuine malformation.  The conclusion records both the exact
@@ -1024,4 +1024,4 @@ theorem missingWitness_total_formation_fixture :
 
 
 end Robustness
-end Search.Certificate
+end CertificateSearch

@@ -1,7 +1,7 @@
 import Certificate.Encoding.Export
 import Certificate.Flow.Soundness
 
-open DLDS Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow.Foundation
 
 /-!
 # Expanded-certificate search problem
@@ -11,7 +11,7 @@ problem.  It contains no search algorithm and no quantum semantics: `n` is
 only the size of the finite query domain.
 -/
 
-namespace Search.Certificate
+namespace CertificateSearch
 
 abbrev Certificate := Certificate.Flow.Certificate
 
@@ -631,4 +631,4 @@ theorem fixtureReports_native : fixtureReports =
      ("endtoend-nonempty-terminal", 337, 2)] := by
   native_decide
 
-end Search.Certificate
+end CertificateSearch

@@ -27,7 +27,7 @@ development.
 
 open DLDS
 
-namespace Flow
+namespace FlowSemantics
 
 /-!
 `sourceDepSet d v` is the dependency Def-11 stamps on `v`'s outgoing edge,
@@ -787,4 +787,4 @@ def routeEdgeDepCharAtB (d : Graph) (v : Vertex) : Bool :=
 /-!  literal Def-23 CorrectRuleApp at the collapsed kernels (the corollary)  -/
 
 
-end Flow
+end FlowSemantics

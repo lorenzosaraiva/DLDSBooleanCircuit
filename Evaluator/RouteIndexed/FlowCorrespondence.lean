@@ -1,6 +1,6 @@
 import Evaluator.RouteIndexed.Definitions
 
-open DLDS Flow Certificate.Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow Certificate.Flow.Foundation
 
 namespace Evaluator.RouteIndexed
 
@@ -39,14 +39,14 @@ lemma project_elimCombine (d : Graph) (v major minor : Vertex)
     (minorTokens majorTokens : List RouteIndexedToken) :
     ListSetEq
       (projectFlowPairs (elimCombine d v major minor minorTokens majorTokens))
-      (Flow.elimCombine d v major minor
+      (FlowSemantics.elimCombine d v major minor
         (projectFlowPairs minorTokens) (projectFlowPairs majorTokens)) := by
   have projection :
       projectFlowPairs (elimCombine d v major minor minorTokens majorTokens) =
-        Flow.elimCombine d v major minor
+        FlowSemantics.elimCombine d v major minor
           (projectFlowPairs minorTokens) (projectFlowPairs majorTokens) := by
     simp only [projectFlowPairs, Evaluator.RouteIndexed.elimCombine,
-      Flow.elimCombine, List.map_flatMap, List.flatMap_map,
+      FlowSemantics.elimCombine, List.map_flatMap, List.flatMap_map,
       List.map_filterMap, Evaluator.RouteIndexed.RouteIndexedToken.flowPair]
     congr 1
     funext minorToken
@@ -66,11 +66,11 @@ lemma project_elimOutputs (d : Graph) (v : Vertex)
     (premiseTokens : Vertex → List RouteIndexedToken) :
     ListSetEq (projectFlowPairs (elimOutputs d v premiseTokens))
       ((elimPairsAt d v).flatMap fun (major, minor) =>
-        Flow.elimCombine d v major minor
+        FlowSemantics.elimCombine d v major minor
           (projectFlowPairs (premiseTokens minor))
           (projectFlowPairs (premiseTokens major))) := by
   intro route
-  simp [elimOutputs, Flow.elimCombine,
+  simp [elimOutputs, FlowSemantics.elimCombine,
     Evaluator.RouteIndexed.elimCombine, projectFlowPairs,
     Evaluator.RouteIndexed.RouteIndexedToken.flowPair, mkToken] ;
     aesop (config := { maxRuleApplications := 1000 })
@@ -213,7 +213,7 @@ lemma project_assignSlots (v : Vertex) (tokens : List RouteIndexedToken) :
 private def flowElimFrom (d : Graph) (v : Vertex)
     (premiseFlow : Vertex → List FlowPair) : List FlowPair :=
   (elimPairsAt d v).flatMap fun (major, minor) =>
-    Flow.elimCombine d v major minor (premiseFlow minor) (premiseFlow major)
+    FlowSemantics.elimCombine d v major minor (premiseFlow minor) (premiseFlow major)
 
 private def flowIntroFrom (d : Graph) (v : Vertex)
     (premiseFlow : Vertex → List FlowPair) : List FlowPair :=

@@ -6,7 +6,7 @@ Each of n Boolean slots can supply one distinguished required route. Failure
 means that every slot is empty; any unfixed slot can repair that absence.
 -/
 
-namespace Search.Certificate.Robustness.AbstractRouteAbsence
+namespace CertificateSearch.Robustness.AbstractRouteAbsence
 
 def missingRouteB (n : Nat) (input : Assignment (Fin n) Bool) : Bool :=
   decide (∀ i, input i = false)
@@ -47,4 +47,4 @@ theorem missingRoute_minimumFailureWitnessSize (n : Nat) :
   exact size.symm
 
 
-end Search.Certificate.Robustness.AbstractRouteAbsence
+end CertificateSearch.Robustness.AbstractRouteAbsence

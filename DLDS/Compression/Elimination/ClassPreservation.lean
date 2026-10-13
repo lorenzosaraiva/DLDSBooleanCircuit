@@ -12,7 +12,7 @@ The production compressor continues to operate only on `Neighborhood` and
 `Ancestral` records.
 -/
 
-open DLDS Flow
+open DLDS FlowSemantics
 open DLDS.Compression.Mixed.LocalRules DLDS.Compression.Mixed.ContextualElimination
 open DLDS.Compression.Sequences
 
@@ -1275,7 +1275,7 @@ theorem matchingEliminationPairOutputs_zero_edges
         (major, minor) =
       [(depUnion minorDep majorDep, [tag])] := by
   simp [DLDS.Compression.Elimination.PairPreservation.eliminationPairOutputs,
-    majorFlow, minorFlow, majorEdges, minorEdges, Flow.consume,
+    majorFlow, minorFlow, majorEdges, minorEdges, FlowSemantics.consume,
     majorZero, minorZero]
 
 /-- For any two distinct members of an arbitrary processed family, the

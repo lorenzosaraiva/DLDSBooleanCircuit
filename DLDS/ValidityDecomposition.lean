@@ -1,6 +1,6 @@
 import Certificate.Flow.GeneratorCompleteness
 
-open DLDS Flow Certificate.Flow.Foundation Certificate.Flow
+open DLDS FlowSemantics Certificate.Flow.Foundation Certificate.Flow
 open Certificate.Flow.GeneratorCompleteness ProofSearch.FlowCorrespondence
 
 namespace DLDS.ValidityDecomposition

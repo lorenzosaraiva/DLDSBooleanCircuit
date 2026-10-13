@@ -1,7 +1,7 @@
 import DLDS.All
 
 open DLDS
-open Flow
+open FlowSemantics
 
 set_option maxHeartbeats 0
 set_option maxRecDepth 100000

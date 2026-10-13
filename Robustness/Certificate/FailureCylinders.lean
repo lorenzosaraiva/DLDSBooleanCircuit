@@ -9,12 +9,12 @@ assignment which forces one anchored failure.  It also records the dependent
 (coordinate-specific) alphabet version of the counting argument.
 -/
 
-open DLDS Flow Certificate.Flow.Foundation
+open DLDS FlowSemantics Certificate.Flow.Foundation
 
 set_option maxHeartbeats 0
 set_option maxRecDepth 100000
 
-namespace Search.Certificate
+namespace CertificateSearch
 namespace Robustness
 
 deriving instance DecidableEq for LocalRuleShape
@@ -1053,4 +1053,4 @@ theorem dependentFailureDensity_lower_bound {Coordinate : Type}
 
 
 end Robustness
-end Search.Certificate
+end CertificateSearch

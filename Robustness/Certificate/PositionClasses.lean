@@ -9,7 +9,7 @@ uniqueness checks and the legacy aggregate, which have no separate rule kind.
 
 open DLDS Certificate.Flow.Foundation
 
-namespace Search.Certificate.Robustness
+namespace CertificateSearch.Robustness
 
 /-- One-edge scope or decoration, one-node scope, or one rule's graph shape.
 No test of certificate size or the particular failure is used. -/
@@ -105,8 +105,8 @@ theorem localPositions_append_terminals (d : Graph) (c : Certificate)
 theorem registered_witnessFaithful_readBound_unbounded
     (d : Graph) (c : Certificate) (slot : Nat) (w : EdgeRouteWitness)
     (output : TerminalOutput) (n : Nat)
-    (member : Search.Certificate.VerificationPosition.witnessFaithful slot w ∈ localSemanticPositions d c) :
-    Search.Certificate.VerificationPosition.witnessFaithful slot w ∈ semanticPositions d
+    (member : CertificateSearch.VerificationPosition.witnessFaithful slot w ∈ localSemanticPositions d c) :
+    CertificateSearch.VerificationPosition.witnessFaithful slot w ∈ semanticPositions d
         { c with terminalOutputs := c.terminalOutputs ++ List.replicate n output } ∧
       n ≤ canonicalSemanticReadBound d
         { c with terminalOutputs := c.terminalOutputs ++ List.replicate n output }
@@ -134,4 +134,4 @@ theorem witnessFaithful_no_uniform_graph_bound (d : Graph) (c : Certificate)
   omega
 
 
-end Search.Certificate.Robustness
+end CertificateSearch.Robustness

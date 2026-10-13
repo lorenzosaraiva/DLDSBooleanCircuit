@@ -1,7 +1,7 @@
 import Certificate.Flow.Cache
 import ProofSearch.FlowCorrespondence
 
-open DLDS Flow Certificate.Flow.Foundation Certificate.Flow
+open DLDS FlowSemantics Certificate.Flow.Foundation Certificate.Flow
 open ProofSearch.FlowCorrespondence
 open DLDS.Certificate.Flow.Cache
 open Evaluator.RouteIndexed
@@ -334,7 +334,7 @@ private theorem localExpected_setEq_flowStepFrom_stored
   | elim major minor =>
       obtain ⟨guard, pairs⟩ := localShape_elim_raw_inv shape
       intro route
-      simp [localExpected, shape, flowStepFrom, guard, pairs, elimExpected, mixedIntroExpected, reseedExpected, Flow.elimCombine, List.mem_eraseDups, List.mem_append]
+      simp [localExpected, shape, flowStepFrom, guard, pairs, elimExpected, mixedIntroExpected, reseedExpected, FlowSemantics.elimCombine, List.mem_eraseDups, List.mem_append]
       rfl
   | elimMulti pairs =>
       obtain ⟨guard, pairsEq, pairsNe⟩ :=
@@ -342,7 +342,7 @@ private theorem localExpected_setEq_flowStepFrom_stored
       have pairsEmpty : pairs.isEmpty = false := by
         simpa [List.isEmpty_iff] using pairsNe
       intro route
-      simp [localExpected, shape, flowStepFrom, guard, pairsEq, pairsEmpty, elimExpectedMany, mixedIntroExpected, reseedExpected, Flow.elimCombine, List.mem_eraseDups, List.mem_append]
+      simp [localExpected, shape, flowStepFrom, guard, pairsEq, pairsEmpty, elimExpectedMany, mixedIntroExpected, reseedExpected, FlowSemantics.elimCombine, List.mem_eraseDups, List.mem_append]
       rfl
   | intro premise alpha beta =>
       obtain ⟨preds, formula, premiseFormula, _, _, _, noElim⟩ :=

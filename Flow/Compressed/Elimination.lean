@@ -8,7 +8,7 @@ certificate package uses `flowAt` with interior reseeding. -/
 
 open DLDS
 
-namespace Flow
+namespace FlowSemantics
 
 /--
  **ReseedFree**: every ancestor edge ends at a top node.  This legacy predicate
@@ -125,4 +125,4 @@ def routeFanUniqueAtB (d : Graph) (v : Vertex) : Bool :=
       if r1.2.headD 0 == r2.2.headD 0 then decide (r1 = r2) else true
 
 
-end Flow
+end FlowSemantics

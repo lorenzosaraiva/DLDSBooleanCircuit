@@ -1,7 +1,7 @@
 import Examples.ThreeVertex.Flow.Closed
 import Certificate.Flow.Soundness
 
-open DLDS Flow Certificate.Flow.Foundation Certificate.Flow
+open DLDS FlowSemantics Certificate.Flow.Foundation Certificate.Flow
 
 set_option maxHeartbeats 0
 set_option maxRecDepth 100000

@@ -2,7 +2,7 @@ import Robustness.RuleCompilation.ResidualGuards
 
 /-! Ordinary introduction compiled on the full fixed-shape Boolean product.
 No consume, tail equality or witnessability premise is added. -/
-open DLDS Flow Robustness.BitLocality Robustness.SelectedProducers
+open DLDS FlowSemantics Robustness.BitLocality Robustness.SelectedProducers
 namespace Robustness.RuleCompilation
 set_option maxHeartbeats 2000000
 
