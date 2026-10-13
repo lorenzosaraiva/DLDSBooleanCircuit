@@ -1,4 +1,5 @@
 import Examples.ThreeVertex.Flow.Certificate
+import Certificate.Flow.Cache
 
 open DLDS Flow Certificate.Flow Certificate.Flow.Foundation
 
@@ -89,8 +90,15 @@ theorem bridge_invariant_package :
 theorem closed_3v_self_certifying :
     ∀ P, ¬ AdmissibleMultiPath graph P ∨
       DischargedMulti graph P (goalColumn graph) := by
-  exact compressed_universally_accepted_certificateB graph certificate
-    expanded_true localChecks_true slot_true discharged_true
+  apply compressed_universally_accepted_certificateB graph certificate
+    expanded_true localChecks_true cursorRouteHeadCoverage_true
+  · unfold cursorCarrierAccountedAtB
+    have hflow : flowAt graph (stdFuel graph) =
+        cachedFlowAt graph (flowTable graph) :=
+      (funext (DLDS.Certificate.Flow.Cache.cachedFlowAt_flowTable graph)).symm
+    simp only [hflow]
+    first | decide | native_decide
+  · exact discharged_true
 
 
 end DLDS.Examples.ThreeVertex.Flow.Acceptance

@@ -1494,26 +1494,92 @@ theorem invariants_of_expanded_certificate (d : Graph) (c : Certificate)
   exact ⟨hstruct, hnodup, hone,
     witnessableRouteHeadCoverage_of_local d c hexp hloc, hlfu, hhyp⟩
 
+/-- The expanded certificate and local checks supply structural validity,
+edges without duplicates, one edge per colour per node, level/formula uniqueness,
+and hypotheses without incoming edges. Separate cursor checks supply head
+coverage and exact continuation closure. The cursor-aware universal bridge
+derives the canonical routing condition from these invariants; the discharge
+check remains a computed premise. -/
 theorem compressed_universally_accepted_certificateB (d : Graph)
     (c : Certificate) (hexp : expandedCertB d c = true)
     (hloc : localChecksB d c = true)
-    (hslot : canonicalSlotOKB d = true)
+    (hcoverage : cursorRouteHeadCoverageB d = true)
+    (hcontinuation :
+      (d.NODES.all fun w =>
+         match elimPairsAt d w with
+         | [] => true
+         | pairs =>
+             (predsOf d w).all (fun u =>
+               elimPremiseAtB d w u || cursorCarrierAccountedAtB d w u) &&
+             pairs.all fun (major, minor) =>
+               ((flowAt d (stdFuel d) minor).all fun route =>
+                 (edgesBetween d minor w).all fun edge =>
+                   match consume edge route.2 with
+                   | none => true
+                   | some tail => exhaustedConsumedTailAtB d w tail ||
+                       (flowAt d (stdFuel d) major).any fun partner =>
+                         (edgesBetween d major w).any fun other =>
+                           consume other partner.2 == some tail) &&
+               ((flowAt d (stdFuel d) major).all fun route =>
+                 (edgesBetween d major w).all fun edge =>
+                   match consume edge route.2 with
+                   | none => true
+                   | some tail => exhaustedConsumedTailAtB d w tail ||
+                       (flowAt d (stdFuel d) minor).any fun partner =>
+                         (edgesBetween d minor w).any fun other =>
+                           consume other partner.2 == some tail)) = true)
     (hdis : dischargedMultiB d = true) :
     ∀ P, ¬ AdmissibleMultiPath d P ∨ DischargedMulti d P (goalColumn d) := by
   have hexp' := expandedCertB_sound d c hexp
   have hloc' := localChecksB_sound d c hexp' hloc
-  intro P
-  by_cases hadmissible : AdmissibleMultiPath d P
-  · right
-    have heval : getEvalResultMultiDLDS d P =
-        getEvalResultMultiDLDS d (multiPathsFromFlow d) :=
-      admissibleMulti_eval_canonical d hslot hadmissible
-    have hcanon : DischargedMulti d (multiPathsFromFlow d) (goalColumn d) :=
-      discharge_multi d hdis
-    unfold DischargedMulti at hcanon ⊢
-    rw [heval]
-    exact hcanon
-  · exact Or.inl hadmissible
+  obtain ⟨hstruct, hnodup, hone, hlfu, hhyp⟩ :=
+    retained_invariants_of_local d c hloc'
+  have hcontinuation' : CursorFlowContinuationClosure d := by
+    classical
+    rw [List.all_eq_true] at hcontinuation
+    intro w hw hpairsNe
+    have hw' := hcontinuation w hw
+    cases hpairs : elimPairsAt d w with
+    | nil => exact (hpairsNe hpairs).elim
+    | cons pair pairs =>
+        rw [hpairs] at hw'
+        simp only [Bool.and_eq_true, List.all_eq_true] at hw'
+        constructor
+        · intro u hu
+          have hu' := hw'.1 u hu
+          rw [Bool.or_eq_true] at hu'
+          rcases hu' with helim | hcarrier
+          · exact Or.inl (elimPremiseAtB_sound d w u helim)
+          · exact Or.inr (cursorCarrierAccountedAtB_sound d w u hcarrier)
+        · intro major minor hpair
+          have checked := hw'.2 (major, minor) (by simpa [hpairs] using hpair)
+          constructor
+          · intro route hroute edge hedge tail hconsume
+            have result := checked.1 route hroute edge hedge
+            simp only [hconsume] at result
+            rw [Bool.or_eq_true] at result
+            rcases result with hexhausted | hpartner
+            · exact Or.inl (exhaustedConsumedTailAtB_sound d w tail hexhausted)
+            · rw [List.any_eq_true] at hpartner
+              obtain ⟨partner, hpartnerMem, hother⟩ := hpartner
+              rw [List.any_eq_true] at hother
+              obtain ⟨other, hotherMem, hagree⟩ := hother
+              exact Or.inr ⟨partner, hpartnerMem, other, hotherMem,
+                by simpa using hagree⟩
+          · intro route hroute edge hedge tail hconsume
+            have result := checked.2 route hroute edge hedge
+            simp only [hconsume] at result
+            rw [Bool.or_eq_true] at result
+            rcases result with hexhausted | hpartner
+            · exact Or.inl (exhaustedConsumedTailAtB_sound d w tail hexhausted)
+            · rw [List.any_eq_true] at hpartner
+              obtain ⟨partner, hpartnerMem, hother⟩ := hpartner
+              rw [List.any_eq_true] at hother
+              obtain ⟨other, hotherMem, hagree⟩ := hother
+              exact Or.inr ⟨partner, hpartnerMem, other, hotherMem,
+                by simpa using hagree⟩
+  exact compressed_universally_accepted' d hstruct hnodup hone
+    (cursorRouteHeadCoverageB_sound d hcoverage) hlfu hhyp hcontinuation' hdis
 
 theorem end_to_end_self_certifying :
     ∀ P, ¬ AdmissibleMultiPath DLDS.e P ∨
@@ -1523,6 +1589,7 @@ theorem end_to_end_self_certifying :
   · native_decide
   · native_decide
   · native_decide
+  · first | decide | native_decide
   · native_decide
 
 end Certificate.Flow

@@ -43,16 +43,13 @@ theorem discharged_true_of_cached
   apply DLDS.Certificate.Flow.Cache.dischargedMultiB_of_cached graph
   exact hcached
 
-/-- Composition form of the closed 4v bridge.  Its sole remaining executable
-fixture fact is the cached discharge Boolean. -/
+/-- closed via the computed routing and discharge checks; the certificate route (compressed_universally_accepted_certificateB) is exercised on the 3-vertex instance -/
 theorem closed_4v_self_certifying_of_cached
     (hcached :
       DLDS.Certificate.Flow.IntroductionSuffix.cachedDischargedMultiB graph = true) :
     ∀ P, ¬ AdmissibleMultiPath graph P ∨
       DischargedMulti graph P (goalColumn graph) := by
-  exact compressed_universally_accepted_certificateB graph certificate
-    expanded_true localChecks_true slot_true
+  exact DLDS.compressed_universally_accepted graph slot_true
     (discharged_true_of_cached hcached)
-
 
 end DLDS.Examples.FourVertex.Flow.Acceptance

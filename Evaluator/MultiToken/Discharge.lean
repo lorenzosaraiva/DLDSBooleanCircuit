@@ -159,32 +159,12 @@ theorem canonical_multi_genuine (d : Graph)
 
 
 
-/--
- **The compressed universal bridge.** On a legal fully-compressed DLDS
-    (the Path-B legality context: structural validity, the four invariants,
-    `LevelFormulaUnique`, `ValidDLDS` ; Thm 21/24), with the
-    canonical slot-validity and discharge certificates (decidable; provenance
-    in the header; eval-true on all closed fixtures), EVERY multi-path input
-    is either inadmissible (the faithful multi `Invalid`) or discharges the
-    goal.
+/-- For any graph whose canonical slot and discharge checks pass, every
+multi-path input is either inadmissible or discharges the goal.
 
-    Proof: an admissible `P` reduces modulo a co-located permutation to the
-    canonical path (M2c), evaluates bit-identically to it (M2b's multiset
-    congruence + the read-equivalence congruence), and the canonical
-    discharges (M3b). The legality hypotheses are the theorem's Path-B scope
-    (underscore-named: the assembled M2/M3 pieces consume the two
-    certificates; the invariants are what make the certificates the RIGHT
-    notion on HC output ; they are consumed by `flowRuleCorrect_collapsed`'s
-    per-node correctness, whose composition into the certificates is the
-    documented M3b obligation).
--/
+An admissible input evaluates identically to the canonical paths. The two
+Boolean premises are the complete hypotheses of this theorem. -/
 theorem compressed_universally_accepted (d : Graph)
-    (_hstruct : structuralValid d)
-    (_hnodup : d.EDGES.Nodup)
-    (_honepercol : OneEdgePerColourPerNode d)
-    (_hcoverage : RouteHeadCoverage d)
-    (_hlfu : LevelFormulaUnique d)
-    (_hvalid : ValidDLDS d)
     (hslot : canonicalSlotOKB d = true)
     (hdis : dischargedMultiB d = true) :
     ∀ P, ¬ AdmissibleMultiPath d P ∨ DischargedMulti d P (goalColumn d) := by
