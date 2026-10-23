@@ -1,127 +1,82 @@
-# DLDS: verifying horizontally compressed proofs in Lean
+# DLDS and unified Flow
 
-Lean 4 formalization accompanying my PhD work at PUC-Rio, advised by Edward Hermann Haeusler, on checking compressed Natural Deduction proofs.
+Lean 4 formalization of verification and proof search for dag-like derivability structures in purely implicational minimal logic.
 
-Natural Deduction proofs in purely implicational minimal logic can be exponentially large. Horizontal compression (Gordeev and Haeusler) merges repeated formula occurrences into a Dag-Like Derivability Structure (DLDS) of polynomial size, whose validity is decided by Flow, a recursive computation over the whole graph. This development records Flow's routes as a certificate whose correctness reduces to local checks, and studies the verification and search problems that follow: a Boolean grid for proof search, readings of a fixed DLDS, and verification positions of a certificate. The motivating application is certifying that a graph has no Hamiltonian cycle.
+## What is proved
 
-## Main results
+`Flow` is `MultiIntro.ValidMI .general`: it applies dependency-label tests to ordinary inferences and handles vertices that merge several introductions. `Flow.of_reference` embeds the single-introduction reference verdict, and `Flow.iff_reference_of_no_multi` states their equivalence when multiple introductions are absent.
 
-The results below hold under the assumptions stated in the linked declarations.
+`Flow.main` relates Flow to the grid, complete-profile certificates, occurrence readings and closed natural deduction. `Flow.extras` packages verification positions, robustness and proof-search consequences, with the hypotheses shown in its statement. `Flow.tree_accepted` accepts the represented closed proof trees. `Flow.search_complete` and `Flow.search_complete_dimensions` establish sound and complete proof search, with explicit finite dimensions.
 
-### Boolean evaluator
+The ten instances are E3, K2_K1, P3, E4, K2_2K1, TwoK2, P3_K1, P4, Star and K3_K1. Each has a `Flow.Instances.<name>.pipeline_flow` theorem and an `Instances.<name>.no_hamiltonian_cycle` theorem. Their concrete checks certify these inputs; they do not establish compressor completeness.
 
-| Theorem | Meaning |
-| --- | --- |
-| [node_correct](Evaluator/CellCorrectness.lean) | When exactly one rule is active, the Boolean node computes that rule's dependency update. |
-| [dlds_evaluation_iff](Evaluator/Grid.lean) | A path evaluates to true exactly when it is malformed, or routes correctly and leaves no open assumptions at the goal. |
-| [dlds_global_iff](Evaluator/Grid.lean) | All path assignments are accepted exactly when each is malformed or routes correctly with no open goal assumptions. |
-| [tree_bridge_forward](Evaluator/TreeCorrespondence.lean) | A valid proof tree passes the evaluator when its routing and discharge checks pass. |
+`MultiIntro.stored_eq_routes` identifies checked stored profiles with computed routes. `MultiIntro.checked_certificate_rules_out_hamiltonian_cycle` connects a checked certificate and an admissible source context to non-Hamiltonicity. `Semantic.Circuit` proves oracle correctness, XOR behavior, unitarity, the phase action `I - 2P`, reflection and polynomial circuit size. `FlowSize.distinct_route_bound`, `raw_route_bound`, `exists_bounded_certificate` and `flow_has_bounded_certificate` give route and certificate upper bounds in the stated structural size model.
 
-### Grid proof search
+## Trust
 
-| Theorem | Meaning |
-| --- | --- |
-| [gridMarked_extracts](ProofSearch/Grid/Soundness.lean) | A marked assignment yields a well-formed derivation of the goal with no open assumptions, within the grid's height bound. |
-| [gridMarked_sound](ProofSearch/Grid/Soundness.lean) | A marked grid assignment proves the goal without assumptions, when the formula list has no repeats and contains the goal. |
-| [exists_marked_iff_exists_closed_gridSchedulable](ProofSearch/Grid/Schedulability.lean) | With a distinct formula list containing the goal, search succeeds exactly when a closed derivation can be represented within the grid's height bound. |
-| [branchingGridMarked_sound](ProofSearch/BranchingGrid/Soundness.lean) | A marked branching-grid assignment proves the goal without assumptions, when the formula list has no repeats and contains the goal. |
-| [branchingGridMarked_complete](ProofSearch/BranchingGrid/Completeness.lean) | Every well-formed closed derivation whose formulas are in the chosen list has a successful branching-grid encoding with sufficient space. |
+The general headline theorems use only `propext`, `Quot.sound` and `Classical.choice`. The generator and compressor are untrusted: the logical conclusions require the checked conditions in the theorem statements. Concrete `native_decide` proofs additionally trust Lean's native computation mechanism. They appear only in the following listed modules, including the small concrete examples retained inside required mixed foundation modules:
 
-### Readings
+- [Semantic.Examples](Semantic/Examples.lean)
+- [Semantic.EndToEnd](Semantic/EndToEnd.lean)
+- [Semantic.SelfCertifying](Semantic/SelfCertifying.lean)
+- [Semantic.GridCertificateSoundness](Semantic/GridCertificateSoundness.lean)
+- [SpaceACounting](SpaceACounting.lean)
+- [Semantic.ValidDLDSDecomposition](Semantic/ValidDLDSDecomposition.lean)
+- [Semantic.ProperHCInput](Semantic/ProperHCInput.lean)
+- [SearchProblem](SearchProblem.lean)
+- [CertificateRobustness](CertificateRobustness.lean)
+- [CanonicalCertificateEncoding](CanonicalCertificateEncoding.lean)
+- [SpaceA](SpaceA.lean)
+- [Instances.E3.PipelineEquality](Instances/E3/PipelineEquality.lean)
+- [Instances.E3.Formation](Instances/E3/Formation.lean)
+- [Instances.E3.Proof](Instances/E3/Proof.lean)
+- [Instances.K2_K1.PipelineEquality](Instances/K2_K1/PipelineEquality.lean)
+- [Instances.K2_K1.Formation](Instances/K2_K1/Formation.lean)
+- [Instances.K2_K1.Proof](Instances/K2_K1/Proof.lean)
+- [Instances.P3.PipelineEquality](Instances/P3/PipelineEquality.lean)
+- [Instances.P3.Formation](Instances/P3/Formation.lean)
+- [Instances.P3.Proof](Instances/P3/Proof.lean)
+- [Instances.E4.PipelineEquality](Instances/E4/PipelineEquality.lean)
+- [Instances.E4.Formation](Instances/E4/Formation.lean)
+- [Instances.E4.Proof](Instances/E4/Proof.lean)
+- [Instances.K2_2K1.PipelineEquality](Instances/K2_2K1/PipelineEquality.lean)
+- [Instances.K2_2K1.Formation](Instances/K2_2K1/Formation.lean)
+- [Instances.K2_2K1.Proof](Instances/K2_2K1/Proof.lean)
+- [Instances.TwoK2.PipelineEquality](Instances/TwoK2/PipelineEquality.lean)
+- [Instances.TwoK2.Formation](Instances/TwoK2/Formation.lean)
+- [Instances.TwoK2.Proof](Instances/TwoK2/Proof.lean)
+- [Instances.P3_K1.PipelineEquality](Instances/P3_K1/PipelineEquality.lean)
+- [Instances.P3_K1.Formation](Instances/P3_K1/Formation.lean)
+- [Instances.P3_K1.Proof](Instances/P3_K1/Proof.lean)
+- [Instances.P4.PipelineEquality](Instances/P4/PipelineEquality.lean)
+- [Instances.P4.Formation](Instances/P4/Formation.lean)
+- [Instances.P4.Proof](Instances/P4/Proof.lean)
+- [Instances.Star.PipelineEquality](Instances/Star/PipelineEquality.lean)
+- [Instances.Star.Formation](Instances/Star/Formation.lean)
+- [Instances.Star.Proof](Instances/Star/Proof.lean)
+- [Instances.K3_K1.Proof](Instances/K3_K1/Proof.lean)
+- [Instances.K3_K1.PipelineEquality](Instances/K3_K1/PipelineEquality.lean)
 
-| Theorem | Meaning |
-| --- | --- |
-| [labelDefectB_sound](Readings/Explicit/LabelValidity.lean) | Every marked reading exposes an incorrect rule or dependency label in the graph. |
-| [explicitOutputLabelsCorrect_iff_no_labelDefect](Readings/Explicit/LabelValidity.lean) | If permitted readings can select every output, correct output labels are equivalent to no reading being marked. |
-| [badCylinder_raw_density](Readings/Explicit/FanFamily.lean) | A proved set of failing readings occupies exactly 1 / (width + 2) of the choices in the constructed branching family. |
+Only the fixture-local native checks listed by the statement surface enter the twenty instance headlines. The general headlines do not depend on any native-check axiom. Historical reference infrastructure remains where required by imports; its propositions are separate from the unified verdict.
 
-### Certificates
+## Scope and references
 
-| Theorem | Meaning |
-| --- | --- |
-| [storedRoutes_setEq_flow](Certificate/Flow/Soundness.lean) | The local checks guarantee equality, ignoring order and repeats, between stored routes and the usable routes computed by Flow. |
-| [compressed_universally_accepted_certificateB](Certificate/Flow/Soundness.lean) | If the certificate checks, cursor head and continuation checks, and discharge check pass, every permitted reading ends with all goal assumptions discharged; routing is derived from the checked invariants. The 4-vertex instance is closed via the computed routing and discharge checks; the certificate route (compressed_universally_accepted_certificateB) is exercised on the 3-vertex instance. |
-| [formationValid_iff_no_semanticMarked](Certificate/Flow/Positions.lean) | A certificate satisfies its formation conditions exactly when none of its verification positions reports a failure. |
-| [compressed_universally_accepted'](Flow/UniversalDischarge.lean) | Under the stated structural and discharge assumptions, every permitted reading ends with all goal assumptions discharged. |
+The horizontal compression theorem of Gordeev and Haeusler is cited, not mechanized here. Completeness of the executable compressor is not proved. The BBHT search algorithm is cited; an implementation or quantum runtime bound for this development is not claimed.
 
-### Non-Hamiltonicity
+References: Lew Gordeev and Edward Hermann Haeusler, [Proof Compression and NP Versus PSPACE II](https://czasopisma.uni.lodz.pl/bulletin/article/view/8169), Bulletin of the Section of Logic 49 (2020), 213-230; Michel Boyer, Gilles Brassard, Peter Høyer and Alain Tapp, [Tight bounds on quantum searching](https://arxiv.org/abs/quant-ph/9605034), Fortschritte der Physik 46 (1998), 493-506.
 
-| Theorem | Meaning |
-| --- | --- |
-| [checked_request_sound](NonHamiltonicity/Certificate/Input.lean) | An input accepted by the certificate checker certifies that its source graph has no Hamiltonian cycle. |
-| [supplied_graph_no_hamiltonian_cycle](Examples/FourVertex/Occurrence/NonHamiltonicity.lean) | The supplied certificate proves that the four-vertex star has no Hamiltonian cycle. |
+## Build and statement surface
 
-### Examples
-
-| Theorem | Meaning |
-| --- | --- |
-| [closed_3v_self_certifying](Examples/ThreeVertex/Flow/Acceptance.lean) | Every permitted reading of the closed three-vertex compressed proof ends with all goal assumptions discharged. |
-| [closed_4v_self_certifying](Examples/FourVertex/Flow/EndToEnd.lean) | Every permitted reading of the closed four-vertex compressed proof ends with all goal assumptions discharged. |
-
-### Robustness
-
-| Theorem | Meaning |
-| --- | --- |
-| [readOrbit_card](ProofSearch/Grid/Counting.lean) | Counts exactly how many assignments agree on all cells read by a given evaluation. |
-| [encodedDerivation_density](ProofSearch/Grid/Counting.lean) | A certified successful assignment gives a lower bound on the fraction of assignments for which grid search succeeds. |
-| [formation_invalid_semantic_amplification](Certificate/Encoding/Canonical.lean) | Every invalid certificate has a failing check that persists on at least a 1 / A^r fraction of encodings, where A counts field choices and r bounds fields read. |
-| [missingRoute_minimumFailureWitnessSize](Robustness/AbsenceBoundary.lean) | In the abstract list model, forcing a route to remain absent requires fixing all n list entries. |
-| [selected_certificate_sound](Robustness/SelectedProducers/Selected.lean) | Pointer-justified certificates are sound under the stated structural hypotheses. |
-| [coded_failure_inverse_polynomial](Robustness/Density.lean) | A failed bounded bit check rejects at least an inverse-polynomial fraction of encodings. |
-| [intro_failure_inverse_polynomial](Robustness/RuleCompilation/IntroDensity.lean) | A misapplied introduction step, with structure and pointers fixed, fails on at least 1 / (2^23 M^11) of encodings. |
-| [elim_failure_inverse_polynomial](Robustness/RuleCompilation/ElimDensity.lean) | A misapplied elimination step, with structure and pointers fixed, fails on at least 1 / (2^23 M^11) of encodings. |
-
-## Not proved here
-
-- Robustness for mixed and reseeded rules, for corrupted structure or pointers, and for missing routes (which cannot be made local).
-
-## Building
-
-Pinned toolchain `leanprover/lean4:v4.29.0-rc7` and Mathlib (see `lake-manifest.json`).
+Install the version in `lean-toolchain`, then run:
 
 ```sh
 lake exe cache get
 lake build
-lake env lean Checks.lean   # prints the axioms of the main results
+lake env lean Semantic/ReleaseSurface.lean
 ```
 
-## Trust
+The default `Release` library builds exactly the import closure of `Semantic.ReleaseSurface`. [Semantic/ReleaseSurface.lean](Semantic/ReleaseSurface.lean) is the statement surface: it contains imports and explicit `#check` commands, with no definitions. Mathlib is pinned in `lakefile.lean`; Lake recreates its local dependency manifest as needed. Mathematical hypotheses remain explicit in each declaration.
 
-The general theorems depend only on `propext`, `Classical.choice` and `Quot.sound`. Concrete examples and regression tests use `native_decide`, which also trusts the Lean compiler; `Checks.lean` shows exactly which results depend on it.
+## History
 
-<details>
-<summary>Modules containing native_decide</summary>
-
-- [Certificate.Encoding.Canonical](Certificate/Encoding/Canonical.lean)
-- [Certificate.Flow.Soundness](Certificate/Flow/Soundness.lean)
-- [DLDS.Compression.Domain](DLDS/Compression/Domain.lean)
-- [DLDS.ValidityDecomposition](DLDS/ValidityDecomposition.lean)
-- [Examples.Circuit](Examples/Circuit.lean)
-- [Examples.Flow.ClosedImplication](Examples/Flow/ClosedImplication.lean)
-- [Examples.FourVertex.Flow.CachedDischarge](Examples/FourVertex/Flow/CachedDischarge.lean)
-- [Examples.FourVertex.Flow.CertificateDecision](Examples/FourVertex/Flow/CertificateDecision.lean)
-- [Examples.FourVertex.Flow.Closed](Examples/FourVertex/Flow/Closed.lean)
-- [Examples.FourVertex.Flow.Slots](Examples/FourVertex/Flow/Slots.lean)
-- [Examples.FourVertex.Occurrence.NonHamiltonicity](Examples/FourVertex/Occurrence/NonHamiltonicity.lean)
-- [Examples.ThreeVertex.Flow.Acceptance](Examples/ThreeVertex/Flow/Acceptance.lean)
-- [Examples.ThreeVertex.Flow.Certificate](Examples/ThreeVertex/Flow/Certificate.lean)
-- [ProofSearch.Grid.Completeness](ProofSearch/Grid/Completeness.lean)
-- [ProofSearch.Grid.Counting](ProofSearch/Grid/Counting.lean)
-- [ProofSearch.Grid.Schedulability](ProofSearch/Grid/Schedulability.lean)
-- [ProofSearch.Grid.Soundness](ProofSearch/Grid/Soundness.lean)
-- [Readings.Explicit.LabelValidity](Readings/Explicit/LabelValidity.lean)
-- [Readings.FailurePersistence](Readings/FailurePersistence.lean)
-- [Robustness.Certificate.Support](Robustness/Certificate/Support.lean)
-- [Search.Certificate.Definitions](Search/Certificate/Definitions.lean)
-
-</details>
-
-## References
-
-- L. Gordeev and E. H. Haeusler. *Proof Compression and NP Versus PSPACE II: Addendum.* Bulletin of the Section of Logic 51(2), 2022.
-- L. Saraiva and E. H. Haeusler. *From Dag-Like Proofs to Boolean Circuits in Lean.* Proceedings of LSFA 2026, EPTCS, 2026.
-- L. Saraiva and E. H. Haeusler. *Quantum Verification of Compressed Proofs through DLDS-to-Circuit Compilation*, Anais do Simpósio Brasileiro de Computação e Comunicação Quântico, 2026
-
-## License
-
-MIT; see [LICENSE](LICENSE).
+Earlier versions used a more permissive semantics that skipped dependency-label tests on ordinary inferences; it is superseded by Flow, which applies every label test and handles vertices that merge several introductions. The snapshot cited by the LSFA 2026 paper is commit a07f0c2065fa74017d96c0937f1b92b6324731eb.

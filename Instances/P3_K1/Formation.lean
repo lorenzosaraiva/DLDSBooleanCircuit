@@ -1,0 +1,8 @@
+import Instances.P3_K1.Certificate
+import Semantic.CertificateRequest
+set_option maxRecDepth 1000000
+set_option maxHeartbeats 0
+namespace Instances.P3_K1
+theorem formation_checked : RouteCertificate.strongFormationValidCompleteB proofGraph certificate = true := by native_decide
+theorem flowRef : SingleIntroductionReference.ReferenceVerdict proofGraph := RouteCertificate.strongFormationValidCompleteB_ReferenceVerdict proofGraph certificate formation_checked
+end Instances.P3_K1
