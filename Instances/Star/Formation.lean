@@ -1,5 +1,5 @@
 import Instances.Star.Certificate
-import Semantic.CertificateRequest
+import NonHamiltonicity.CertificateAcceptance
 set_option maxRecDepth 1000000
 set_option maxHeartbeats 0
 namespace Instances.Star

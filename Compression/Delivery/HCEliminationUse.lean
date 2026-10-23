@@ -5,7 +5,7 @@ import Compression.Delivery.RepresentedUseTransport
 
 
 
-open Semantic FlowSpec OccurrenceAwareReplay CandidateMixedReplay
+open Semantic FlowSpec OccurrenceAwareReplay MixedRuleReplay
 open HCSuccessorDeliverySemantics
 
 namespace HCEliminationUse
@@ -152,12 +152,12 @@ private theorem current_edge {after premise centre colour}
 
 theorem logicalOutput_mem_elimination {selected before after flow} {use : RepresentedEliminationUse}
     (sound : use.Sound selected before after flow) :
-    use.logicalOutput ∈ candidateEliminationOutputs after use.centre flow := by
+    use.logicalOutput ∈ selectionEliminationOutputs after use.centre flow := by
   rcases sound with ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _,
     formulas, majorCurrent, minorCurrent, _, _, _, majorRoute, minorRoute⟩
   obtain ⟨majorPred, majorEdge, majorMember, majorColour⟩ := current_edge majorCurrent
   obtain ⟨minorPred, minorEdge, minorMember, minorColour⟩ := current_edge minorCurrent
-  rw [mem_candidateEliminationOutputs_iff]
+  rw [mem_selectionEliminationOutputs_iff]
   refine ⟨use.major, majorPred, use.minor, minorPred, formulas,
     (use.minorDependency, use.minorColour :: use.address), minorRoute,
     (use.majorDependency, use.majorColour :: use.address), majorRoute,
@@ -167,7 +167,7 @@ theorem logicalOutput_mem_elimination {selected before after flow} {use : Repres
 
 theorem producer_to_delivery {selected before after flow} {use : RepresentedEliminationUse}
     (sound : use.Sound selected before after flow) :
-    use.logicalOutput ∈ candidateEliminationOutputs after use.centre flow ∧
+    use.logicalOutput ∈ selectionEliminationOutputs after use.centre flow ∧
     use.logicalOutput ∈ derivedOutputs after use.centre flow ∧
     use.logicalOutput ∈ reseedDerivedRoutes
       (ancestorsInto after use.centre ++ [use.record])

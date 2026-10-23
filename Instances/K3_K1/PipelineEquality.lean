@@ -1,5 +1,5 @@
 import Instances.K3_K1.Data
-import Semantic.HCJustifiedContinuationPersistence
+import Compression.HCJustifiedContinuationPersistence
 import Instances.K3_K1.Proof
 
 set_option maxRecDepth 1000000

@@ -1,6 +1,6 @@
 import Compression.Delivery.RoutedEliminationTransport
-import Semantic.OccurrenceAwareReplay
-import Semantic.HCSuccessorDeliverySemantics
+import Infrastructure.OccurrenceAwareReplay
+import Infrastructure.HCSuccessorDeliverySemantics
 
 
 
@@ -9,7 +9,7 @@ import Semantic.HCSuccessorDeliverySemantics
 
 
 open Semantic FlowSpec OccurrenceAwareReplay
-open CandidateMixedReplay HCSuccessorDeliverySemantics
+open MixedRuleReplay HCSuccessorDeliverySemantics
 
 namespace RoutedEliminationLocal
 
@@ -283,7 +283,7 @@ def producerDerivedUse? (selected : List Vertex) (before after : Graph)
       | some route =>
           match route.2 with
           | incomingColour :: _ :: tail =>
-              let candidate : RepresentedIntroductionUse := {
+              let selection : RepresentedIntroductionUse := {
                 owner := owner
                 originalPremise := incoming.START
                 originalConsumer := outgoing.END
@@ -297,9 +297,9 @@ def producerDerivedUse? (selected : List Vertex) (before after : Graph)
                 consequent := consequent
                 premiseDependency := route.1
                 tail := tail }
-              if sound : candidate.supportedB selected before after
+              if sound : selection.supportedB selected before after
                   premiseFlow = true then
-                exact some ⟨candidate,
+                exact some ⟨selection,
                   RepresentedIntroductionUse.sound_of_supportedB sound⟩
               else exact none
           | _ => exact none
@@ -350,14 +350,14 @@ private theorem exists_currentIncoming
 
 
 
-theorem logicalOutput_mem_introductionCandidates
+theorem logicalOutput_mem_introductionSelections
     {selected : List Vertex} {before after : Graph}
     {premiseFlow : Vertex -> List FlowPair}
     {use : RepresentedIntroductionUse}
     (sound : use.Sound selected before after premiseFlow) :
     use.logicalOutput ∈
-      introductionCandidates after use.centre premiseFlow := by
-  rw [mem_introductionCandidates_iff, sound.centreFormula]
+      introductionSelections after use.centre premiseFlow := by
+  rw [mem_introductionSelections_iff, sound.centreFormula]
   refine ⟨(use.premiseDependency, use.address), ?_, rfl⟩
   refine ⟨use.premise,
     predecessor_of_currentIncoming sound.currentIncoming,
@@ -378,12 +378,12 @@ theorem logicalOutput_mem_derivedOutputs
     {use : RepresentedIntroductionUse}
     (sound : use.Sound selected before after premiseFlow)
     (separate : residualOccursB
-      (candidateEliminationOutputs after use.centre premiseFlow)
+      (selectionEliminationOutputs after use.centre premiseFlow)
       use.address = false) :
     use.logicalOutput ∈ derivedOutputs after use.centre premiseFlow := by
   apply separatedIntroduction_mem_derivedOutputs
   rw [mem_separatedIntroductionOutputs_iff]
-  exact ⟨logicalOutput_mem_introductionCandidates sound, separate⟩
+  exact ⟨logicalOutput_mem_introductionSelections sound, separate⟩
 
 
 
@@ -393,7 +393,7 @@ theorem logicalOutput_mem_reseeded
     {use : RepresentedIntroductionUse}
     (sound : use.Sound selected before after premiseFlow)
     (separate : residualOccursB
-      (candidateEliminationOutputs after use.centre premiseFlow)
+      (selectionEliminationOutputs after use.centre premiseFlow)
       use.address = false) :
     use.logicalOutput ∈ reseedDerivedRoutes
       (ancestorsInto after use.centre ++ [use.record])
@@ -421,9 +421,9 @@ theorem producer_to_delivery
     {use : RepresentedIntroductionUse}
     (sound : use.Sound selected before after premiseFlow)
     (separate : residualOccursB
-      (candidateEliminationOutputs after use.centre premiseFlow)
+      (selectionEliminationOutputs after use.centre premiseFlow)
       use.address = false) :
-    use.logicalOutput ∈ introductionCandidates after use.centre premiseFlow ∧
+    use.logicalOutput ∈ introductionSelections after use.centre premiseFlow ∧
     use.logicalOutput ∈ derivedOutputs after use.centre premiseFlow ∧
     use.logicalOutput ∈ reseedDerivedRoutes
       (ancestorsInto after use.centre ++ [use.record])
@@ -431,7 +431,7 @@ theorem producer_to_delivery
     ∀ stored, consume
       (edge use.centre use.consumer use.owner.NUMBER stored)
       use.address = some use.tail := by
-  exact ⟨logicalOutput_mem_introductionCandidates sound,
+  exact ⟨logicalOutput_mem_introductionSelections sound,
     logicalOutput_mem_derivedOutputs sound separate,
     logicalOutput_mem_reseeded sound separate,
     fun stored => consume_complete_address use stored⟩
@@ -529,7 +529,7 @@ end RoutedEliminationLocal
 #print axioms RoutedEliminationLocal.new_reseed_route_has_matching_source
 #print axioms RoutedEliminationLocal.selected_use_not_reemitted_when_head_exists
 #print axioms RoutedEliminationLocal.emitted_head_is_structural
-#print axioms RoutedEliminationLocal.logicalOutput_mem_introductionCandidates
+#print axioms RoutedEliminationLocal.logicalOutput_mem_introductionSelections
 #print axioms RoutedEliminationLocal.logicalOutput_mem_derivedOutputs
 #print axioms RoutedEliminationLocal.logicalOutput_mem_reseeded
 #print axioms RoutedEliminationLocal.producer_to_delivery

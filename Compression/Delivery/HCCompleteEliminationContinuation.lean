@@ -6,7 +6,7 @@ import Compression.Delivery.HCEliminationUse
 
 
 
-open Semantic FlowSpec OccurrenceAwareReplay CandidateMixedReplay
+open Semantic FlowSpec OccurrenceAwareReplay MixedRuleReplay
 open HCEliminationUse (RepresentedEliminationUse)
 
 namespace HCCompleteEliminationContinuation

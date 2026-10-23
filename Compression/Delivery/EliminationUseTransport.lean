@@ -9,7 +9,7 @@ import Compression.Delivery.ContinuationPersistence
 
 
 
-open Semantic FlowSpec OccurrenceAwareReplay CandidateMixedReplay
+open Semantic FlowSpec OccurrenceAwareReplay MixedRuleReplay
 open RepresentedUseTransport HCJustifiedRouteTransport
 open HCEliminationUse (RepresentedEliminationUse)
 
@@ -115,7 +115,7 @@ def runSchedule (partition : List HCClass) : Nat → List (List Vertex) → Stat
   | index, selected :: remaining, state =>
     runSchedule partition (index + 1) remaining (step partition index selected state)
 
-def candidateState (input : Graph) : State :=
+def selectionState (input : Graph) : State :=
   let partition := hcPartition input
   let schedule := (repeated_nodes_vertex_indexedWithPartition partition input).flatten
   runSchedule partition 0 schedule (initialState input)

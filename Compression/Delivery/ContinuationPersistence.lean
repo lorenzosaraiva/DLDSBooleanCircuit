@@ -5,7 +5,7 @@ import Compression.Delivery.HCJustifiedRouteTransport
 
 
 
-open Semantic FlowSpec OccurrenceAwareReplay CandidateMixedReplay
+open Semantic FlowSpec OccurrenceAwareReplay MixedRuleReplay
 open RepresentedUseTransport HCJustifiedRouteTransport
 
 namespace ContinuationPersistence
@@ -18,7 +18,7 @@ structure TransportEvent where
 deriving Repr
 
 structure State where
-  base : CandidateState
+  base : SelectionState
   live : List Evidence
   transports : List TransportEvent
   retired : Nat
@@ -158,7 +158,7 @@ def runSchedule (partition : List HCClass) :
   | index, selected :: remaining, state =>
     runSchedule partition (index + 1) remaining (step partition index selected state)
 
-def candidateState (input : Graph) : State :=
+def selectionState (input : Graph) : State :=
   let partition := hcPartition input
   let schedule := (repeated_nodes_vertex_indexedWithPartition partition input).flatten
   runSchedule partition 0 schedule (initialState input)

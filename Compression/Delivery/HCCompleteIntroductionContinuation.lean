@@ -5,7 +5,7 @@ import Compression.Delivery.HCCompleteEliminationContinuation
 
 
 
-open Semantic FlowSpec OccurrenceAwareReplay CandidateMixedReplay
+open Semantic FlowSpec OccurrenceAwareReplay MixedRuleReplay
 open RoutedEliminationLocal (RepresentedIntroductionUse)
 
 namespace HCCompleteIntroductionContinuation
@@ -85,7 +85,7 @@ def rewriteCurrentEndpoints (selected : List Vertex) (replacement : Vertex)
 
 theorem source_correctness {selected before after flow} (c : CompleteRepresentedIntroductionUse)
     (sound : c.producer.Sound selected before after flow)
-    (separate : residualOccursB (candidateEliminationOutputs after c.producer.centre flow)
+    (separate : residualOccursB (selectionEliminationOutputs after c.producer.centre flow)
       c.producer.address = false) :
     c.sourceOutput ∈ derivedOutputs after c.producer.centre flow :=
   RoutedEliminationLocal.logicalOutput_mem_derivedOutputs sound separate
@@ -134,7 +134,7 @@ theorem record_rewrite (selected replacement c) :
 theorem producer_to_complete_delivery {selected before after flow}
     (c : CompleteRepresentedIntroductionUse)
     (sound : c.producer.Sound selected before after flow)
-    (separate : residualOccursB (candidateEliminationOutputs after c.producer.centre flow)
+    (separate : residualOccursB (selectionEliminationOutputs after c.producer.centre flow)
       c.producer.address = false) :
     c.logicalOutput ∈ reseedDerivedRoutes
       (ancestorsInto after c.producer.centre ++ [c.record])

@@ -1,5 +1,5 @@
 import Instances.E3.Data
-import Semantic.HCJustifiedContinuationPersistence
+import Compression.HCJustifiedContinuationPersistence
 set_option maxRecDepth 1000000
 set_option maxHeartbeats 0
 namespace Instances.E3

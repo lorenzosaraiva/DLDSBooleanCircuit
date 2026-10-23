@@ -16,17 +16,17 @@ The ten instances are E3, K2_K1, P3, E4, K2_2K1, TwoK2, P3_K1, P4, Star and K3_K
 
 The general headline theorems use only `propext`, `Quot.sound` and `Classical.choice`. The generator and compressor are untrusted: the logical conclusions require the checked conditions in the theorem statements. Concrete `native_decide` proofs additionally trust Lean's native computation mechanism. They appear only in the following listed modules, including the small concrete examples retained inside required mixed foundation modules:
 
-- [Semantic.Examples](Semantic/Examples.lean)
-- [Semantic.EndToEnd](Semantic/EndToEnd.lean)
-- [Semantic.SelfCertifying](Semantic/SelfCertifying.lean)
-- [Semantic.GridCertificateSoundness](Semantic/GridCertificateSoundness.lean)
-- [SpaceACounting](SpaceACounting.lean)
-- [Semantic.ValidDLDSDecomposition](Semantic/ValidDLDSDecomposition.lean)
-- [Semantic.ProperHCInput](Semantic/ProperHCInput.lean)
-- [SearchProblem](SearchProblem.lean)
-- [CertificateRobustness](CertificateRobustness.lean)
-- [CanonicalCertificateEncoding](CanonicalCertificateEncoding.lean)
-- [SpaceA](SpaceA.lean)
+- [Infrastructure.Examples](Infrastructure/Examples.lean)
+- [Infrastructure.EndToEnd](Infrastructure/EndToEnd.lean)
+- [Infrastructure.SelfCertifying](Infrastructure/SelfCertifying.lean)
+- [Foundations.NaturalDeduction](Foundations/NaturalDeduction.lean)
+- [Search.GridCounting](Search/GridCounting.lean)
+- [Compression.ValidDLDSDecomposition](Compression/ValidDLDSDecomposition.lean)
+- [Compression.ProperHCInput](Compression/ProperHCInput.lean)
+- [Infrastructure.SearchProblem](Infrastructure/SearchProblem.lean)
+- [Robustness.CertificateRobustness](Robustness/CertificateRobustness.lean)
+- [Infrastructure.CanonicalCertificateEncoding](Infrastructure/CanonicalCertificateEncoding.lean)
+- [Search.GridAcceptance](Search/GridAcceptance.lean)
 - [Instances.E3.PipelineEquality](Instances/E3/PipelineEquality.lean)
 - [Instances.E3.Formation](Instances/E3/Formation.lean)
 - [Instances.E3.Proof](Instances/E3/Proof.lean)
@@ -65,6 +65,22 @@ The horizontal compression theorem of Gordeev and Haeusler is cited, not mechani
 
 References: Lew Gordeev and Edward Hermann Haeusler, [Proof Compression and NP Versus PSPACE II](https://czasopisma.uni.lodz.pl/bulletin/article/view/8169), Bulletin of the Section of Logic 49 (2020), 213-230; Michel Boyer, Gilles Brassard, Peter Høyer and Alain Tapp, [Tight bounds on quantum searching](https://arxiv.org/abs/quant-ph/9605034), Fortschritte der Physik 46 (1998), 493-506.
 
+## Layout
+
+- `Foundations/`: graph and formula syntax, Natural Deduction, and basic lemmas.
+- `Flow/`: unified Flow and its direct support.
+- `Flow/Certificate/`: complete-profile certificate checks and correctness.
+- `Flow/Readings/`: the occurrence-reading view of Flow.
+- `Flow/Grid/`: the grid view of Flow.
+- `Flow/Size/`: route and certificate size bounds.
+- `Search/`: proof-search grids, counting, and the Flow search bridge.
+- `Robustness/`: failure supports and densities.
+- `NonHamiltonicity/`: graph contexts, certificate application, and non-Hamiltonicity.
+- `Circuit/`: circuit constructions and oracle proofs.
+- `Compression/`: compression scheduling, local contracts, delivery, and preservation.
+- `Instances/`: the unchanged mathematical instance structure.
+- `Infrastructure/`: earlier reference, certificate, reading, evaluator, replay, keyed, and multi-token layers required by imports.
+
 ## Build and statement surface
 
 Install the version in `lean-toolchain`, then run:
@@ -72,10 +88,10 @@ Install the version in `lean-toolchain`, then run:
 ```sh
 lake exe cache get
 lake build
-lake env lean Semantic/ReleaseSurface.lean
+lake env lean ReleaseSurface.lean
 ```
 
-The default `Release` library builds exactly the import closure of `Semantic.ReleaseSurface`. [Semantic/ReleaseSurface.lean](Semantic/ReleaseSurface.lean) is the statement surface: it contains imports and explicit `#check` commands, with no definitions. Mathlib is pinned in `lakefile.lean`; Lake recreates its local dependency manifest as needed. Mathematical hypotheses remain explicit in each declaration.
+The default `Release` library builds exactly the import closure of `ReleaseSurface`. [ReleaseSurface.lean](ReleaseSurface.lean) is the statement surface: it contains imports and explicit `#check` commands, with no definitions. Mathlib is pinned in `lakefile.lean`; Lake recreates its local dependency manifest as needed. Mathematical hypotheses remain explicit in each declaration.
 
 ## History
 

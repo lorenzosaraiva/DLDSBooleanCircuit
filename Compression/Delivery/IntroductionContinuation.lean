@@ -7,7 +7,7 @@ import Compression.Delivery.EliminationContinuation
 
 
 
-open Semantic FlowSpec OccurrenceAwareReplay CandidateMixedReplay
+open Semantic FlowSpec OccurrenceAwareReplay MixedRuleReplay
 open RepresentedUseTransport HCJustifiedRouteTransport HCCompleteEliminationContinuation
 
 namespace IntroductionContinuation
@@ -18,7 +18,7 @@ structure Registration (graph : Graph) where
   origin : RepresentedUseTransport.PendingUse
   use : CompleteRepresentedIntroductionUse
   sound : use.producer.Sound origin.originSelected origin.originBefore graph (premiseFlow graph)
-  separate : residualOccursB (candidateEliminationOutputs graph use.producer.centre (premiseFlow graph))
+  separate : residualOccursB (selectionEliminationOutputs graph use.producer.centre (premiseFlow graph))
     use.producer.address = false
   present : use.record ∈ graph.PATHS
   exclusive : ∀ source ∈ derivedOutputs graph use.producer.centre (premiseFlow graph),
@@ -31,7 +31,7 @@ def capture? (before : Graph) (selected : List Vertex) (replacement : Vertex)
   if supported : c.producer.supportedB p.originSelected p.originBefore graph (premiseFlow graph) = true then
     let sound := RoutedEliminationLocal.RepresentedIntroductionUse.sound_of_supportedB supported
     if separate : residualOccursB
-        (candidateEliminationOutputs graph c.producer.centre (premiseFlow graph)) c.producer.address = false then
+        (selectionEliminationOutputs graph c.producer.centre (premiseFlow graph)) c.producer.address = false then
       if present : c.record ∈ graph.PATHS then
         if exclusive : ∀ source ∈ derivedOutputs graph c.producer.centre (premiseFlow graph),
             colourPathPrefixB source.2 c.address = true → source = c.sourceOutput then
@@ -203,7 +203,7 @@ def runSchedule (partition : List HCClass) : Nat → List (List Vertex) → Stat
   | index, selected :: remaining, state =>
     runSchedule partition (index + 1) remaining (step partition index selected remaining state)
 
-def candidateState (input : Graph) : State :=
+def selectionState (input : Graph) : State :=
   let partition := hcPartition input
   let schedule := (repeated_nodes_vertex_indexedWithPartition partition input).flatten
   runSchedule partition 0 schedule (initialState input)

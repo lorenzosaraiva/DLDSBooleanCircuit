@@ -1,5 +1,5 @@
 import Instances.K3_K1.Data
-import Semantic.RouteCertificateModel
+import Infrastructure.RouteCertificateModel
 
 namespace Instances.K3_K1
 open Instances.K3_K1

@@ -11,7 +11,7 @@ import Compression.Delivery.RoutedEliminationLocal
 
 
 
-open Semantic FlowSpec OccurrenceAwareReplay CandidateMixedReplay
+open Semantic FlowSpec OccurrenceAwareReplay MixedRuleReplay
 
 namespace RepresentedUseTransport
 
@@ -43,7 +43,7 @@ structure JustifiedActivation (graph : Graph) where
   sound : pending.use.Sound pending.originSelected pending.originBefore graph
     (premiseFlow graph)
   separate : residualOccursB
-    (candidateEliminationOutputs graph pending.use.centre (premiseFlow graph))
+    (selectionEliminationOutputs graph pending.use.centre (premiseFlow graph))
     pending.use.address = false
   recordAbsent : graph.PATHS.contains pending.use.record = false
 
@@ -51,7 +51,7 @@ namespace JustifiedActivation
 
 theorem delivery {graph : Graph} (activation : JustifiedActivation graph) :
     activation.pending.use.logicalOutput ∈
-        introductionCandidates graph activation.pending.use.centre
+        introductionSelections graph activation.pending.use.centre
           (premiseFlow graph) ∧
       activation.pending.use.logicalOutput ∈
         derivedOutputs graph activation.pending.use.centre
@@ -77,7 +77,7 @@ def justifiedActivation? (graph : Graph) (pending : PendingUse) :
     if supported : pending.use.supportedB pending.originSelected
         pending.originBefore graph (premiseFlow graph) = true then
       if separate : residualOccursB
-          (candidateEliminationOutputs graph pending.use.centre
+          (selectionEliminationOutputs graph pending.use.centre
             (premiseFlow graph)) pending.use.address = false then
         if absent : graph.PATHS.contains pending.use.record = false then
           some {
@@ -111,13 +111,13 @@ structure ActivationEvent where
   address : List Nat
 deriving Repr, BEq
 
-structure CandidateState where
+structure SelectionState where
   graph : Graph
   occurrences : List Ancestral
   pending : List PendingUse
   activations : List ActivationEvent
 
-def initialState (graph : Graph) : CandidateState := {
+def initialState (graph : Graph) : SelectionState := {
   graph := graph
   occurrences := []
   pending := []
@@ -134,8 +134,8 @@ private def eventFor? (transitionIndex : Nat)
       consumer := activation.pending.use.consumer.NUMBER
       address := activation.pending.use.address }
 
-def candidateStep (partition : List HCClass) (transitionIndex : Nat)
-    (selected : List Vertex) (state : CandidateState) : CandidateState :=
+def selectionStep (partition : List HCClass) (transitionIndex : Nat)
+    (selected : List Vertex) (state : SelectionState) : SelectionState :=
   let rule := compress_ruleWithOccurrences partition selected state.graph
   let base := compress_nodesWithPartitionCarrying partition selected state.graph
     state.occurrences
@@ -156,13 +156,13 @@ def candidateStep (partition : List HCClass) (transitionIndex : Nat)
     activations := state.activations ++ events }
 
 def runSchedule (partition : List HCClass) :
-    Nat -> List (List Vertex) -> CandidateState -> CandidateState
+    Nat -> List (List Vertex) -> SelectionState -> SelectionState
   | _, [], state => state
   | transitionIndex, selected :: remaining, state =>
       runSchedule partition (transitionIndex + 1) remaining
-        (candidateStep partition transitionIndex selected state)
+        (selectionStep partition transitionIndex selected state)
 
-def candidateState (input : Graph) : CandidateState :=
+def selectionState (input : Graph) : SelectionState :=
   let partition := hcPartition input
   let schedule :=
     (repeated_nodes_vertex_indexedWithPartition partition input).flatten
@@ -171,7 +171,7 @@ def candidateState (input : Graph) : CandidateState :=
 
 
 def compress_nodes_graph_withSupportedUses (input : Graph) : Graph :=
-  (candidateState input).graph
+  (selectionState input).graph
 
 end RepresentedUseTransport
 

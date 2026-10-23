@@ -1,11 +1,11 @@
 import Instances.K3_K1.CertificateData
-import Semantic.MultiIntroCertificate
-import Semantic.NonHamiltonicityRequest
+import Flow.Certificate.MultiIntro
+import NonHamiltonicity.OccurrenceAcceptance
 
 set_option maxRecDepth 1000000
 set_option maxHeartbeats 0
 namespace Instances.K3_K1
-open Instances.K3_K1 HermannContext
+open Instances.K3_K1 HamiltonianContext
 
 theorem formation_checked : MultiIntro.strongCertificateB .general proofGraph certificate = true := by native_decide
 theorem valid : MultiIntro.ValidMI .general proofGraph :=

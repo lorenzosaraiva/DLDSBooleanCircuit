@@ -12,7 +12,7 @@ import Compression.Delivery.HCCompleteIntroductionContinuation
 
 
 
-open Semantic FlowSpec OccurrenceAwareReplay CandidateMixedReplay
+open Semantic FlowSpec OccurrenceAwareReplay MixedRuleReplay
 open RoutedEliminationLocal (RepresentedIntroductionUse)
 
 namespace HCJustifiedRouteTransport
@@ -113,7 +113,7 @@ inductive Justified : Use -> Prop
       {use : HCCompleteIntroductionContinuation.CompleteRepresentedIntroductionUse}
       (sound : use.producer.Sound selected before graph (RepresentedUseTransport.premiseFlow graph))
       (separate : residualOccursB
-        (candidateEliminationOutputs graph use.producer.centre (RepresentedUseTransport.premiseFlow graph))
+        (selectionEliminationOutputs graph use.producer.centre (RepresentedUseTransport.premiseFlow graph))
         use.producer.address = false)
       (present : use.record ∈ graph.PATHS) :
       Justified (.completeIntroduction use)
@@ -147,7 +147,7 @@ def Evidence.ofCompleteIntroduction {selected : List Vertex} {before graph : Gra
     (use : HCCompleteIntroductionContinuation.CompleteRepresentedIntroductionUse)
     (sound : use.producer.Sound selected before graph (RepresentedUseTransport.premiseFlow graph))
     (separate : residualOccursB
-      (candidateEliminationOutputs graph use.producer.centre (RepresentedUseTransport.premiseFlow graph))
+      (selectionEliminationOutputs graph use.producer.centre (RepresentedUseTransport.premiseFlow graph))
       use.producer.address = false) (present : use.record ∈ graph.PATHS) : Evidence :=
   ⟨.completeIntroduction use, .completeIntroduction sound separate present⟩
 
@@ -192,7 +192,7 @@ theorem transport_preserves_provenance (selected : List Vertex)
         HCEliminationUse.RepresentedEliminationUse.rewriteCurrentEndpoints,
         HCCompleteEliminationContinuation.CompleteRepresentedUseContinuation.rewriteCurrentEndpoints]
         <;> simp [HCCompleteIntroductionContinuation.CompleteRepresentedIntroductionUse.rewriteCurrentEndpoints,
-          RepresentedIntroductionUse.rewriteCurrentEndpoints, IntroductionSameProvenance]
+          RepresentedIntroductionUse.rewriteCurrentEndpoints]
 
 theorem transport_is_actual_endpoint_map (selected : List Vertex)
     (replacement : Vertex) (evidence : Evidence) :
